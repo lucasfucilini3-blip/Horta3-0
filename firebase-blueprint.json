@@ -1,0 +1,207 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "User roles and permissions.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["owner", "employee"] },
+        "permissions": {
+          "type": "object",
+          "properties": {
+            "canManageInventory": { "type": "boolean" },
+            "canManageSales": { "type": "boolean" },
+            "canViewFinance": { "type": "boolean" },
+            "canViewReports": { "type": "boolean" },
+            "canManageCustomers": { "type": "boolean" }
+          }
+        }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "Customer contact information.",
+      "type": "object",
+      "properties": {
+        "companyName": { "type": "string" },
+        "contactName": { "type": "string" },
+        "phone": { "type": "string" }
+      },
+      "required": ["companyName", "contactName", "phone"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Dynamic categories for inventory or finance.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["inventory", "transaction"] }
+      },
+      "required": ["name", "type"]
+    },
+    "InventoryItem": {
+      "title": "Inventory Item",
+      "description": "Seeds, fertilizers, or harvested produce.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["input", "dispatch"] },
+        "category": { "type": "string", "enum": ["seed", "fertilizer", "produce", "tool", "other"] },
+        "quantity": { "type": "number" },
+        "unit": { "type": "string", "description": "kg, g, unit, etc." },
+        "price": { "type": "number", "description": "Preço de venda (apenas para expedição)" },
+        "costPrice": { "type": "number", "description": "Custo de aquisição ou produção" },
+        "minStock": { "type": "number" },
+        "lastUpdated": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "type", "category", "quantity", "unit"]
+    },
+    "Sale": {
+      "title": "Sale/Order",
+      "description": "Customer orders and sales records.",
+      "type": "object",
+      "properties": {
+        "customerName": { "type": "string" },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "itemId": { "type": "string" },
+              "name": { "type": "string" },
+              "quantity": { "type": "number" },
+              "price": { "type": "number" },
+              "cost": { "type": "number" }
+            }
+          }
+        },
+        "total": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "confirmed", "cancelled"] },
+        "deliveryDate": { "type": "string", "format": "date-time" },
+        "paymentMethods": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "method": { "type": "string" },
+              "amount": { "type": "number" }
+            }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "confirmedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["customerName", "items", "total", "status", "createdAt"]
+    },
+    "Transaction": {
+      "title": "Financial Transaction",
+      "description": "Income and expenses.",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["income", "expense"] },
+        "amount": { "type": "number" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "relatedSaleId": { "type": "string" }
+      },
+      "required": ["type", "amount", "description", "date"]
+    },
+    "Production": {
+      "title": "Production Cycle",
+      "description": "Tracking crops from planting to harvest.",
+      "type": "object",
+      "properties": {
+        "crop": { "type": "string" },
+        "bed": { "type": "string" },
+        "plantingDate": { "type": "string", "format": "date-time" },
+        "quantityPlanted": { "type": "number" },
+        "unit": { "type": "string" },
+        "status": { "type": "string", "enum": ["growing", "harvested", "lost"] },
+        "harvestDate": { "type": "string", "format": "date-time" },
+        "harvestQuantity": { "type": "number" },
+        "remainingQuantity": { "type": "number" },
+        "totalCost": { "type": "number" },
+        "unitCost": { "type": "number" },
+        "inputsUsed": { "type": "array", "items": { "type": "string" } },
+        "logs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "date": { "type": "string", "format": "date-time" },
+              "description": { "type": "string" },
+              "products": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "itemId": { "type": "string" },
+                    "name": { "type": "string" },
+                    "quantity": { "type": "number" },
+                    "unit": { "type": "string" },
+                    "costAtTime": { "type": "number" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "required": ["crop", "bed", "plantingDate", "quantityPlanted", "unit", "status"]
+    },
+    "Task": {
+      "title": "Task",
+      "description": "Daily farm tasks and activities.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "dueDate": { "type": "string", "format": "date-time" },
+        "priority": { "type": "string", "enum": ["low", "medium", "high"] },
+        "completed": { "type": "boolean" },
+        "completedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "priority", "completed", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles and permissions."
+    },
+    "/inventory/{itemId}": {
+      "schema": "InventoryItem",
+      "description": "Stock items."
+    },
+    "/sales/{saleId}": {
+      "schema": "Sale",
+      "description": "Sales and orders."
+    },
+    "/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "Financial records."
+    },
+    "/customers/{customerId}": {
+      "schema": "Customer",
+      "description": "Customer records."
+    },
+    "/categories/{categoryId}": {
+      "schema": "Category",
+      "description": "Dynamic categories."
+    },
+    "/production/{productionId}": {
+      "schema": "Production",
+      "description": "Production cycles."
+    },
+    "/tasks/{taskId}": {
+      "schema": "Task",
+      "description": "Management tasks."
+    }
+  }
+}

@@ -1,0 +1,228 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - uid: string (required)
+    //   - email: string (required)
+    //   - displayName: string
+    //   - role: string (owner, employee)
+    //   - permissions: map (canManageInventory, canManageSales, canViewFinance, canViewReports, canManageCustomers)
+    //
+    // Collection: customers
+    // Document ID: {customerId}
+    // Fields:
+    //   - companyName: string (required)
+    //   - contactName: string (required)
+    //   - phone: string (required)
+    //
+    // Collection: categories
+    // Document ID: {categoryId}
+    // Fields:
+    //   - name: string (required)
+    //   - type: string (inventory, transaction)
+    //
+    // Collection: inventory
+    // Document ID: {itemId}
+    // Fields:
+    //   - name: string (required)
+    //   - category: string (required)
+    //   - quantity: number (required)
+    //   - unit: string (required)
+    //   - minStock: number
+    //   - lastUpdated: timestamp
+    //
+    // Collection: sales
+    // Document ID: {saleId}
+    // Fields:
+    //   - customerName: string (required)
+    //   - customerPhone: string
+    //   - items: list (required)
+    //   - total: number (required)
+    //   - status: string (pending, confirmed, cancelled)
+    //   - deliveryDate: timestamp
+    //   - paymentMethods: list (objects with method and amount)
+    //   - createdAt: timestamp
+    //   - confirmedAt: timestamp
+    //
+    // Collection: transactions
+    // Document ID: {transactionId}
+    // Fields:
+    //   - type: string (income, expense)
+    //   - amount: number (required)
+    //   - description: string (required)
+    //   - category: string
+    //   - date: timestamp
+    //   - relatedSaleId: string
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner() {
+      return isAuthenticated() && (
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'owner' ||
+        request.auth.token.email == "lucasfucilini3@gmail.com" ||
+        request.auth.token.email == "lucas@hortamanager.com" ||
+        request.auth.token.email.matches(".*lucas\\.master.*@hortamanager\\.com")
+      );
+    }
+
+    function getPermissions() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.permissions;
+    }
+
+    function hasPermission(permission) {
+      return isAuthenticated() && (isOwner() || getPermissions()[permission] == true);
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'role']) &&
+             data.uid is string &&
+             data.email is string &&
+             data.role in ['owner', 'employee'];
+    }
+
+    function isValidInventoryItem(data) {
+      return data.keys().hasAll(['name', 'category', 'quantity', 'unit']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.category is string && data.category.size() > 0 &&
+             data.quantity is number &&
+             data.unit is string;
+    }
+
+    function isValidProduction(data) {
+      return data.keys().hasAll(['crop', 'bed', 'plantingDate', 'quantityPlanted', 'unit', 'status']) &&
+             data.crop is string && data.bed is string &&
+             data.status in ['growing', 'harvested', 'lost'] &&
+             (!('remainingQuantity' in data) || data.remainingQuantity is number);
+    }
+
+    function isValidSale(data) {
+      return data.keys().hasAll(['customerName', 'items', 'total', 'status']) &&
+             data.customerName is string && data.customerName.size() > 0 &&
+             data.items is list &&
+             data.total is number &&
+             data.status in ['ordered', 'pending_delivery', 'delivered', 'paid', 'cancelled', 'pending', 'confirmed'] &&
+             (!('createdAt' in data) || data.createdAt is timestamp) &&
+             (!('deliveryDate' in data) || data.deliveryDate == null || data.deliveryDate is timestamp) &&
+             (!('paymentMethods' in data) || data.paymentMethods is list);
+    }
+
+    function isValidTransaction(data) {
+      return data.keys().hasAll(['type', 'amount', 'description', 'date']) &&
+             data.type in ['income', 'expense'] &&
+             data.amount is number &&
+             data.description is string && data.description.size() > 0;
+    }
+
+    function isValidCustomer(data) {
+      return data.keys().hasAll(['companyName', 'contactName', 'phone']) &&
+             data.companyName is string && data.companyName.size() > 0 &&
+             data.contactName is string && data.contactName.size() > 0 &&
+             data.phone is string && data.phone.size() > 0;
+    }
+
+    function isValidCategory(data) {
+      return data.keys().hasAll(['name', 'type']) &&
+             data.name is string && data.name.size() > 0 &&
+             data.type in ['inventory', 'transaction'];
+    }
+
+    function isValidTask(data) {
+      return data.keys().hasAll(['title', 'priority', 'completed', 'createdAt']) &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             data.priority in ['low', 'medium', 'high'] &&
+             data.completed is bool &&
+             data.createdAt is timestamp;
+    }
+
+    // ===============================================================
+    // Match Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isOwner());
+      allow create: if isAuthenticated() && (
+        (request.auth.uid == userId && (
+          request.auth.token.email == "lucasfucilini3@gmail.com" ||
+          request.auth.token.email == "lucas@hortamanager.com" ||
+          request.auth.token.email.matches(".*lucas\\.master.*@hortamanager\\.com")
+        ) && request.resource.data.role == 'owner') ||
+        isOwner()
+      ) && isValidUser(request.resource.data);
+      allow update: if isAuthenticated() && (
+        (request.auth.uid == userId && request.resource.data.role == resource.data.role) ||
+        isOwner()
+      ) && isValidUser(request.resource.data);
+      allow delete: if isOwner();
+    }
+
+    match /inventory/{itemId} {
+      allow read: if isAuthenticated();
+      allow create, update: if (hasPermission('canManageInventory') || hasPermission('canManageSales') || hasPermission('canManageProduction')) && isValidInventoryItem(request.resource.data);
+      allow delete: if isOwner();
+    }
+
+    match /inventory_history/{historyId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && (hasPermission('canManageInventory') || hasPermission('canManageSales') || hasPermission('canManageProduction'));
+      allow update, delete: if isOwner();
+    }
+
+    match /sales/{saleId} {
+      allow read: if isAuthenticated();
+      allow create, update: if hasPermission('canManageSales') && isValidSale(request.resource.data);
+      allow delete: if isOwner();
+    }
+
+    match /transactions/{transactionId} {
+      allow read: if hasPermission('canViewFinance');
+      allow create, update: if isOwner() && isValidTransaction(request.resource.data);
+      allow delete: if isOwner();
+    }
+
+    match /customers/{customerId} {
+      allow read: if isAuthenticated();
+      allow create, update: if hasPermission('canManageCustomers') && isValidCustomer(request.resource.data);
+      allow delete: if isOwner();
+    }
+
+    match /production/{productionId} {
+      allow read: if isAuthenticated();
+      allow create, update: if (hasPermission('canManageProduction') || hasPermission('canManageSales')) && isValidProduction(request.resource.data);
+      allow delete: if isOwner();
+    }
+
+    match /categories/{categoryId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isOwner() && isValidCategory(request.resource.data);
+    }
+
+    match /tasks/{taskId} {
+      allow read: if isAuthenticated();
+      allow create, update: if (isOwner() || hasPermission('canManageProduction')) && isValidTask(request.resource.data);
+      allow delete: if (isOwner() || hasPermission('canManageProduction'));
+    }
+
+    match /backups/{backupId} {
+      allow read, create: if isOwner();
+    }
+
+    match /system/{systemId} {
+      allow read: if isAuthenticated();
+      allow write: if isOwner();
+    }
+  }
+}

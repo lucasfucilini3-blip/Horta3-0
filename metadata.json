@@ -1,0 +1,5 @@
+{
+  "name": "Remix: HortaManager",
+  "description": "Sistema de gestão total para hortas, incluindo financeiro, estoque, vendas e controle de acesso para funcionários.",
+  "requestFramePermissions": []
+}

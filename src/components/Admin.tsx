@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { collection, query, onSnapshot, updateDoc, doc, deleteDoc, orderBy, setDoc, getDocs, writeBatch } from 'firebase/firestore';
 import { db, auth } from '../firebase';
 import { UserProfile, UserPermissions, Category } from '../types';
-import { User as UserIcon, Shield, ShieldCheck, Trash2, Edit2, CheckCircle2, XCircle, Tag, Plus, X, Package, DollarSign, UserPlus, RefreshCcw, Download, Upload, AlertTriangle } from 'lucide-react';
+import { User as UserIcon, Shield, ShieldCheck, Trash2, Edit2, CheckCircle2, XCircle, Tag, Plus, X, Package, DollarSign, UserPlus, RefreshCcw, Download, Upload, AlertTriangle, Database } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth, handleFirestoreError, OperationType } from '../App';
 import { addDoc, deleteDoc as firestoreDeleteDoc } from 'firebase/firestore';
@@ -35,6 +35,10 @@ export default function Admin() {
   const [wipeLoading, setWipeLoading] = useState(false);
   const [wipeError, setWipeError] = useState('');
   const [backupLoading, setBackupLoading] = useState(false);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importError, setImportError] = useState('');
+  const [isSqlModalOpen, setSqlModalOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const handleWipeData = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -115,6 +119,87 @@ export default function Admin() {
     } finally {
       setBackupLoading(false);
     }
+  };
+
+  const handleImportBackup = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setImportLoading(true);
+    setImportError('');
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const json = JSON.parse(event.target?.result as string);
+        const collections = ['users', 'customers', 'categories', 'inventory', 'sales', 'transactions', 'production', 'tasks'];
+        
+        // Validação básica do JSON
+        const keys = Object.keys(json);
+        const hasSome = collections.some(col => keys.includes(col));
+        if (!hasSome) {
+          throw new Error('Formato de arquivo inválido. O arquivo JSON deve conter as coleções do sistema.');
+        }
+
+        if (!confirm('ATENÇÃO: Este processo irá apagar seus dados locais atuais de todas as tabelas (exceto seu próprio usuário) para carregar o backup. Deseja realmente prosseguir?')) {
+          setImportLoading(false);
+          e.target.value = '';
+          return;
+        }
+
+        const batch = writeBatch(db);
+
+        // Apagar itens existentes nas tabelas (preservando o usuário dono ativo para não desconectar)
+        for (const colName of collections) {
+          const snapshot = await getDocs(collection(db, colName));
+          snapshot.docs.forEach((doc) => {
+            if (colName === 'users' && doc.id === currentUserProfile?.uid) {
+              return;
+            }
+            batch.delete(doc.ref);
+          });
+        }
+        await batch.commit();
+
+        // Escrever os novos dados vindos do backup
+        for (const colName of collections) {
+          if (!json[colName] || !Array.isArray(json[colName])) continue;
+          
+          for (const item of json[colName]) {
+            if (colName === 'users' && item.id === currentUserProfile?.uid) {
+              // Fusão segura para manter o perfil sincronizado
+              await setDoc(doc(db, colName, item.id), { ...item, ...currentUserProfile }, { merge: true });
+              continue;
+            }
+            await setDoc(doc(db, colName, item.id), item);
+          }
+        }
+
+        // Registrar o restore de backup
+        await addDoc(collection(db, 'backups'), {
+          date: new Date().toISOString(),
+          createdBy: currentUserProfile?.displayName || 'Sistema',
+          type: 'restore'
+        });
+
+        alert('Backup carregado e restaurado com sucesso! O sistema será reiniciado.');
+        window.location.reload();
+      } catch (error: any) {
+        setImportError(error.message || 'Erro ao processar o arquivo JSON.');
+        alert('Erro ao carregar backup: ' + (error.message || 'Formato incorreto.'));
+      } finally {
+        setImportLoading(false);
+        e.target.value = '';
+      }
+    };
+
+    reader.onerror = () => {
+      setImportError('Erro ao ler o arquivo.');
+      setImportLoading(false);
+      e.target.value = '';
+    };
+
+    reader.readAsText(file);
   };
 
   const handleResetPassword = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -425,51 +510,108 @@ export default function Admin() {
         <header className="flex items-center justify-between mb-8">
           <div>
             <h2 className="text-2xl font-bold text-slate-900">Sistema e Segurança</h2>
-            <p className="text-slate-500 mt-1">Backup e limpeza de dados do sistema.</p>
+            <p className="text-slate-500 mt-1">Backup, limpeza e migração de banco de dados.</p>
           </div>
         </header>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-          <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
-            <div className="flex items-center gap-4 mb-6">
-              <div className="p-3 bg-blue-100 text-blue-600 rounded-xl">
-                <Download size={24} />
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Card 1: Backup e Restauração de Dados */}
+          <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+            <div>
+              <div className="flex items-center gap-4 mb-6">
+                <div className="p-3 bg-blue-100 text-blue-600 rounded-xl">
+                  <Download size={24} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">Backup de Dados</h3>
+                  <p className="text-sm text-slate-500">Baixe ou envie cópias de segurança do seu sistema.</p>
+                </div>
               </div>
-              <div>
-                <h3 className="text-lg font-bold text-slate-900">Backup de Dados</h3>
-                <p className="text-sm text-slate-500">Baixe uma cópia de segurança de todas as informações.</p>
+              
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                <button 
+                  onClick={handleExportBackup}
+                  disabled={backupLoading || importLoading}
+                  className="py-3 px-4 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold transition-all flex items-center justify-center gap-2 disabled:opacity-50 text-sm cursor-pointer"
+                >
+                  {backupLoading ? <RefreshCcw size={16} className="animate-spin" /> : <Download size={16} />}
+                  Exportar JSON
+                </button>
+                <label 
+                  className={cn(
+                    "py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold transition-all flex items-center justify-center gap-2 text-sm text-center cursor-pointer",
+                    (importLoading || backupLoading) && "opacity-50 pointer-events-none"
+                  )}
+                >
+                  {importLoading ? <RefreshCcw size={16} className="animate-spin" /> : <Upload size={16} />}
+                  {importLoading ? 'Lendo...' : 'Importar JSON'}
+                  <input 
+                    type="file" 
+                    accept=".json" 
+                    onChange={handleImportBackup} 
+                    disabled={importLoading || backupLoading} 
+                    className="hidden" 
+                  />
+                </label>
               </div>
+              
+              {importError && (
+                <p className="text-xs text-rose-500 font-bold mt-1 text-center">{importError}</p>
+              )}
             </div>
-            <button 
-              onClick={handleExportBackup}
-              disabled={backupLoading}
-              className="w-full py-4 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-            >
-              {backupLoading ? <RefreshCcw size={20} className="animate-spin" /> : <Download size={20} />}
-              {backupLoading ? 'Gerando Backup...' : 'Gerar Backup Agora'}
-            </button>
             <p className="text-[10px] text-slate-400 mt-4 text-center uppercase tracking-widest font-bold">
-              O backup automático é realizado 2x por semana pelo sistema.
+              Backup automático realizado 2x por semana.
             </p>
           </div>
 
-          <div className="bg-white p-8 rounded-2xl border border-rose-100 shadow-sm">
-            <div className="flex items-center gap-4 mb-6">
-              <div className="p-3 bg-rose-100 text-rose-600 rounded-xl">
-                <AlertTriangle size={24} />
+          {/* Card 2: Supabase / PostgreSQL Script definitions */}
+          <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+            <div>
+              <div className="flex items-center gap-4 mb-6">
+                <div className="p-3 bg-violet-100 text-violet-600 rounded-xl">
+                  <Database size={24} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">Script Supabase (SQL)</h3>
+                  <p className="text-sm text-slate-500">Gere códigos SQL DDL estruturados para instanciar no seu Supabase.</p>
+                </div>
               </div>
-              <div>
-                <h3 className="text-lg font-bold text-slate-900 text-rose-600">Zerar Sistema</h3>
-                <p className="text-sm text-slate-500">Apaga permanentemente todos os dados (exceto seu usuário).</p>
-              </div>
+              <button 
+                onClick={() => setSqlModalOpen(true)}
+                className="w-full py-3 px-4 bg-violet-600 hover:bg-violet-700 text-white rounded-xl font-bold transition-all flex items-center justify-center gap-2 text-sm"
+              >
+                <Database size={16} />
+                Obter Código SQL Supabase
+              </button>
             </div>
-            <button 
-              onClick={() => setWipeDataModalOpen(true)}
-              className="w-full py-4 bg-rose-50 text-rose-600 border border-rose-100 rounded-xl font-bold hover:bg-rose-100 transition-all flex items-center justify-center gap-2"
-            >
-              <Trash2 size={20} />
-              Zerar Todas as Informações
-            </button>
+            <p className="text-[10px] text-slate-400 mt-4 text-center uppercase tracking-widest font-bold">
+              Otimizado para PostgreSQL com chaves e índices.
+            </p>
+          </div>
+
+          {/* Card 3: Limpeza completa */}
+          <div className="bg-white p-8 rounded-2xl border border-rose-100 shadow-sm flex flex-col justify-between">
+            <div>
+              <div className="flex items-center gap-4 mb-6">
+                <div className="p-3 bg-rose-100 text-rose-600 rounded-xl">
+                  <AlertTriangle size={24} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900 text-rose-600">Zerar Sistema</h3>
+                  <p className="text-sm text-slate-500">Apaga permanentemente todos os dados (exceto seu usuário).</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setWipeDataModalOpen(true)}
+                className="w-full py-3 px-4 bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-100 rounded-xl font-bold transition-all flex items-center justify-center gap-2 text-sm"
+              >
+                <Trash2 size={16} />
+                Zerar Todas as Informações
+              </button>
+            </div>
+            <p className="text-[10px] text-rose-400 mt-4 text-center uppercase tracking-widest font-bold">
+              Atenção: Ação irreversível!
+            </p>
           </div>
         </div>
       </div>
@@ -893,6 +1035,363 @@ export default function Admin() {
                     </button>
                   </div>
                 </form>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Supabase SQL DDL Modal */}
+      <AnimatePresence>
+        {isSqlModalOpen && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setSqlModalOpen(false)}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" 
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative bg-white w-full max-w-4xl rounded-[2rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            >
+              {/* Modal Header */}
+              <div className="p-8 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-violet-100 text-violet-600 rounded-xl">
+                    <Database size={24} />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold text-slate-900">Script SQL para Supabase</h3>
+                    <p className="text-xs text-slate-500 mt-1">Definições de tabelas, chaves e índices para Banco PostgreSQL / Supabase.</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setSqlModalOpen(false)}
+                  className="p-2 hover:bg-slate-200 text-slate-400 hover:text-slate-600 rounded-xl transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              {/* Modal Body / Code Area */}
+              <div className="p-8 overflow-y-auto space-y-6 flex-1">
+                <div className="bg-slate-900 p-6 rounded-2xl relative group border border-slate-800 shadow-inner">
+                  <button 
+                    onClick={() => {
+                      navigator.clipboard.writeText(
+`-- SQL para Supabase (PostgreSQL) - HortaManager
+-- Adicione estas tabelas no "SQL Editor" do seu painel do Supabase.
+
+-- Habilitar gerar UUIDs se necessário
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- 1. Tabela de Perfis de Usuários (users)
+CREATE TABLE IF NOT EXISTS public.users (
+    uid TEXT PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('owner', 'employee')) DEFAULT 'employee',
+    permissions JSONB NOT NULL DEFAULT '{
+        "canManageInventory": false,
+        "canManageSales": false,
+        "canViewFinance": false,
+        "canViewReports": false,
+        "canManageCustomers": false,
+        "canManageProduction": false,
+        "canManageTasks": false
+    }'::JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 2. Tabela de Categorias (categories)
+CREATE TABLE IF NOT EXISTS public.categories (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL CHECK (type IN ('inventory', 'transaction')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    CONSTRAINT unique_category_name_type UNIQUE (name, type)
+);
+
+-- 3. Tabela de Clientes (customers)
+CREATE TABLE IF NOT EXISTS public.customers (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    company_name TEXT NOT NULL,
+    contact_name TEXT NOT NULL,
+    phone TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 4. Tabela de Itens de Estoque (inventory)
+CREATE TABLE IF NOT EXISTS public.inventory (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL CHECK (type IN ('input', 'dispatch')),
+    category TEXT NOT NULL,
+    quantity NUMERIC(12,2) NOT NULL DEFAULT 0.00,
+    unit TEXT NOT NULL,
+    price NUMERIC(12,2),
+    cost_price NUMERIC(12,2),
+    min_stock NUMERIC(12,2) NOT NULL DEFAULT 0.00,
+    last_updated TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 5. Tabela de Lotes de Produção (production)
+CREATE TABLE IF NOT EXISTS public.production (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    crop TEXT NOT NULL,
+    bed TEXT NOT NULL,
+    planting_date TIMESTAMP WITH TIME ZONE NOT NULL,
+    quantity_planted NUMERIC(12,2) NOT NULL,
+    unit TEXT NOT NULL,
+    inputs_used TEXT[] DEFAULT '{}'::TEXT[],
+    production_type TEXT CHECK (production_type IN ('seedling', 'bed')),
+    planting_source TEXT CHECK (planting_source IN ('seeds', 'internal_seedlings', 'purchased_seedlings')),
+    transplant_date TIMESTAMP WITH TIME ZONE,
+    estimated_harvest_date TIMESTAMP WITH TIME ZONE,
+    status TEXT NOT NULL CHECK (status IN ('growing', 'harvested', 'lost')) DEFAULT 'growing',
+    is_continuous_harvest BOOLEAN DEFAULT FALSE,
+    harvest_date TIMESTAMP WITH TIME ZONE,
+    harvest_quantity NUMERIC(12,2),
+    remaining_quantity NUMERIC(12,2),
+    total_cost NUMERIC(12,2),
+    unit_cost NUMERIC(12,2),
+    logs JSONB DEFAULT '[]'::JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 6. Tabela de Vendas (sales)
+CREATE TABLE IF NOT EXISTS public.sales (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    sale_number TEXT NOT NULL UNIQUE,
+    customer_name TEXT NOT NULL,
+    customer_phone TEXT,
+    items JSONB NOT NULL DEFAULT '[]'::JSONB,
+    total NUMERIC(12,2) NOT NULL DEFAULT 0.00,
+    status TEXT NOT NULL CHECK (status IN ('ordered', 'pending_delivery', 'delivered', 'paid', 'cancelled', 'pending', 'confirmed')),
+    delivery_date TIMESTAMP WITH TIME ZONE,
+    payment_methods JSONB DEFAULT '[]'::JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    confirmed_at TIMESTAMP WITH TIME ZONE
+);
+
+-- 7. Tabela de Transações Financeiras (transactions)
+CREATE TABLE IF NOT EXISTS public.transactions (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    type TEXT NOT NULL CHECK (type IN ('income', 'expense')),
+    amount NUMERIC(12,2) NOT NULL,
+    description TEXT NOT NULL,
+    category TEXT NOT NULL,
+    date TIMESTAMP WITH TIME ZONE NOT NULL,
+    related_sale_id TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 8. Tabela de Tarefas (tasks)
+CREATE TABLE IF NOT EXISTS public.tasks (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    title TEXT NOT NULL,
+    description TEXT,
+    due_date TIMESTAMP WITH TIME ZONE,
+    priority TEXT NOT NULL CHECK (priority IN ('low', 'medium', 'high')) DEFAULT 'medium',
+    completed BOOLEAN NOT NULL DEFAULT FALSE,
+    completed_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 9. Tabela de Backups (backups)
+CREATE TABLE IF NOT EXISTS public.backups (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    date TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    created_by TEXT,
+    type TEXT NOT NULL CHECK (type IN ('manual', 'auto', 'restore'))
+);
+
+-- Criar índices para otimização de consultas
+CREATE INDEX IF NOT EXISTS idx_inventory_category ON public.inventory(category);
+CREATE INDEX IF NOT EXISTS idx_production_status ON public.production(status);
+CREATE INDEX IF NOT EXISTS idx_sales_created_at ON public.sales(created_at);
+CREATE INDEX IF NOT EXISTS idx_transactions_type_date ON public.transactions(type, date);
+CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON public.tasks(due_date);
+
+-- Comentários úteis
+COMMENT ON TABLE public.users IS 'Perfis de acessos dos funcionários';
+COMMENT ON TABLE public.inventory IS 'Estoque de insumos e expedição';
+COMMENT ON TABLE public.production IS 'Plantios, canteiros e lotes de colheita';`
+                      );
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
+                    }}
+                    className="absolute top-4 right-4 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer z-10"
+                  >
+                    {copied ? 'Copiado!' : 'Copiar Script SQL'}
+                  </button>
+                  <pre className="font-mono text-xs text-slate-300 overflow-x-auto whitespace-pre leading-relaxed select-all">
+{`-- SQL para Supabase (PostgreSQL) - HortaManager
+-- Adicione estas tabelas no "SQL Editor" do seu painel do Supabase.
+
+-- Habilitar gerar UUIDs se necessário
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- 1. Tabela de Perfis de Usuários (users)
+CREATE TABLE IF NOT EXISTS public.users (
+    uid TEXT PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('owner', 'employee')) DEFAULT 'employee',
+    permissions JSONB NOT NULL DEFAULT '{
+        "canManageInventory": false,
+        "canManageSales": false,
+        "canViewFinance": false,
+        "canViewReports": false,
+        "canManageCustomers": false,
+        "canManageProduction": false,
+        "canManageTasks": false
+    }'::JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 2. Tabela de Categorias (categories)
+CREATE TABLE IF NOT EXISTS public.categories (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL CHECK (type IN ('inventory', 'transaction')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    CONSTRAINT unique_category_name_type UNIQUE (name, type)
+);
+
+-- 3. Tabela de Clientes (customers)
+CREATE TABLE IF NOT EXISTS public.customers (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    company_name TEXT NOT NULL,
+    contact_name TEXT NOT NULL,
+    phone TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 4. Tabela de Itens de Estoque (inventory)
+CREATE TABLE IF NOT EXISTS public.inventory (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL CHECK (type IN ('input', 'dispatch')),
+    category TEXT NOT NULL,
+    quantity NUMERIC(12,2) NOT NULL DEFAULT 0.00,
+    unit TEXT NOT NULL,
+    price NUMERIC(12,2),
+    cost_price NUMERIC(12,2),
+    min_stock NUMERIC(12,2) NOT NULL DEFAULT 0.00,
+    last_updated TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 5. Tabela de Lotes de Produção (production)
+CREATE TABLE IF NOT EXISTS public.production (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    crop TEXT NOT NULL,
+    bed TEXT NOT NULL,
+    planting_date TIMESTAMP WITH TIME ZONE NOT NULL,
+    quantity_planted NUMERIC(12,2) NOT NULL,
+    unit TEXT NOT NULL,
+    inputs_used TEXT[] DEFAULT '{}'::TEXT[],
+    production_type TEXT CHECK (production_type IN ('seedling', 'bed')),
+    planting_source TEXT CHECK (planting_source IN ('seeds', 'internal_seedlings', 'purchased_seedlings')),
+    transplant_date TIMESTAMP WITH TIME ZONE,
+    estimated_harvest_date TIMESTAMP WITH TIME ZONE,
+    status TEXT NOT NULL CHECK (status IN ('growing', 'harvested', 'lost')) DEFAULT 'growing',
+    is_continuous_harvest BOOLEAN DEFAULT FALSE,
+    harvest_date TIMESTAMP WITH TIME ZONE,
+    harvest_quantity NUMERIC(12,2),
+    remaining_quantity NUMERIC(12,2),
+    total_cost NUMERIC(12,2),
+    unit_cost NUMERIC(12,2),
+    logs JSONB DEFAULT '[]'::JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 6. Tabela de Vendas (sales)
+CREATE TABLE IF NOT EXISTS public.sales (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    sale_number TEXT NOT NULL UNIQUE,
+    customer_name TEXT NOT NULL,
+    customer_phone TEXT,
+    items JSONB NOT NULL DEFAULT '[]'::JSONB,
+    total NUMERIC(12,2) NOT NULL DEFAULT 0.00,
+    status TEXT NOT NULL CHECK (status IN ('ordered', 'pending_delivery', 'delivered', 'paid', 'cancelled', 'pending', 'confirmed')),
+    delivery_date TIMESTAMP WITH TIME ZONE,
+    payment_methods JSONB DEFAULT '[]'::JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    confirmed_at TIMESTAMP WITH TIME ZONE
+);
+
+-- 7. Tabela de Transações Financeiras (transactions)
+CREATE TABLE IF NOT EXISTS public.transactions (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    type TEXT NOT NULL CHECK (type IN ('income', 'expense')),
+    amount NUMERIC(12,2) NOT NULL,
+    description TEXT NOT NULL,
+    category TEXT NOT NULL,
+    date TIMESTAMP WITH TIME ZONE NOT NULL,
+    related_sale_id TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 8. Tabela de Tarefas (tasks)
+CREATE TABLE IF NOT EXISTS public.tasks (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    title TEXT NOT NULL,
+    description TEXT,
+    due_date TIMESTAMP WITH TIME ZONE,
+    priority TEXT NOT NULL CHECK (priority IN ('low', 'medium', 'high')) DEFAULT 'medium',
+    completed BOOLEAN NOT NULL DEFAULT FALSE,
+    completed_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 9. Tabela de Backups (backups)
+CREATE TABLE IF NOT EXISTS public.backups (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    date TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    created_by TEXT,
+    type TEXT NOT NULL CHECK (type IN ('manual', 'auto', 'restore'))
+);
+
+-- Criar índices para otimização de consultas
+CREATE INDEX IF NOT EXISTS idx_inventory_category ON public.inventory(category);
+CREATE INDEX IF NOT EXISTS idx_production_status ON public.production(status);
+CREATE INDEX IF NOT EXISTS idx_sales_created_at ON public.sales(created_at);
+CREATE INDEX IF NOT EXISTS idx_transactions_type_date ON public.transactions(type, date);
+CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON public.tasks(due_date);
+
+-- Comentários úteis
+COMMENT ON TABLE public.users IS 'Perfis de acessos dos funcionários';
+COMMENT ON TABLE public.inventory IS 'Estoque de insumos e expedição';
+COMMENT ON TABLE public.production IS 'Plantios, canteiros e lotes de colheita';`}
+                  </pre>
+                </div>
+                
+                <div className="bg-amber-50 border border-amber-200 p-6 rounded-2xl flex items-start gap-4">
+                  <AlertTriangle className="text-amber-600 flex-shrink-0 mt-1" size={24} />
+                  <div>
+                    <h4 className="font-bold text-amber-800 text-sm">Práticas Recomendadas no Supabase</h4>
+                    <p className="text-xs text-amber-700 mt-1 leading-relaxed">
+                      Ao usar este script no Supabase, configure o Row Level Security (RLS) se deseja restringir consultas anônimas diretas de clientes. Os relacionamentos de dados e formatos declarados acima preservam compatibilidade direta com a estrutura de documentos Firestore atual.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="p-8 border-t border-slate-100 flex justify-end bg-slate-50 gap-3">
+                <button 
+                  onClick={() => setSqlModalOpen(false)}
+                  className="px-6 py-3 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold rounded-xl text-sm transition-colors cursor-pointer"
+                >
+                  Fechar Janela
+                </button>
               </div>
             </motion.div>
           </div>

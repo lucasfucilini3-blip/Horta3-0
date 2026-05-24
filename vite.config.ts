@@ -80,6 +80,9 @@ export default defineConfig(({mode}) => {
     },
     resolve: {
       alias: {
+        'firebase/app': path.resolve(__dirname, './src/firebase.ts'),
+        'firebase/auth': path.resolve(__dirname, './src/firebase.ts'),
+        'firebase/firestore': path.resolve(__dirname, './src/firebase.ts'),
         '@': path.resolve(__dirname, '.'),
       },
     },

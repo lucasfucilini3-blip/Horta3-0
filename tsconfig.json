@@ -16,6 +16,15 @@
     "allowJs": true,
     "jsx": "react-jsx",
     "paths": {
+      "firebase/app": [
+        "./src/firebase.ts"
+      ],
+      "firebase/auth": [
+        "./src/firebase.ts"
+      ],
+      "firebase/firestore": [
+        "./src/firebase.ts"
+      ],
       "@/*": [
         "./*"
       ]

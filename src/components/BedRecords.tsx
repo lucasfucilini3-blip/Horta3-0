@@ -1212,9 +1212,9 @@ export default function BedRecordsComponent() {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative bg-white w-full max-w-xl rounded-2xl shadow-2xl overflow-hidden z-10"
+              className="relative bg-white w-full max-w-xl rounded-2xl shadow-2xl overflow-hidden z-10 flex flex-col max-h-[90vh]"
             >
-              <div className="p-6 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+              <div className="p-6 border-b border-slate-100 bg-slate-50 flex items-center justify-between shrink-0">
                 <div className="flex items-center gap-2.5">
                   <div className="p-2 bg-emerald-50 text-emerald-600 rounded-lg">
                     <Printer size={20} />
@@ -1229,7 +1229,7 @@ export default function BedRecordsComponent() {
                 </button>
               </div>
 
-              <div className="p-6 space-y-5">
+              <div className="p-6 space-y-5 overflow-y-auto custom-scrollbar flex-1">
                 {/* Select form style */}
                 <div className="space-y-2">
                   <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">Selecione o Modelo de Ficha</label>
@@ -1439,62 +1439,74 @@ export default function BedRecordsComponent() {
           </div>
         ) : (
           /* ================= PRONTUÁRIO CLÍNICO INDIVIDUAL DO CANTEIRO ================= */
-          <div className="space-y-6">
-            <div className="border-b-4 border-black pb-4 flex justify-between items-end">
+          <div className="space-y-4 print:space-y-3">
+            <div className="border-b-4 border-black pb-3 flex justify-between items-end">
               <div>
-                <h1 className="text-xl font-bold uppercase tracking-wider text-black">Prontuário Individual do Canteiro</h1>
-                <p className="text-xs text-zinc-600 mt-1">Histórico Clínico Físico para Acompanhamento Local</p>
+                <h1 className="text-lg font-bold uppercase tracking-wider text-black">Prontuário Individual do Canteiro</h1>
+                <p className="text-xs text-zinc-600 mt-0.5">Histórico Clínico Físico para Acompanhamento Local</p>
               </div>
               <div className="text-right">
-                <span className="text-sm font-extrabold border-2 border-black px-3 py-1 bg-black text-white">
+                <span className="text-xs font-extrabold border-2 border-black px-2.5 py-0.5 bg-black text-white">
                   {printBedName === 'blank' ? 'CANTEIRO: ______' : printBedName.toUpperCase()}
                 </span>
               </div>
             </div>
 
             {/* Seção Clínica do Canteiro */}
-            <div className="grid grid-cols-2 gap-4 border border-black p-4 text-xs font-semibold">
-              <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3 border border-black p-3 text-xs font-semibold">
+              <div className="space-y-2">
                 <div>Cultura Principal: ____________________________________</div>
                 <div>Lote / Origem (Mudas / Sementes): __________________________</div>
-                <div>Quantidade Plantada: _________________ uni. / m²</div>
+                <div>Quantidade Plantada: _________________ unidades no canteiro</div>
               </div>
-              <div className="space-y-3">
+              <div className="space-y-2">
                 <div>Data do Plantio: _____ / _____ / _________</div>
                 <div>Previsão Estimada de Colheita: _____ / _____ / _________</div>
                 <div>Frequência de Rega: [  ] Única diária  [  ] Dupla diária  [  ] Gotejador</div>
               </div>
             </div>
 
-            <div className="bg-zinc-100 p-3 border border-black text-xs font-semibold">
+            <div className="bg-zinc-100 p-2.5 border border-black text-xs font-semibold">
               Sintomas Clínicos Iniciais / Qualidade do Solo:
-              <div className="mt-3 text-zinc-400">____________________________________________________________________________________________________</div>
+              <div className="mt-2 text-zinc-400">____________________________________________________________________________________________________</div>
             </div>
 
             {/* Tabela de Observações Clínicas Sequenciais */}
             <div>
-              <p className="text-xs font-bold uppercase tracking-wider mb-2">Relatório Sequencial de Manejos Técnicos e Diagnósticos (Preenchimento à Caneta)</p>
+              <p className="text-xs font-bold uppercase tracking-wider mb-1.5">Relatório Sequencial de Manejos Técnicos e Diagnósticos (Preenchimento à Caneta)</p>
               <table className="w-full border-collapse border border-black text-xs">
                 <thead>
                   <tr className="bg-zinc-100 border-b border-black font-semibold">
-                    <th className="border border-black p-2 text-left w-24">Data / Hora</th>
-                    <th className="border border-black p-2 text-left w-44">Atividade Realizada</th>
-                    <th className="border border-black p-2 text-left">Diagnóstico Técnico, Prescrição Aplicada e Detalhes</th>
-                    <th className="border border-black p-2 text-center w-24">Visto</th>
+                    <th className="border border-black p-1.5 text-left w-24">Data / Hora</th>
+                    <th className="border border-black p-1.5 text-left w-44">Atividade Realizada</th>
+                    <th className="border border-black p-1.5 text-left">Diagnóstico Técnico, Prescrição Aplicada e Detalhes</th>
+                    <th className="border border-black p-1.5 text-center w-24">Visto</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {/* Generate 8 blank rows for sequential writing */}
-                  {Array.from({ length: 8 }).map((_, i) => (
-                    <tr key={i} className="h-16 border-b border-black">
-                      <td className="border border-black p-2 text-center text-zinc-300">___/___/___</td>
-                      <td className="border border-black p-1 text-[10px] space-y-1">
-                        <div>[  ] Plantio/Transpl.</div>
-                        <div>[  ] Tratam./Remédio</div>
-                        <div>[  ] Adubo/Nutrientes</div>
-                        <div>[  ] Colheita/Poda.</div>
+                  {/* Generate 5 blank rows for sequential writing (optimised for 1 page) */}
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <tr key={i} className="h-12 border-b border-black">
+                      <td className="border border-black p-1 text-center text-zinc-300">___/___/___</td>
+                      <td className="border border-black p-1 text-[9px] leading-tight space-y-0.5">
+                        <div className="flex items-center gap-1">
+                          <span className="w-2.5 h-2.5 border border-black rounded-sm inline-block"></span>
+                          <span>Plantio/Transpl.</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="w-2.5 h-2.5 border border-black rounded-sm inline-block"></span>
+                          <span>Tratam./Remédio</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="w-2.5 h-2.5 border border-black rounded-sm inline-block"></span>
+                          <span>Adubo/Nutrientes</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="w-2.5 h-2.5 border border-black rounded-sm inline-block"></span>
+                          <span>Colheita/Poda</span>
+                        </div>
                       </td>
-                      <td className="border border-black p-2 text-zinc-300"></td>
+                      <td className="border border-black p-1 text-zinc-300"></td>
                       <td className="border border-black p-1 text-center text-zinc-400 font-bold">______</td>
                     </tr>
                   ))}
@@ -1504,12 +1516,12 @@ export default function BedRecordsComponent() {
 
             {/* Histórico Anterior Recente do Sistema (se aplicável) */}
             {printBedName !== 'blank' && records.filter(r => r.bedId === printBedName).length > 0 && (
-              <div className="mt-4 border border-zinc-300 p-3 rounded bg-zinc-50/50 text-[10px] space-y-2">
-                <p className="font-bold text-zinc-800 uppercase tracking-wide">Relatórios Históricos Extraídos do Aplicativo Digital:</p>
+              <div className="border border-zinc-300 p-2.5 rounded bg-zinc-50/50 text-[10px] space-y-1.5">
+                <p className="font-bold text-zinc-800 uppercase tracking-wide">Relatórios Históricos Recentes do App Digital:</p>
                 <div className="grid grid-cols-2 gap-2 text-zinc-600">
                   {records
                     .filter(r => r.bedId === printBedName)
-                    .slice(0, 4)
+                    .slice(0, 2)
                     .map((rec, i) => (
                       <div key={i} className="border-b border-zinc-200 pb-1">
                         • <strong>{format(new Date(rec.date), 'dd/MM/yyyy')}</strong> - {rec.activityType.toUpperCase()}: {rec.crop} ({rec.employeeName})
@@ -1521,7 +1533,7 @@ export default function BedRecordsComponent() {
             )}
 
             {/* Rodapé */}
-            <div className="pt-8 border-t border-black flex justify-between items-center text-[10px] text-zinc-500">
+            <div className="pt-4 border-t border-black flex justify-between items-center text-[10px] text-zinc-500">
               <p>Histórico de Canteiro • HortaManager</p>
               <div className="flex gap-4">
                 <span>Data de Emissão: {format(new Date(), 'dd/MM/yyyy HH:mm')}</span>

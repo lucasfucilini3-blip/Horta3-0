@@ -302,7 +302,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
   ];
 
   return (
-    <div className="min-h-screen bg-slate-50 flex overflow-hidden">
+    <div className="min-h-screen bg-slate-50 flex overflow-hidden print:overflow-visible print:block print:h-auto">
       {/* Sidebar Overlay */}
       <AnimatePresence>
         {isSidebarOpen && (
@@ -441,9 +441,9 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative bg-white w-full max-w-md rounded-[2rem] shadow-2xl overflow-hidden z-10"
+              className="relative bg-white w-full max-w-md rounded-[2rem] shadow-2xl overflow-hidden z-10 flex flex-col max-h-[90vh]"
             >
-              <div className="p-8">
+              <div className="p-8 overflow-y-auto custom-scrollbar flex-1">
                 <div className="flex items-center justify-between mb-6">
                   <div>
                     <h3 className="text-xl font-bold text-slate-900">Baixar no Celular</h3>
@@ -583,7 +583,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
           </div>
         )}
       </AnimatePresence>
-      <main className="flex-1 flex flex-col min-w-0 relative bg-slate-50/50">
+      <main className="flex-1 flex flex-col min-w-0 relative bg-slate-50/50 print:overflow-visible print:block print:h-auto">
         {!useOnlineStatus() && (
           <div className="bg-rose-500 text-white text-center py-1.5 text-[10px] font-bold uppercase tracking-widest animate-pulse z-50 print:hidden">
             Modo Offline Ativo • Os dados serão sincronizados quando houver conexão
@@ -616,7 +616,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
             {isInstalled && <div className="w-10" />}
           </div>
         </header>
-        <div className="flex-1 p-4 md:p-6 lg:p-10 overflow-auto">
+        <div className="flex-1 p-4 md:p-6 lg:p-10 overflow-y-auto custom-scrollbar print:overflow-visible print:block print:h-auto print:p-0">
           {children}
         </div>
       </main>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, onSnapshot, updateDoc, doc, deleteDoc, orderBy, setDoc, getDocs, writeBatch } from 'firebase/firestore';
-import { db, auth } from '../firebase';
+import { db, auth, dbImportData } from '../firebase';
 import { UserProfile, UserPermissions, Category } from '../types';
 import { User as UserIcon, Shield, ShieldCheck, Trash2, Edit2, CheckCircle2, XCircle, Tag, Plus, X, Package, DollarSign, UserPlus, RefreshCcw, Download, Upload, AlertTriangle, Database } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -147,33 +147,8 @@ export default function Admin() {
           return;
         }
 
-        const batch = writeBatch(db);
-
-        // Apagar itens existentes nas tabelas (preservando o usuário dono ativo para não desconectar)
-        for (const colName of collections) {
-          const snapshot = await getDocs(collection(db, colName));
-          snapshot.docs.forEach((doc) => {
-            if (colName === 'users' && doc.id === currentUserProfile?.uid) {
-              return;
-            }
-            batch.delete(doc.ref);
-          });
-        }
-        await batch.commit();
-
-        // Escrever os novos dados vindos do backup
-        for (const colName of collections) {
-          if (!json[colName] || !Array.isArray(json[colName])) continue;
-          
-          for (const item of json[colName]) {
-            if (colName === 'users' && item.id === currentUserProfile?.uid) {
-              // Fusão segura para manter o perfil sincronizado
-              await setDoc(doc(db, colName, item.id), { ...item, ...currentUserProfile }, { merge: true });
-              continue;
-            }
-            await setDoc(doc(db, colName, item.id), item);
-          }
-        }
+        // Executa a importação em lote altamente otimizada sem travar o browser
+        dbImportData(json, currentUserProfile);
 
         // Registrar o restore de backup
         await addDoc(collection(db, 'backups'), {

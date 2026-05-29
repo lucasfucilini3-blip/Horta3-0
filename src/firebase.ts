@@ -643,3 +643,30 @@ export function writeBatch(db: any) {
     }
   };
 }
+
+export function dbImportData(jsonData: any, currentUserProfile: any) {
+  const collections = ['users', 'customers', 'categories', 'inventory', 'sales', 'transactions', 'production', 'tasks'];
+  
+  for (const colName of collections) {
+    let docs = jsonData[colName] || [];
+    if (!Array.isArray(docs)) {
+      docs = [];
+    }
+
+    // Deep copy to prevent side effects
+    docs = JSON.parse(JSON.stringify(docs));
+
+    if (colName === 'users' && currentUserProfile) {
+      const activeIdx = docs.findIndex((u: any) => u.id === currentUserProfile.uid || u.uid === currentUserProfile.uid);
+      if (activeIdx >= 0) {
+        docs[activeIdx] = { ...docs[activeIdx], ...currentUserProfile, id: currentUserProfile.uid };
+      } else {
+        docs.push({ ...currentUserProfile, id: currentUserProfile.uid });
+      }
+    }
+
+    const key = `hortamanager_db_${colName}`;
+    localStorage.setItem(key, JSON.stringify(serialize(docs)));
+    notifyListeners(colName);
+  }
+}

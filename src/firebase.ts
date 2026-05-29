@@ -25,6 +25,10 @@ export class Timestamp {
   valueOf() {
     return this.seconds * 1000;
   }
+
+  toJSON() {
+    return { _isTimestamp: true, seconds: this.seconds, nanoseconds: this.nanoseconds };
+  }
 }
 
 // --- Serializers / Deserializers for local-first storage ---
@@ -56,6 +60,10 @@ function deserialize(val: any): any {
   if (val === null || val === undefined) return val;
   if (typeof val === 'object') {
     if (val._isTimestamp) {
+      return new Timestamp(val.seconds, val.nanoseconds);
+    }
+    // Auto-migrate native JSON coordinates for Timestamp (backwards-compatibility with plain backups)
+    if (typeof val.seconds === 'number' && typeof val.nanoseconds === 'number' && Object.keys(val).length <= 3) {
       return new Timestamp(val.seconds, val.nanoseconds);
     }
     if (Array.isArray(val)) {

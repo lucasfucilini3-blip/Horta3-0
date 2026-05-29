@@ -42,7 +42,8 @@ import {
   Share,
   ListTodo,
   CheckCircle2,
-  Calendar
+  Calendar,
+  ClipboardList
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format } from 'date-fns';
@@ -58,6 +59,7 @@ import Admin from './components/Admin';
 import Customers from './components/Customers';
 import Production from './components/Production';
 import Tasks from './components/Tasks';
+import BedRecords from './components/BedRecords';
 
 // --- Utils ---
 export function cn(...inputs: ClassValue[]) {
@@ -278,6 +280,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
   const [isHelpModalOpen, setHelpModalOpen] = useState(false);
 
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
+  const [installTab, setInstallTab] = useState<'android' | 'ios'>(isIOS ? 'ios' : 'android');
 
   const copyLink = () => {
     navigator.clipboard.writeText(window.location.href);
@@ -287,6 +290,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
 
   const navItems = [
     { to: '/', icon: LayoutDashboard, label: 'Painel', show: true },
+    { to: '/prontuario', icon: ClipboardList, label: 'Prontuário Horta', show: true },
     { to: '/tarefas', icon: ListTodo, label: 'Tarefas', show: profile?.role === 'owner' || profile?.permissions.canManageTasks },
     { to: '/estoque', icon: Package, label: 'Estoque', show: profile?.role === 'owner' || profile?.permissions.canManageInventory },
     { to: '/producao', icon: BarChart3, label: 'Produção', show: profile?.role === 'owner' || profile?.permissions.canManageProduction },
@@ -314,7 +318,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
 
       {/* Sidebar */}
       <aside className={cn(
-        "fixed inset-y-0 left-0 z-50 w-72 bg-white border-r border-slate-200 transition-transform duration-300 lg:relative lg:translate-x-0 shrink-0 shadow-2xl lg:shadow-none",
+        "fixed inset-y-0 left-0 z-50 w-72 bg-white border-r border-slate-200 transition-transform duration-300 lg:relative lg:translate-x-0 shrink-0 shadow-2xl lg:shadow-none print:hidden",
         !isSidebarOpen && "-translate-x-full"
       )}>
         <div className="h-full flex flex-col p-6">
@@ -437,75 +441,143 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative bg-white w-full max-w-md rounded-[2rem] shadow-2xl overflow-hidden"
+              className="relative bg-white w-full max-w-md rounded-[2rem] shadow-2xl overflow-hidden z-10"
             >
               <div className="p-8">
                 <div className="flex items-center justify-between mb-6">
-                  <h3 className="text-xl font-bold text-slate-900">Como Instalar o App</h3>
-                  <button onClick={() => setHelpModalOpen(false)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full">
+                  <div>
+                    <h3 className="text-xl font-bold text-slate-900">Baixar no Celular</h3>
+                    <p className="text-xs text-slate-500 mt-1">Tenha acesso rápido offline na sua horta</p>
+                  </div>
+                  <button onClick={() => setHelpModalOpen(false)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full transition-colors">
                     <X size={20} />
                   </button>
                 </div>
 
-                <div className="space-y-6">
-                  {isIOS ? (
-                    <div className="space-y-4">
-                      <div className="flex items-start gap-3">
-                        <div className="w-8 h-8 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center shrink-0">
-                          <Share size={18} />
-                        </div>
-                        <div>
-                          <p className="font-bold text-slate-800 text-sm">1. Toque no ícone de Compartilhar</p>
-                          <p className="text-xs text-slate-500">Fica na barra inferior do Safari.</p>
-                        </div>
-                      </div>
-                      <div className="flex items-start gap-3">
-                        <div className="w-8 h-8 bg-emerald-100 text-emerald-600 rounded-lg flex items-center justify-center shrink-0">
-                          <Plus size={18} />
-                        </div>
-                        <div>
-                          <p className="font-bold text-slate-800 text-sm">2. Adicionar à Tela de Início</p>
-                          <p className="text-xs text-slate-500">Role a lista para baixo até encontrar esta opção.</p>
-                        </div>
+                {isInIframe ? (
+                  <div className="space-y-6">
+                    <div className="p-5 bg-amber-50 border border-amber-200 rounded-2xl flex items-start gap-3">
+                      <AlertCircle className="text-amber-600 shrink-0 mt-0.5" size={20} />
+                      <div className="space-y-1">
+                        <p className="font-bold text-amber-900 text-sm">Modo de Visualização (Preview)</p>
+                        <p className="text-xs text-amber-700 leading-relaxed">
+                          Você está visualizando o app dentro do editor. Para conseguir instalar no celular, você precisa abrir o link real em uma janela completa fora do editor.
+                        </p>
                       </div>
                     </div>
-                  ) : (
-                    <div className="space-y-4">
-                      <div className="flex items-start gap-3">
-                        <div className="w-8 h-8 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center shrink-0">
-                          <Smartphone size={18} />
-                        </div>
-                        <div>
-                          <p className="font-bold text-slate-800 text-sm">1. Use o Chrome ou Edge</p>
-                          <p className="text-xs text-slate-500">Abra o link do app nestes navegadores.</p>
-                        </div>
-                      </div>
-                      <div className="flex items-start gap-3">
-                        <div className="w-8 h-8 bg-emerald-100 text-emerald-600 rounded-lg flex items-center justify-center shrink-0">
-                          <Download size={18} />
-                        </div>
-                        <div>
-                          <p className="font-bold text-slate-800 text-sm">2. Clique em Instalar</p>
-                          <p className="text-xs text-slate-500">Se o botão não funcionar, use o menu (3 pontos) e selecione "Instalar aplicativo".</p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Dica Importante</p>
-                    <p className="text-[11px] text-slate-600 leading-relaxed">
-                      A instalação direta por botão pode ser bloqueada por alguns navegadores. O método manual pelo menu do navegador é o mais garantido.
-                    </p>
+                    
+                    <a 
+                      href={window.location.href} 
+                      target="_blank" 
+                      rel="noreferrer"
+                      className="flex items-center justify-center gap-2 w-full py-3.5 bg-emerald-600 text-white font-bold rounded-2xl hover:bg-emerald-700 hover:scale-[1.02] shadow-lg shadow-emerald-100 active:scale-95 transition-all text-sm"
+                    >
+                      <ExternalLink size={18} />
+                      Abrir em Tela Inteira para Instalar
+                    </a>
                   </div>
+                ) : (
+                  <div className="space-y-6">
+                    {/* Native Install Button Trigger if present */}
+                    {installPrompt && (
+                      <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100 space-y-3">
+                        <p className="text-xs font-bold text-emerald-800">Seu dispositivo suporta o download automático!</p>
+                        <button 
+                          onClick={() => { installApp(); setHelpModalOpen(false); }}
+                          className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-all shadow-md flex items-center justify-center gap-2 text-sm"
+                        >
+                          <Download size={16} />
+                          Instalar com 1 Clique agora
+                        </button>
+                      </div>
+                    )}
 
-                  <button 
-                    onClick={() => setHelpModalOpen(false)}
-                    className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800 transition-all"
-                  >
-                    Entendi
-                  </button>
-                </div>
+                    {/* Tabs for Manual Install */}
+                    <div className="flex bg-slate-100 p-1 rounded-xl">
+                      <button
+                        type="button"
+                        onClick={() => setInstallTab('android')}
+                        className={cn(
+                          "flex-1 py-2 text-xs font-bold rounded-lg transition-all",
+                          installTab === 'android' ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-800"
+                        )}
+                      >
+                        🤖 Celular Android
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setInstallTab('ios')}
+                        className={cn(
+                          "flex-1 py-2 text-xs font-bold rounded-lg transition-all",
+                          installTab === 'ios' ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-800"
+                        )}
+                      >
+                        🍏 iPhone (iOS)
+                      </button>
+                    </div>
+
+                    {/* Step-by-step guides */}
+                    <div className="space-y-4">
+                      {installTab === 'ios' ? (
+                        <div className="space-y-4">
+                          <div className="flex items-start gap-3">
+                            <div className="w-8 h-8 bg-blue-50 text-blue-600 rounded-lg flex items-center justify-center shrink-0">
+                              <Share size={18} />
+                            </div>
+                            <div>
+                              <p className="font-bold text-slate-800 text-sm">1. Toque no ícone de Compartilhar</p>
+                              <p className="text-xs text-slate-500">Localizado na barra inferior do seu navegador Safari.</p>
+                            </div>
+                          </div>
+                          <div className="flex items-start gap-3">
+                            <div className="w-8 h-8 bg-emerald-50 text-emerald-600 rounded-lg flex items-center justify-center shrink-0">
+                              <Plus size={18} />
+                            </div>
+                            <div>
+                              <p className="font-bold text-slate-800 text-sm">2. Adicionar à Tela de Início</p>
+                              <p className="text-xs text-slate-500">Role a lista de opções para baixo e clique em "Adicionar à Tela de Início".</p>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          <div className="flex items-start gap-3">
+                            <div className="w-8 h-8 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center shrink-0">
+                              <Smartphone size={18} />
+                            </div>
+                            <div>
+                              <p className="font-bold text-slate-800 text-sm">1. Abra no Chrome ou Edge</p>
+                              <p className="text-xs text-slate-500">Certifique-se de que está usando um navegador padrão do Android.</p>
+                            </div>
+                          </div>
+                          <div className="flex items-start gap-3">
+                            <div className="w-8 h-8 bg-emerald-50 text-emerald-600 rounded-lg flex items-center justify-center shrink-0">
+                              <Menu size={18} />
+                            </div>
+                            <div>
+                              <p className="font-bold text-slate-800 text-sm">2. Selecione no Menu</p>
+                              <p className="text-xs text-slate-500">Clique nas opções de três pontinhos no canto superior e selecione "Instalar aplicativo" ou "Adicionar à tela de início".</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">💡 HortaManager Offline</p>
+                      <p className="text-[11px] text-slate-600 leading-relaxed">
+                        Ao adicionar o app à sua tela de início, ele abrirá em tela cheia como se fosse um app comum e salvará suas atividades na horta mesmo se você estiver sem internet!
+                      </p>
+                    </div>
+
+                    <button 
+                      onClick={() => setHelpModalOpen(false)}
+                      className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800 transition-all text-sm"
+                    >
+                      Fechar
+                    </button>
+                  </div>
+                )}
               </div>
             </motion.div>
           </div>
@@ -513,11 +585,11 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
       </AnimatePresence>
       <main className="flex-1 flex flex-col min-w-0 relative bg-slate-50/50">
         {!useOnlineStatus() && (
-          <div className="bg-rose-500 text-white text-center py-1.5 text-[10px] font-bold uppercase tracking-widest animate-pulse z-50">
+          <div className="bg-rose-500 text-white text-center py-1.5 text-[10px] font-bold uppercase tracking-widest animate-pulse z-50 print:hidden">
             Modo Offline Ativo • Os dados serão sincronizados quando houver conexão
           </div>
         )}
-        <header className="h-16 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-4 sticky top-0 z-30 lg:hidden">
+        <header className="h-16 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-4 sticky top-0 z-30 lg:hidden print:hidden">
           <button 
             onClick={() => setSidebarOpen(true)} 
             className="p-2 text-slate-600 hover:bg-slate-100 rounded-xl transition-colors"
@@ -530,7 +602,19 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
             </div>
             <h1 className="text-lg font-bold text-slate-800">HortaManager</h1>
           </div>
-          <div className="w-10" />
+          <div className="flex items-center gap-1">
+            {!isInstalled && (
+              <button 
+                onClick={() => setHelpModalOpen(true)}
+                className="flex items-center gap-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800 px-3 py-1.5 rounded-xl font-bold text-xs transition-all shadow-sm active:scale-95 border border-emerald-100 animate-pulse"
+                title="Informações de como instalar"
+              >
+                <Smartphone size={14} />
+                <span>Instalar</span>
+              </button>
+            )}
+            {isInstalled && <div className="w-10" />}
+          </div>
         </header>
         <div className="flex-1 p-4 md:p-6 lg:p-10 overflow-auto">
           {children}
@@ -1051,6 +1135,7 @@ export default function App() {
           <Layout>
             <Routes>
               <Route path="/" element={<Dashboard />} />
+              <Route path="/prontuario" element={<BedRecords />} />
               <Route 
                 path="/tarefas" 
                 element={profile?.role === 'owner' || profile?.permissions.canManageTasks ? <Tasks /> : <Navigate to="/" />} 

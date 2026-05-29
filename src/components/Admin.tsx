@@ -55,7 +55,7 @@ export default function Admin() {
         throw new Error('Usuário não autenticado');
       }
 
-      const collections = ['customers', 'categories', 'inventory', 'sales', 'transactions', 'production', 'tasks', 'backups'];
+      const collections = ['customers', 'categories', 'inventory', 'sales', 'transactions', 'production', 'tasks', 'bed_records', 'backups'];
       const batch = writeBatch(db);
 
       for (const colName of collections) {
@@ -89,7 +89,7 @@ export default function Admin() {
   const handleExportBackup = async () => {
     setBackupLoading(true);
     try {
-      const collections = ['users', 'customers', 'categories', 'inventory', 'sales', 'transactions', 'production', 'tasks'];
+      const collections = ['users', 'customers', 'categories', 'inventory', 'sales', 'transactions', 'production', 'tasks', 'bed_records'];
       const backupData: any = {};
 
       for (const colName of collections) {
@@ -132,7 +132,7 @@ export default function Admin() {
     reader.onload = async (event) => {
       try {
         const json = JSON.parse(event.target?.result as string);
-        const collections = ['users', 'customers', 'categories', 'inventory', 'sales', 'transactions', 'production', 'tasks'];
+        const collections = ['users', 'customers', 'categories', 'inventory', 'sales', 'transactions', 'production', 'tasks', 'bed_records'];
         
         // Validação básica do JSON
         const keys = Object.keys(json);

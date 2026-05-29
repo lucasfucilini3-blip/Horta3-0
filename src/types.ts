@@ -135,3 +135,26 @@ export interface Task {
   completedAt?: any; // Firestore Timestamp
   createdAt: any; // Firestore Timestamp
 }
+
+export interface BedRecord {
+  id: string;
+  bedId: string; // ex: "1", "2", "3", "Canteiro A"
+  date: any; // data do registro (Timestamp)
+  crop: string; // cultura
+  activityType: 'planting' | 'treatment' | 'fertilization' | 'harvest' | 'general';
+  
+  // Detalhes dependendo da atividade registrada
+  treatmentDescription?: string; // Tratamento realizado
+  fertilizerDescription?: string; // Adubação realizada
+  harvestQuantity?: number; // Quantidade colhida
+  harvestUnit?: string; // Unidade da colheita (kg, mç, un, etc)
+  quantityPlanted?: number; // Quantidade plantada
+  unitPlanted?: string; // Unidade do plantio (mudas, sementes, etc)
+  
+  employeeName?: string; // Responsável
+  notes?: string; // Observações adicionais
+  syncedToProduction?: boolean; // Se integrou com a tabela de produção/estoque
+  productionId?: string; // Se tem vínculo direto com a produção
+  createdAt: any; // Timestamp do sistema
+}
+

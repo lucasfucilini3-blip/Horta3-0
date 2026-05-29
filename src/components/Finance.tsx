@@ -26,9 +26,10 @@ export default function Finance() {
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [filterType, setFilterType] = useState<TransactionType | 'all'>('all');
+  const [visibleCount, setVisibleCount] = useState(50);
 
   useEffect(() => {
-    const q = query(collection(db, 'transactions'), orderBy('date', 'desc'), limit(50));
+    const q = query(collection(db, 'transactions'), orderBy('date', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const newTransactions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Transaction));
       setTransactions(newTransactions);
@@ -98,6 +99,8 @@ export default function Finance() {
   const filteredTransactions = transactions.filter(t => 
     filterType === 'all' || t.type === filterType
   );
+
+  const displayedTransactions = filteredTransactions.slice(0, visibleCount);
 
   const totalIncome = transactions
     .filter(t => t.type === 'income')
@@ -191,7 +194,7 @@ export default function Finance() {
         </div>
 
         <div className="divide-y divide-slate-100">
-          {filteredTransactions.map((t) => (
+          {displayedTransactions.map((t) => (
             <div key={t.id} className="p-4 md:p-6 flex items-center justify-between hover:bg-slate-50 transition-colors group">
               <div className="flex items-center gap-3 md:gap-4 min-w-0">
                 <div className={cn(
@@ -250,6 +253,18 @@ export default function Finance() {
               </div>
             </div>
           ))}
+
+          {filteredTransactions.length > visibleCount && (
+            <div className="p-4 flex justify-center bg-slate-50 border-t border-slate-100">
+              <button
+                onClick={() => setVisibleCount(prev => prev + 50)}
+                className="px-6 py-2 bg-white border border-slate-200 text-slate-600 hover:text-slate-800 rounded-xl text-sm font-bold hover:bg-slate-50 transition-all active:scale-95 shadow-sm"
+              >
+                Carregar mais Lançamentos ({filteredTransactions.length - visibleCount} restantes)
+              </button>
+            </div>
+          )}
+
           {filteredTransactions.length === 0 && (
             <div className="p-20 text-center text-slate-400">
               <DollarSign size={48} className="mx-auto mb-4 opacity-20" />

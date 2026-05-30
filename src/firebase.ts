@@ -37,7 +37,10 @@ import {
   enableMultiTabIndexedDbPersistence as realEnableMultiTab
 } from '@firebase/firestore';
 
+const forceLocal = typeof window !== 'undefined' && localStorage.getItem('hortamanager_force_local') === 'true';
+
 export const isRealFirebase = 
+  !forceLocal &&
   firebaseConfig && 
   firebaseConfig.projectId && 
   firebaseConfig.projectId !== 'remixed-project-id' && 
@@ -123,7 +126,7 @@ function deserialize(val: any): any {
     if (val._isTimestamp) {
       return new MockTimestamp(val.seconds, val.nanoseconds);
     }
-    if (typeof val.seconds === 'number' && typeof val.nanoseconds === 'number' && Object.keys(val).length <= 3) {
+    if (typeof val.seconds === 'number' && typeof val.nanoseconds === 'number') {
       return new MockTimestamp(val.seconds, val.nanoseconds);
     }
     if (Array.isArray(val)) {

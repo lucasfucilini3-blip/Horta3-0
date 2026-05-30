@@ -9,7 +9,7 @@ import {
   updateProfile
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, onSnapshot, collection, query, orderBy, limit, getDocs, addDoc, updateDoc, serverTimestamp, where } from 'firebase/firestore';
-import { auth, db } from './firebase';
+import { auth, db, dbImportData } from './firebase';
 import { UserProfile, UserRole } from './types';
 import { 
   LayoutDashboard, 
@@ -33,6 +33,10 @@ import {
   Cloud,
   CreditCard,
   Download,
+  Upload,
+  Database,
+  Users,
+  UserCheck,
   Info,
   ExternalLink,
   Copy,
@@ -589,6 +593,20 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
             Modo Offline Ativo • Os dados serão sincronizados quando houver conexão
           </div>
         )}
+        {localStorage.getItem('hortamanager_force_local') === 'true' && (
+          <div className="bg-amber-500 text-white text-center py-2 text-[11px] font-bold flex items-center justify-center gap-3 px-4 z-50 print:hidden shadow-sm">
+            <span>📱 Rodando em Modo Banco de Dados Local do Celular (Dados preservados offline).</span>
+            <button
+              onClick={() => {
+                localStorage.removeItem('hortamanager_force_local');
+                window.location.reload();
+              }}
+              className="bg-white text-amber-700 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-wider hover:bg-slate-100 transition-colors shadow-sm"
+            >
+              Ativar Nuvem (Firebase)
+            </button>
+          </div>
+        )}
         <header className="h-16 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-4 sticky top-0 z-30 lg:hidden print:hidden">
           <button 
             onClick={() => setSidebarOpen(true)} 
@@ -876,6 +894,22 @@ const Login = () => {
   const [error, setError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
 
+  const [localUsers, setLocalUsers] = useState<any[]>([]);
+  const isForceLocal = localStorage.getItem('hortamanager_force_local') === 'true';
+
+  useEffect(() => {
+    // Get profiles from local storage to allow direct 1-click select
+    const localUsersStr = localStorage.getItem('hortamanager_auth_users') || localStorage.getItem('hortamanager_db_users');
+    if (localUsersStr) {
+      try {
+        const parsed = JSON.parse(localUsersStr);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setLocalUsers(parsed);
+        }
+      } catch (e) {}
+    }
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -883,7 +917,6 @@ const Login = () => {
     try {
       await signInWithEmail(username, password);
     } catch (err: any) {
-      // Show the actual error message if it's one of our custom ones or a clear Firebase error
       const errorMessage = err.message || 'Usuário ou senha incorretos';
       setError(errorMessage);
       console.error('Login error details:', err);
@@ -892,8 +925,67 @@ const Login = () => {
     }
   };
 
+  const handleQuickLogin = (selectedUser: any) => {
+    localStorage.setItem('hortamanager_force_local', 'true');
+    const userPayload = {
+      uid: selectedUser.uid || selectedUser.id || 'uid_lucas',
+      email: selectedUser.email || 'lucasfucilini3@gmail.com',
+      displayName: selectedUser.displayName || selectedUser.name || 'Lucas Fucilini',
+      emailVerified: true,
+      isAnonymous: false,
+      tenantId: null
+    };
+    if (typeof (auth as any).setCurrentUser === 'function') {
+      (auth as any).setCurrentUser(userPayload);
+    } else {
+      signInWithEmail(selectedUser.email || 'lucasfucilini3@gmail.com', 'Lgf091723');
+    }
+  };
+
+  const handleFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const json = JSON.parse(event.target?.result as string);
+        const collections = ['users', 'customers', 'categories', 'inventory', 'sales', 'transactions', 'production', 'tasks'];
+        
+        const keys = Object.keys(json);
+        const hasSome = collections.some(col => keys.includes(col));
+        if (!hasSome) {
+          throw new Error('Arquivo JSON inválido. Coleções do sistema não foram identificadas no arquivo.');
+        }
+
+        localStorage.setItem('hortamanager_force_local', 'true');
+        
+        // Import data directly using helper exported from firebase.ts
+        dbImportData(json, null);
+
+        // Also update authenticatable users list locally
+        if (json.users && Array.isArray(json.users)) {
+          const authUsers = json.users.map((u: any) => ({
+            uid: u.uid || u.id,
+            email: u.email,
+            displayName: u.displayName || u.name || 'Usuário',
+            role: u.role || 'employee',
+            password: '123'
+          }));
+          localStorage.setItem('hortamanager_auth_users', JSON.stringify(authUsers));
+        }
+
+        alert('Backup importado com sucesso no Modo Local! Seus dados antigos foram recuperados.');
+        window.location.reload();
+      } catch (error: any) {
+        alert('Erro ao carregar arquivo de backup: ' + (error.message || 'Estrutura inválida.'));
+      }
+    };
+    reader.readAsText(file);
+  };
+
   return (
-    <div className="min-h-screen bg-emerald-900 flex items-center justify-center p-6 relative overflow-hidden">
+    <div className="min-h-screen bg-gradient-to-br from-emerald-950 via-emerald-900 to-slate-900 flex items-center justify-center p-6 relative overflow-hidden">
       {/* Decorative elements */}
       <div className="absolute top-0 left-0 w-full h-full opacity-10 pointer-events-none">
         <div className="absolute top-10 left-10 w-64 h-64 bg-white rounded-full blur-3xl" />
@@ -901,16 +993,37 @@ const Login = () => {
       </div>
 
       <motion.div 
-        initial={{ opacity: 0, scale: 0.9 }}
+        initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
-        className="bg-white w-full max-w-md p-10 rounded-[2.5rem] shadow-2xl relative z-10"
+        className="bg-white w-full max-w-md p-8 md:p-10 rounded-[2.5rem] shadow-2xl relative z-10 my-8 max-h-[95vh] overflow-y-auto"
       >
-        <div className="flex flex-col items-center text-center mb-8">
+        <div className="flex flex-col items-center text-center mb-6">
           <div className="w-16 h-16 bg-emerald-600 rounded-2xl flex items-center justify-center text-white shadow-xl shadow-emerald-200 mb-4 transform -rotate-6">
             <Sprout size={32} />
           </div>
           <h1 className="text-2xl font-black text-slate-900 tracking-tight">HortaManager</h1>
-          <p className="text-slate-500 mt-1 text-sm font-medium">Gestão interna da empresa.</p>
+          <p className="text-slate-500 mt-1 text-sm font-medium">Gestão interna da empresa</p>
+        </div>
+
+        {/* Restore Backup Card if user is stuck */}
+        <div className="mb-6 p-4 rounded-2xl border border-dashed border-emerald-300 bg-emerald-50/50 flex flex-col items-center text-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-800 shrink-0">
+            <Database size={20} />
+          </div>
+          <div className="min-w-0">
+            <p className="font-bold text-xs text-emerald-900">Restaurar Backup do App Antigo</p>
+            <p className="text-[11px] text-emerald-700 mt-1">Carregue aqui o seu arquivo de backup (.json) para restaurar todo o seu histórico instantaneamente e ativar o modo local.</p>
+          </div>
+          <label className="cursor-pointer inline-flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs transition-colors shadow-md">
+            <Upload size={14} />
+            Escolher Backup (.json)
+            <input 
+              type="file" 
+              accept=".json" 
+              onChange={handleFileImport}
+              className="hidden" 
+            />
+          </label>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -922,7 +1035,7 @@ const Login = () => {
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               placeholder="Digite seu usuário"
-              className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
+              className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-sm"
             />
           </div>
           <div className="space-y-1">
@@ -933,27 +1046,118 @@ const Login = () => {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
-              className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
+              className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-sm"
             />
           </div>
 
           {error && (
-            <div className="p-3 bg-red-50 border border-red-100 rounded-xl flex items-center gap-2 text-red-600 text-xs font-bold">
-              <AlertCircle size={14} />
-              {error}
+            <div className="p-3 bg-red-50 border border-red-100 rounded-xl space-y-1.5 text-red-700 text-xs font-medium">
+              <div className="flex items-center gap-1.5 font-bold">
+                <AlertCircle size={14} className="shrink-0 text-red-600" />
+                Erro ao entrar com Firebase
+              </div>
+              <p className="text-[11px] text-red-600 leading-relaxed">
+                {error.includes('operation-not-allowed') 
+                  ? 'O login de Nuvem (E-mail/Senha) não está habilitado no Painel do seu Firebase. Entre usando o Banco do Celular abaixo.' 
+                  : error}
+              </p>
             </div>
           )}
 
           <button 
             type="submit"
             disabled={authLoading}
-            className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-bold hover:bg-emerald-700 transition-all active:scale-95 shadow-lg shadow-emerald-100 disabled:opacity-50"
+            className="w-full bg-emerald-600 text-white py-3.5 rounded-2xl font-bold hover:bg-emerald-700 transition-all active:scale-95 shadow-lg shadow-emerald-100 disabled:opacity-50 text-sm"
           >
             {authLoading ? 'Entrando...' : 'Entrar no Sistema'}
           </button>
         </form>
 
-        <p className="text-center text-slate-400 text-[10px] mt-8 uppercase font-bold tracking-widest">
+        {/* 1-Click Access for Local/Loaded Users */}
+        {localUsers.length > 0 && (
+          <div className="mt-6 pt-6 border-t border-slate-100">
+            <p className="text-[10px] font-black text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-1.5 justify-center">
+              <Users size={14} className="text-indigo-600 font-bold" />
+              Entrar como Perfil do Celular/Backup:
+            </p>
+            <div className="grid grid-cols-1 gap-2 max-h-40 overflow-y-auto pr-1">
+              {localUsers.map((u, idx) => {
+                const displayName = u.displayName || u.name || u.email?.split('@')[0] || 'Usuário';
+                const roleLabel = u.role === 'owner' ? 'Dono' : 'Funcionário';
+                return (
+                  <button
+                    key={u.uid || u.id || idx}
+                    type="button"
+                    onClick={() => handleQuickLogin(u)}
+                    className="flex items-center justify-between p-3 bg-slate-50 hover:bg-indigo-50 border border-slate-200 rounded-xl transition-all text-left group"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center text-indigo-700 group-hover:bg-indigo-200 shadow-sm shrink-0">
+                        <UserCheck size={14} />
+                      </div>
+                      <div className="min-w-0 w-full">
+                        <p className="font-bold text-xs text-slate-800 group-hover:text-indigo-900 truncate">{displayName}</p>
+                        <p className="text-[10px] text-slate-500 group-hover:text-indigo-700 mt-0.5">{u.email}</p>
+                      </div>
+                    </div>
+                    <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full border shrink-0 ${
+                      u.role === 'owner' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-slate-100 text-slate-600 border-slate-200'
+                    }`}>
+                      {roleLabel}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div className="mt-6 pt-6 border-t border-slate-100 space-y-4">
+          <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200">
+            <p className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
+              <AlertCircle size={15} className="text-amber-600 shrink-0" />
+              Dificuldades para fazer login?
+            </p>
+            <p className="text-[11px] text-amber-700 mt-1 leading-relaxed">
+              O banco de dados em nuvem (Firebase) está ativo. Como o e-mail/senha real pode precisar de ativação ou você prefere salvar dados de forma rápida, você pode alternar para o <b>Modo Banco do Celular (Local)</b> para carregar todos os dados locais instantaneamente.
+            </p>
+          </div>
+          
+          <button 
+            type="button"
+            onClick={() => {
+              localStorage.setItem('hortamanager_force_local', 'true');
+              // Bootstrap a default Lucas owner local profile if empty
+              const localUsersStr = localStorage.getItem('hortamanager_auth_users');
+              if (!localUsersStr) {
+                const initialUsers = [
+                  { uid: 'uid_lucas', email: 'lucas@hortamanager.com', displayName: 'Lucas', role: 'owner', password: 'Lgf091723' },
+                  { uid: 'uid_lucas_gmail', email: 'lucasfucilini3@gmail.com', displayName: 'Lucas Fucilini', role: 'owner', password: 'Lgf091723' }
+                ];
+                localStorage.setItem('hortamanager_auth_users', JSON.stringify(initialUsers));
+              }
+              window.location.reload();
+            }}
+            className="w-full py-3 bg-slate-100 text-slate-700 hover:bg-amber-100 hover:text-amber-800 rounded-2xl font-bold text-xs transition-all active:scale-95 flex items-center justify-center gap-2"
+          >
+            📱 Entrar com Banco do Celular (Dados Otimizados)
+          </button>
+
+          {isForceLocal && (
+            <button 
+              type="button"
+              onClick={() => {
+                localStorage.removeItem('hortamanager_force_local');
+                window.location.reload();
+              }}
+              className="w-full text-center text-xs text-emerald-600 hover:text-emerald-700 font-bold hover:underline"
+            >
+              🌐 Voltar para Sincronização na Nuvem (Firebase)
+            </button>
+          )}
+        </div>
+
+        <p className="text-center text-slate-400 text-[10px] mt-6 uppercase font-bold tracking-widest">
           Acesso restrito a funcionários autorizados
         </p>
       </motion.div>

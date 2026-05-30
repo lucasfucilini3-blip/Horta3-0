@@ -168,6 +168,43 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["title", "priority", "completed", "createdAt"]
+    },
+    "BedRecord": {
+      "title": "Bed Record",
+      "description": "Daily garden bed records.",
+      "type": "object",
+      "properties": {
+        "bedId": { "type": "string" },
+        "crop": { "type": "string" },
+        "activityType": { "type": "string" },
+        "employeeName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["bedId", "crop", "activityType", "employeeName", "createdAt"]
+    },
+    "InventoryHistoryItem": {
+      "title": "Inventory History Item",
+      "description": "Log of inventory changes.",
+      "type": "object",
+      "properties": {
+        "itemId": { "type": "string" },
+        "itemName": { "type": "string" },
+        "quantity": { "type": "number" },
+        "unit": { "type": "string" },
+        "type": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" }
+      },
+      "required": ["itemId", "itemName", "quantity", "unit", "type", "date"]
+    },
+    "Backup": {
+      "title": "System Backup",
+      "description": "Complete structural db backup snapshot.",
+      "type": "object",
+      "properties": {
+        "timestamp": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["timestamp", "createdBy"]
     }
   },
   "firestore": {
@@ -178,6 +215,10 @@
     "/inventory/{itemId}": {
       "schema": "InventoryItem",
       "description": "Stock items."
+    },
+    "/inventory_history/{historyId}": {
+      "schema": "InventoryHistoryItem",
+      "description": "Inventory movement log."
     },
     "/sales/{saleId}": {
       "schema": "Sale",
@@ -202,6 +243,14 @@
     "/tasks/{taskId}": {
       "schema": "Task",
       "description": "Management tasks."
+    },
+    "/bed_records/{recordId}": {
+      "schema": "BedRecord",
+      "description": "History of actions on beds."
+    },
+    "/backups/{backupId}": {
+      "schema": "Backup",
+      "description": "Database backup snapshots."
     }
   }
 }

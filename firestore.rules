@@ -148,9 +148,22 @@ service cloud.firestore {
              data.createdAt is timestamp;
     }
 
+    function isValidBedRecord(data) {
+      return data.keys().hasAll(['bedId', 'crop', 'activityType', 'employeeName', 'createdAt']) &&
+             data.bedId is string && data.bedId.size() > 0 &&
+             data.crop is string &&
+             data.activityType is string &&
+             data.employeeName is string &&
+             data.createdAt is timestamp;
+    }
+
     // ===============================================================
     // Match Rules
     // ===============================================================
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
 
     match /users/{userId} {
       allow read: if isAuthenticated() && (request.auth.uid == userId || isOwner());
@@ -214,6 +227,12 @@ service cloud.firestore {
       allow read: if isAuthenticated();
       allow create, update: if (isOwner() || hasPermission('canManageProduction')) && isValidTask(request.resource.data);
       allow delete: if (isOwner() || hasPermission('canManageProduction'));
+    }
+
+    match /bed_records/{recordId} {
+      allow read: if isAuthenticated();
+      allow create, update: if (isOwner() || hasPermission('canManageProduction')) && isValidBedRecord(request.resource.data);
+      allow delete: if isOwner();
     }
 
     match /backups/{backupId} {

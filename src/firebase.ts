@@ -1,21 +1,64 @@
-import { type ClassValue } from 'clsx';
+import firebaseConfig from '../firebase-applet-config.json';
 
-// --- Reusable Timestamp Implementation ---
-export class Timestamp {
+// --- Reusable Timestamp Implementation & Exports ---
+import { 
+  initializeApp as initRealApp 
+} from '@firebase/app';
+import { 
+  getAuth as getRealAuth, 
+  signInWithEmailAndPassword as realSignInWithEmail, 
+  createUserWithEmailAndPassword as realCreateUserWithEmail, 
+  signOut as realSignOut, 
+  updateProfile as realUpdateProfile, 
+  updatePassword as realUpdatePassword, 
+  onAuthStateChanged as onRealAuthStateChanged,
+  User as RealUser
+} from '@firebase/auth';
+import { 
+  getFirestore as getRealFirestore, 
+  collection as realCollection, 
+  doc as realDoc, 
+  getDoc as realGetDoc, 
+  getDocs as realGetDocs, 
+  setDoc as realSetDoc, 
+  addDoc as realAddDoc, 
+  updateDoc as realUpdateDoc, 
+  deleteDoc as realDeleteDoc, 
+  query as realQuery, 
+  where as realWhere, 
+  orderBy as realOrderBy, 
+  limit as realLimit, 
+  onSnapshot as realOnSnapshot, 
+  writeBatch as realWriteBatch, 
+  serverTimestamp as realServerTimestamp, 
+  increment as realIncrement, 
+  deleteField as realDeleteField,
+  Timestamp as RealTimestamp,
+  enableMultiTabIndexedDbPersistence as realEnableMultiTab
+} from '@firebase/firestore';
+
+export const isRealFirebase = 
+  firebaseConfig && 
+  firebaseConfig.projectId && 
+  firebaseConfig.projectId !== 'remixed-project-id' && 
+  firebaseConfig.projectId.trim() !== '';
+
+// --- Reusable Mock Timestamp Implementation ---
+export class MockTimestamp {
   constructor(public seconds: number, public nanoseconds: number) {}
   
   static now() {
     const ms = Date.now();
-    return new Timestamp(Math.floor(ms / 1000), (ms % 1000) * 1000000);
+    return new MockTimestamp(Math.floor(ms / 1000), (ms % 1000) * 1000000);
   }
   
   static fromDate(date: Date) {
     const ms = date.getTime();
-    return new Timestamp(Math.floor(ms / 1000), (ms % 1000) * 1000000);
+    return new MockTimestamp(Math.floor(ms / 1000), (ms % 1000) * 1000000);
   }
   
   static fromMillis(ms: number) {
-    return new Timestamp(Math.floor(ms / 1000), (ms % 1000) * 1000000);
+    return new MockTimestamp(Math.floor(ms / 1000), (ms % 1000) * 1000000);
   }
   
   toDate() {
@@ -31,14 +74,32 @@ export class Timestamp {
   }
 }
 
-// --- Serializers / Deserializers for local-first storage ---
+// Export Timestamp type/class helper
+export const Timestamp = isRealFirebase ? (RealTimestamp as any) : MockTimestamp;
+
+// --- Initialize Real Firebase App if configured ---
+let realApp: any;
+let realDb: any;
+let realAuthInstance: any;
+
+if (isRealFirebase) {
+  try {
+    realApp = initRealApp(firebaseConfig);
+    realDb = getRealFirestore(realApp, firebaseConfig.firestoreDatabaseId);
+    realAuthInstance = getRealAuth(realApp);
+  } catch (err) {
+    console.error("Erro ao inicializar Firebase real:", err);
+  }
+}
+
+// --- Serializers / Deserializers for local-first storage fallback ---
 function serialize(val: any): any {
   if (val === null || val === undefined) return val;
-  if (val instanceof Timestamp) {
+  if (val instanceof MockTimestamp || (typeof val === 'object' && val._isTimestamp)) {
     return { _isTimestamp: true, seconds: val.seconds, nanoseconds: val.nanoseconds };
   }
   if (val instanceof Date) {
-    const ts = Timestamp.fromDate(val);
+    const ts = MockTimestamp.fromDate(val);
     return { _isTimestamp: true, seconds: ts.seconds, nanoseconds: ts.nanoseconds };
   }
   if (val && val._isIncrement) return val;
@@ -60,11 +121,10 @@ function deserialize(val: any): any {
   if (val === null || val === undefined) return val;
   if (typeof val === 'object') {
     if (val._isTimestamp) {
-      return new Timestamp(val.seconds, val.nanoseconds);
+      return new MockTimestamp(val.seconds, val.nanoseconds);
     }
-    // Auto-migrate native JSON coordinates for Timestamp (backwards-compatibility with plain backups)
     if (typeof val.seconds === 'number' && typeof val.nanoseconds === 'number' && Object.keys(val).length <= 3) {
-      return new Timestamp(val.seconds, val.nanoseconds);
+      return new MockTimestamp(val.seconds, val.nanoseconds);
     }
     if (Array.isArray(val)) {
       return val.map(deserialize);
@@ -78,7 +138,7 @@ function deserialize(val: any): any {
   if (typeof val === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(val)) {
     const d = new Date(val);
     if (!isNaN(d.getTime())) {
-      return Timestamp.fromDate(d);
+      return MockTimestamp.fromDate(d);
     }
   }
   return val;
@@ -118,11 +178,12 @@ function setNestedValue(obj: any, path: string, value: any) {
   }
 }
 
-// --- App Mock ---
+// --- App Mock Fallback ---
 const appInstance = { name: '[MockApp]' };
 const apps = [appInstance];
 
 export function initializeApp(config?: any, name?: string) {
+  if (isRealFirebase) return realApp;
   if (name) {
     const existing = apps.find(a => a.name === name);
     if (existing) return existing;
@@ -132,13 +193,17 @@ export function initializeApp(config?: any, name?: string) {
   }
   return appInstance;
 }
+
 export function getApp(name?: string) {
+  if (isRealFirebase) return realApp;
   if (name) {
     return apps.find(a => a.name === name) || appInstance;
   }
   return appInstance;
 }
+
 export function getApps() {
+  if (isRealFirebase) return [realApp];
   return apps;
 }
 
@@ -190,9 +255,10 @@ const primaryAuth = new MockAuth();
 mockAuthInstances.set('default', primaryAuth);
 mockAuthInstances.set('[MockApp]', primaryAuth);
 
-export const auth = primaryAuth;
+export const auth = isRealFirebase ? realAuthInstance : primaryAuth;
 
 export function getAuth(app?: any) {
+  if (isRealFirebase) return realAuthInstance;
   const name = app?.name || 'default';
   if (!mockAuthInstances.has(name)) {
     mockAuthInstances.set(name, new MockAuth());
@@ -200,13 +266,28 @@ export function getAuth(app?: any) {
   return mockAuthInstances.get(name)!;
 }
 
-export function onAuthStateChanged(auth: any, callback: (user: any) => void) {
+export function onAuthStateChanged(authInstance: any, callback: (user: any) => void) {
+  if (isRealFirebase) {
+    return onRealAuthStateChanged(authInstance, (user) => {
+      callback(user);
+      if (user) {
+        migrateLocalDataToFirebaseFirestore(user.uid);
+      }
+    });
+  }
   authListeners.add(callback);
-  setTimeout(() => { callback(auth.currentUser); }, 0);
+  setTimeout(() => { callback(authInstance.currentUser); }, 0);
   return () => { authListeners.delete(callback); };
 }
 
-export async function signInWithEmailAndPassword(auth: any, email: string, pass: string) {
+export async function signInWithEmailAndPassword(authInstance: any, email: string, pass: string) {
+  if (isRealFirebase) {
+    const res = await realSignInWithEmail(authInstance, email, pass);
+    if (res.user) {
+      await migrateLocalDataToFirebaseFirestore(res.user.uid);
+    }
+    return res;
+  }
   const emailClean = email.toLowerCase().trim();
   const usersStr = localStorage.getItem('hortamanager_auth_users') || '[]';
   const users = JSON.parse(usersStr);
@@ -226,11 +307,18 @@ export async function signInWithEmailAndPassword(auth: any, email: string, pass:
     isAnonymous: false,
     tenantId: null
   };
-  auth.setCurrentUser(userPayload);
+  authInstance.setCurrentUser(userPayload);
   return { user: userPayload };
 }
 
-export async function createUserWithEmailAndPassword(auth: any, email: string, pass: string) {
+export async function createUserWithEmailAndPassword(authInstance: any, email: string, pass: string) {
+  if (isRealFirebase) {
+    const res = await realCreateUserWithEmail(authInstance, email, pass);
+    if (res.user) {
+      await migrateLocalDataToFirebaseFirestore(res.user.uid);
+    }
+    return res;
+  }
   const emailClean = email.toLowerCase().trim();
   const usersStr = localStorage.getItem('hortamanager_auth_users') || '[]';
   const users = JSON.parse(usersStr);
@@ -255,15 +343,21 @@ export async function createUserWithEmailAndPassword(auth: any, email: string, p
     isAnonymous: false,
     tenantId: null
   };
-  auth.setCurrentUser(userPayload);
+  authInstance.setCurrentUser(userPayload);
   return { user: userPayload };
 }
 
-export async function signOut(auth: any) {
-  auth.setCurrentUser(null);
+export async function signOut(authInstance: any) {
+  if (isRealFirebase) {
+    return realSignOut(authInstance);
+  }
+  authInstance.setCurrentUser(null);
 }
 
 export async function updateProfile(user: any, info: { displayName?: string }) {
+  if (isRealFirebase) {
+    return realUpdateProfile(user, info);
+  }
   const usersStr = localStorage.getItem('hortamanager_auth_users') || '[]';
   const users = JSON.parse(usersStr);
   const idx = users.findIndex((u: any) => u.uid === user.uid);
@@ -284,6 +378,9 @@ export async function updateProfile(user: any, info: { displayName?: string }) {
 }
 
 export async function updatePassword(user: any, newPassword: string) {
+  if (isRealFirebase) {
+    return realUpdatePassword(user, newPassword);
+  }
   const usersStr = localStorage.getItem('hortamanager_auth_users') || '[]';
   const users = JSON.parse(usersStr);
   const idx = users.findIndex((u: any) => u.uid === user.uid);
@@ -293,10 +390,15 @@ export async function updatePassword(user: any, newPassword: string) {
   }
 }
 
-// --- Firestore Mock implementation ---
-export const db = { type: 'firestore' };
+// --- Firestore implementation ---
+export const db = isRealFirebase ? realDb : { type: 'firestore' };
+
 export function getFirestore() { return db; }
-export async function enableMultiTabIndexedDbPersistence(db: any) { return; }
+
+export async function enableMultiTabIndexedDbPersistence(dbInstance: any) { 
+  if (isRealFirebase) return realEnableMultiTab(dbInstance);
+  return; 
+}
 
 function getBootstrapData(collectionPath: string): any[] {
   if (collectionPath === 'categories') {
@@ -366,11 +468,21 @@ function notifyListeners(collectionPath: string) {
   }
 }
 
-export function collection(db: any, path: string) {
+export function collection(dbInstance: any, path: string) {
+  if (isRealFirebase) return realCollection(dbInstance, path);
   return { type: 'collection', path };
 }
 
 export function doc(dbOrCol: any, pathOrId?: string, id?: string) {
+  if (isRealFirebase) {
+    if (id) {
+      return realDoc(dbOrCol, pathOrId!, id);
+    } else if (pathOrId) {
+      return realDoc(dbOrCol, pathOrId);
+    } else {
+      return realDoc(dbOrCol);
+    }
+  }
   if (id) {
     return { type: 'document', path: `${pathOrId}/${id}`, id, collectionName: pathOrId };
   } else if (pathOrId) {
@@ -388,6 +500,7 @@ export function doc(dbOrCol: any, pathOrId?: string, id?: string) {
 }
 
 export async function getDoc(docRef: any) {
+  if (isRealFirebase) return realGetDoc(docRef);
   const parts = docRef.id ? [docRef.collectionName, docRef.id] : docRef.path.split('/');
   const colName = parts[0];
   const id = parts[1];
@@ -402,6 +515,7 @@ export async function getDoc(docRef: any) {
 }
 
 export async function setDoc(docRef: any, data: any, options?: any) {
+  if (isRealFirebase) return realSetDoc(docRef, data, options);
   const parts = docRef.path.split('/');
   const colName = parts[0];
   const id = parts[1];
@@ -411,7 +525,7 @@ export async function setDoc(docRef: any, data: any, options?: any) {
   const processedData = { ...data };
   for (const k of Object.keys(processedData)) {
     if (processedData[k] && processedData[k]._isServerTimestamp) {
-      processedData[k] = Timestamp.now();
+      processedData[k] = MockTimestamp.now();
     }
   }
 
@@ -432,6 +546,7 @@ export async function setDoc(docRef: any, data: any, options?: any) {
 }
 
 export async function addDoc(collectionRef: any, data: any) {
+  if (isRealFirebase) return realAddDoc(collectionRef, data);
   const colName = collectionRef.path;
   const docs = getStoredCollection(colName);
   const id = 'mock_id_' + Math.random().toString(36).substring(2, 11);
@@ -439,7 +554,7 @@ export async function addDoc(collectionRef: any, data: any) {
   const processedData = { ...data };
   for (const k of Object.keys(processedData)) {
     if (processedData[k] && processedData[k]._isServerTimestamp) {
-      processedData[k] = Timestamp.now();
+      processedData[k] = MockTimestamp.now();
     }
   }
 
@@ -450,6 +565,7 @@ export async function addDoc(collectionRef: any, data: any) {
 }
 
 export async function updateDoc(docRef: any, data: any) {
+  if (isRealFirebase) return realUpdateDoc(docRef, data);
   const parts = docRef.path.split('/');
   const colName = parts[0];
   const id = parts[1];
@@ -462,7 +578,7 @@ export async function updateDoc(docRef: any, data: any) {
       let val = data[k];
       if (val === undefined) continue;
       if (val && val._isServerTimestamp) {
-        val = Timestamp.now();
+        val = MockTimestamp.now();
       }
       setNestedValue(updated, k, val);
     }
@@ -475,6 +591,7 @@ export async function updateDoc(docRef: any, data: any) {
 }
 
 export async function deleteDoc(docRef: any) {
+  if (isRealFirebase) return realDeleteDoc(docRef);
   const parts = docRef.path.split('/');
   const colName = parts[0];
   const id = parts[1];
@@ -491,6 +608,7 @@ export interface MockQuery {
 }
 
 export function query(ref: any, ...constraints: any[]) {
+  if (isRealFirebase) return realQuery(ref, ...constraints);
   const q: MockQuery = {
     collectionPath: ref.path || ref.collectionPath,
     filters: [...(ref.filters || [])],
@@ -511,18 +629,22 @@ export function query(ref: any, ...constraints: any[]) {
 }
 
 export function where(field: string, op: string, value: any) {
+  if (isRealFirebase) return realWhere(field, op as any, value);
   return { type: 'where', field, op, value };
 }
 
 export function orderBy(field: string, dir: 'asc' | 'desc' = 'asc') {
+  if (isRealFirebase) return realOrderBy(field, dir);
   return { type: 'orderBy', field, dir };
 }
 
 export function limit(count: number) {
+  if (isRealFirebase) return realLimit(count);
   return { type: 'limit', limit: count };
 }
 
 export async function getDocs(q: any) {
+  if (isRealFirebase) return realGetDocs(q);
   const colName = q.collectionPath || q.path;
   const docs = getStoredCollection(colName);
   
@@ -535,10 +657,10 @@ export async function getDocs(q: any) {
         if (f.op === '==') {
           return val === f.value;
         } else if (f.op === '>=') {
-          if (val instanceof Timestamp && f.value instanceof Timestamp) {
+          if (val instanceof MockTimestamp && f.value instanceof MockTimestamp) {
             return val.valueOf() >= f.value.valueOf();
           }
-          if (val instanceof Timestamp && f.value instanceof Date) {
+          if (val instanceof MockTimestamp && f.value instanceof Date) {
             return val.valueOf() >= f.value.getTime();
           }
           if (val instanceof Date && f.value instanceof Date) {
@@ -546,10 +668,10 @@ export async function getDocs(q: any) {
           }
           return val >= f.value;
         } else if (f.op === '<=') {
-          if (val instanceof Timestamp && f.value instanceof Timestamp) {
+          if (val instanceof MockTimestamp && f.value instanceof MockTimestamp) {
             return val.valueOf() <= f.value.valueOf();
           }
-          if (val instanceof Timestamp && f.value instanceof Date) {
+          if (val instanceof MockTimestamp && f.value instanceof Date) {
             return val.valueOf() <= f.value.getTime();
           }
           if (val instanceof Date && f.value instanceof Date) {
@@ -570,8 +692,8 @@ export async function getDocs(q: any) {
         let valA = getNestedValue(a, s.field);
         let valB = getNestedValue(b, s.field);
         
-        if (valA instanceof Timestamp) valA = valA.valueOf();
-        if (valB instanceof Timestamp) valB = valB.valueOf();
+        if (valA instanceof MockTimestamp) valA = valA.valueOf();
+        if (valB instanceof MockTimestamp) valB = valB.valueOf();
         if (valA instanceof Date) valA = valA.getTime();
         if (valB instanceof Date) valB = valB.getTime();
         
@@ -612,6 +734,7 @@ export async function getDocs(q: any) {
 }
 
 export function onSnapshot(ref: any, onNext: any, onError?: any) {
+  if (isRealFirebase) return realOnSnapshot(ref, onNext, onError);
   const collectionPath = ref.collectionPath || ref.path;
   
   const execute = async () => {
@@ -634,11 +757,23 @@ export function onSnapshot(ref: any, onNext: any, onError?: any) {
 }
 
 // --- Special field values ---
-export function serverTimestamp() { return { _isServerTimestamp: true }; }
-export function increment(n: number) { return { _isIncrement: true, value: n }; }
-export function deleteField() { return { _isDeleteField: true }; }
+export function serverTimestamp() { 
+  if (isRealFirebase) return realServerTimestamp();
+  return { _isServerTimestamp: true }; 
+}
 
-export function writeBatch(db: any) {
+export function increment(n: number) { 
+  if (isRealFirebase) return realIncrement(n);
+  return { _isIncrement: true, value: n }; 
+}
+
+export function deleteField() { 
+  if (isRealFirebase) return realDeleteField();
+  return { _isDeleteField: true }; 
+}
+
+export function writeBatch(dbInstance: any) {
+  if (isRealFirebase) return realWriteBatch(dbInstance);
   const ops: Array<() => Promise<void>> = [];
   return {
     set(docRef: any, data: any, options?: any) { ops.push(() => setDoc(docRef, data, options)); },
@@ -653,7 +788,7 @@ export function writeBatch(db: any) {
 }
 
 export function dbImportData(jsonData: any, currentUserProfile: any) {
-  const collections = ['users', 'customers', 'categories', 'inventory', 'sales', 'transactions', 'production', 'tasks'];
+  const collections = ['users', 'customers', 'categories', 'inventory', 'sales', 'transactions', 'production', 'tasks', 'bed_records', 'inventory_history', 'backups'];
   
   for (const colName of collections) {
     let docs = jsonData[colName] || [];
@@ -676,5 +811,77 @@ export function dbImportData(jsonData: any, currentUserProfile: any) {
     const key = `hortamanager_db_${colName}`;
     localStorage.setItem(key, JSON.stringify(serialize(docs)));
     notifyListeners(colName);
+  }
+}
+
+// --- Auto-migration of local data to Real Firebase ---
+let migrationInProgress = false;
+
+export async function migrateLocalDataToFirebaseFirestore(uid: string) {
+  if (!isRealFirebase || migrationInProgress) return;
+  
+  const flagKey = `hortamanager_migrated_${uid}`;
+  if (localStorage.getItem(flagKey) === 'true') {
+    return; // Already migrated
+  }
+  
+  migrationInProgress = true;
+  console.log("Iniciando migração de dados locais para o Firestore real para o usuário:", uid);
+  
+  const collectionsToMigrate = [
+    'users', 
+    'customers', 
+    'categories', 
+    'inventory', 
+    'sales', 
+    'transactions', 
+    'production', 
+    'tasks',
+    'bed_records',
+    'inventory_history',
+    'backups'
+  ];
+  
+  try {
+    for (const colName of collectionsToMigrate) {
+      const key = `hortamanager_db_${colName}`;
+      const dataStr = localStorage.getItem(key);
+      if (!dataStr) continue;
+      
+      let docs: any[] = [];
+      try {
+        docs = deserialize(JSON.parse(dataStr));
+      } catch (e) {
+        console.error(`Erro ao ler dados locais da coleção ${colName} para migração:`, e);
+        continue;
+      }
+      
+      if (!Array.isArray(docs) || docs.length === 0) continue;
+      
+      console.log(`Migrando ${docs.length} documentos da coleção: ${colName}`);
+      
+      for (const item of docs) {
+        if (!item || !item.id) continue;
+        
+        const docRef = realDoc(realDb, colName, item.id);
+        const payload = { ...item };
+        
+        // Convert mock timestamps to real timestamps
+        for (const prop of Object.keys(payload)) {
+          if (payload[prop] && payload[prop]._isTimestamp) {
+            payload[prop] = RealTimestamp.fromMillis(payload[prop].seconds * 1000 + Math.floor(payload[prop].nanoseconds / 1000000));
+          }
+        }
+        
+        await realSetDoc(docRef, payload, { merge: true });
+      }
+    }
+    
+    localStorage.setItem(flagKey, 'true');
+    console.log("Migração de dados locais para o Firestore concluída com sucesso!");
+  } catch (error) {
+    console.error("Erro durante a migração de dados locais para o Firestore:", error);
+  } finally {
+    migrationInProgress = false;
   }
 }

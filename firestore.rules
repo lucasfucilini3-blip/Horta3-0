@@ -72,19 +72,27 @@ service cloud.firestore {
 
     function isOwner() {
       return isAuthenticated() && (
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'owner' ||
         request.auth.token.email == "lucasfucilini3@gmail.com" ||
         request.auth.token.email == "lucas@hortamanager.com" ||
-        request.auth.token.email.matches(".*lucas\\.master.*@hortamanager\\.com")
+        request.auth.token.email.matches(".*lucas master.*@hortamanager\\.com") ||
+        request.auth.token.email.matches(".*lucas\\.master.*@hortamanager\\.com") ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'owner')
       );
     }
 
-    function getPermissions() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.permissions;
+    function hasPermission(permission) {
+      return isAuthenticated() && (
+        isOwner() || (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          g_get_permission_safely(permission)
+        )
+      );
     }
 
-    function hasPermission(permission) {
-      return isAuthenticated() && (isOwner() || getPermissions()[permission] == true);
+    function g_get_permission_safely(permission) {
+      let data = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      return 'permissions' in data && data.permissions[permission] == true;
     }
 
     function isValidUser(data) {

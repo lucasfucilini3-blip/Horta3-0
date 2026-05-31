@@ -934,14 +934,30 @@ export async function uploadLocalDataToFirebaseCloud() {
       if (!item || !item.id) continue;
       
       const docRef = realDoc(rDb, colName, item.id);
-      const payload = { ...item };
       
-      // Convert mock timestamps to real timestamps
-      for (const prop of Object.keys(payload)) {
-        if (payload[prop] && payload[prop]._isTimestamp) {
-          payload[prop] = RealTimestamp.fromMillis(payload[prop].seconds * 1000 + Math.floor(payload[prop].nanoseconds / 1000000));
+      // Recursive helper to convert mock timestamps to real Firestore timestamps
+      const convertMockTimestamps = (val: any): any => {
+        if (!val) return val;
+        if (typeof val === 'object') {
+          if (val._isTimestamp) {
+            return RealTimestamp.fromMillis(val.seconds * 1000 + Math.floor(val.nanoseconds / 1000000));
+          }
+          if (typeof val.seconds === 'number' && typeof val.nanoseconds === 'number') {
+            return RealTimestamp.fromMillis(val.seconds * 1000 + Math.floor(val.nanoseconds / 1000000));
+          }
+          if (Array.isArray(val)) {
+            return val.map(convertMockTimestamps);
+          }
+          const res: any = {};
+          for (const k of Object.keys(val)) {
+            res[k] = convertMockTimestamps(val[k]);
+          }
+          return res;
         }
-      }
+        return val;
+      };
+
+      const payload = convertMockTimestamps({ ...item });
       
       await realSetDoc(docRef, payload, { merge: true });
     }

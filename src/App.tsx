@@ -9,7 +9,7 @@ import {
   updateProfile
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, onSnapshot, collection, query, orderBy, limit, getDocs, addDoc, updateDoc, serverTimestamp, where } from 'firebase/firestore';
-import { auth, db, dbImportData } from './firebase';
+import { auth, db, dbImportData, uploadLocalDataToFirebaseCloud } from './firebase';
 import { UserProfile, UserRole } from './types';
 import { 
   LayoutDashboard, 
@@ -282,6 +282,23 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
   const { installPrompt, isInstalled, installApp, isInIframe } = usePWA();
   const [copied, setCopied] = useState(false);
   const [isHelpModalOpen, setHelpModalOpen] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+
+  const handleManualCloudUpload = async () => {
+    setSyncing(true);
+    try {
+      await uploadLocalDataToFirebaseCloud();
+      alert('Sincronização concluída com sucesso! Todos os seus dados locais estão agora salvos na nuvem (Firebase) e disponíveis em seu celular ou outros dispositivos de forma imediata.');
+      if (confirm('Deseja desativar o Modo Local e ativar o Modo Nuvem automática agora para visualizar as atualizações em tempo real?')) {
+        localStorage.removeItem('hortamanager_force_local');
+        window.location.reload();
+      }
+    } catch (err: any) {
+      alert('Erro ao enviar dados para a nuvem: ' + (err.message || err));
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
   const [installTab, setInstallTab] = useState<'android' | 'ios'>(isIOS ? 'ios' : 'android');
@@ -594,17 +611,29 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
           </div>
         )}
         {localStorage.getItem('hortamanager_force_local') === 'true' && (
-          <div className="bg-amber-500 text-white text-center py-2 text-[11px] font-bold flex items-center justify-center gap-3 px-4 z-50 print:hidden shadow-sm">
-            <span>📱 Rodando em Modo Banco de Dados Local do Celular (Dados preservados offline).</span>
-            <button
-              onClick={() => {
-                localStorage.removeItem('hortamanager_force_local');
-                window.location.reload();
-              }}
-              className="bg-white text-amber-700 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-wider hover:bg-slate-100 transition-colors shadow-sm"
-            >
-              Ativar Nuvem (Firebase)
-            </button>
+          <div className="bg-gradient-to-r from-amber-500 via-amber-600 to-emerald-600 text-white text-center py-2 px-4 z-50 print:hidden shadow-md flex flex-wrap items-center justify-center gap-2 md:gap-4">
+            <span className="text-xs font-bold flex items-center gap-1.5">
+              📱 Modo Banco do Celular Ativo (Backup Local offline)
+            </span>
+            <div className="flex items-center gap-2 flex-wrap justify-center">
+              <button
+                disabled={syncing}
+                onClick={handleManualCloudUpload}
+                className="bg-emerald-800 hover:bg-emerald-900 text-white px-3.5 py-1.5 rounded-full text-[10px] font-black uppercase tracking-wider transition-all shadow-sm flex items-center gap-1 disabled:opacity-50"
+              >
+                <Cloud size={12} />
+                {syncing ? 'Sincronizando...' : '📤 Enviar para Nuvem'}
+              </button>
+              <button
+                onClick={() => {
+                  localStorage.removeItem('hortamanager_force_local');
+                  window.location.reload();
+                }}
+                className="bg-white text-amber-800 hover:bg-slate-100 px-3.5 py-1.5 rounded-full text-[10px] font-black uppercase tracking-wider transition-all shadow-sm"
+              >
+                Ativar Nuvem direta
+              </button>
+            </div>
           </div>
         )}
         <header className="h-16 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-4 sticky top-0 z-30 lg:hidden print:hidden">

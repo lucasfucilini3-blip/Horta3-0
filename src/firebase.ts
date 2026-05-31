@@ -39,12 +39,14 @@ import {
 
 const forceLocal = typeof window !== 'undefined' && localStorage.getItem('hortamanager_force_local') === 'true';
 
-export const isRealFirebase = 
-  !forceLocal &&
+export const hasValidConfig = !!(
   firebaseConfig && 
   firebaseConfig.projectId && 
   firebaseConfig.projectId !== 'remixed-project-id' && 
-  firebaseConfig.projectId.trim() !== '';
+  firebaseConfig.projectId.trim() !== ''
+);
+
+export const isRealFirebase = !forceLocal && hasValidConfig;
 
 // --- Reusable Mock Timestamp Implementation ---
 export class MockTimestamp {
@@ -85,7 +87,7 @@ let realApp: any;
 let realDb: any;
 let realAuthInstance: any;
 
-if (isRealFirebase) {
+if (hasValidConfig) {
   try {
     realApp = initRealApp(firebaseConfig);
     realDb = getRealFirestore(realApp, firebaseConfig.firestoreDatabaseId);
@@ -886,5 +888,62 @@ export async function migrateLocalDataToFirebaseFirestore(uid: string) {
     console.error("Erro durante a migração de dados locais para o Firestore:", error);
   } finally {
     migrationInProgress = false;
+  }
+}
+
+export async function uploadLocalDataToFirebaseCloud() {
+  if (!hasValidConfig) {
+    throw new Error("Configuração do Firebase ausente ou inválida.");
+  }
+  
+  const app = realApp || initRealApp(firebaseConfig);
+  const rDb = realDb || getRealFirestore(app, firebaseConfig.firestoreDatabaseId);
+  
+  const collectionsToMigrate = [
+    'users', 
+    'customers', 
+    'categories', 
+    'inventory', 
+    'sales', 
+    'transactions', 
+    'production', 
+    'tasks',
+    'bed_records',
+    'inventory_history',
+    'backups'
+  ];
+  
+  for (const colName of collectionsToMigrate) {
+    const key = `hortamanager_db_${colName}`;
+    const dataStr = localStorage.getItem(key);
+    if (!dataStr) continue;
+    
+    let docs: any[] = [];
+    try {
+      docs = deserialize(JSON.parse(dataStr));
+    } catch (e) {
+      console.error(`Erro ao ler dados locais da coleção ${colName}:`, e);
+      continue;
+    }
+    
+    if (!Array.isArray(docs) || docs.length === 0) continue;
+    
+    console.log(`Enviando ${docs.length} documentos da coleção ${colName} para a nuvem...`);
+    
+    for (const item of docs) {
+      if (!item || !item.id) continue;
+      
+      const docRef = realDoc(rDb, colName, item.id);
+      const payload = { ...item };
+      
+      // Convert mock timestamps to real timestamps
+      for (const prop of Object.keys(payload)) {
+        if (payload[prop] && payload[prop]._isTimestamp) {
+          payload[prop] = RealTimestamp.fromMillis(payload[prop].seconds * 1000 + Math.floor(payload[prop].nanoseconds / 1000000));
+        }
+      }
+      
+      await realSetDoc(docRef, payload, { merge: true });
+    }
   }
 }

@@ -46,7 +46,7 @@ export const hasValidConfig = !!(
   firebaseConfig.projectId.trim() !== ''
 );
 
-export const isRealFirebase = !forceLocal && hasValidConfig;
+export const isRealFirebase = hasValidConfig;
 
 // --- Reusable Mock Timestamp Implementation ---
 export class MockTimestamp {
@@ -792,9 +792,10 @@ export function writeBatch(dbInstance: any) {
   };
 }
 
-export function dbImportData(jsonData: any, currentUserProfile: any) {
+export async function dbImportData(jsonData: any, currentUserProfile: any) {
   const collections = ['users', 'customers', 'categories', 'inventory', 'sales', 'transactions', 'production', 'tasks', 'bed_records', 'inventory_history', 'backups'];
   
+  // Set in local cache/storage first as fallback
   for (const colName of collections) {
     let docs = jsonData[colName] || [];
     if (!Array.isArray(docs)) {
@@ -816,6 +817,60 @@ export function dbImportData(jsonData: any, currentUserProfile: any) {
     const key = `hortamanager_db_${colName}`;
     localStorage.setItem(key, JSON.stringify(serialize(docs)));
     notifyListeners(colName);
+  }
+
+  // If real Firebase is activated, write every item directly to Cloud Firestore!
+  if (isRealFirebase) {
+    console.log("Modo de nuvem Firebase ativo: importando backup (.json) diretamente no Firestore...");
+    
+    for (const colName of collections) {
+      let docs = jsonData[colName] || [];
+      if (!Array.isArray(docs) || docs.length === 0) continue;
+      
+      console.log(`Enviando ${docs.length} documentos da tabela ${colName} para o Firestore...`);
+      
+      for (const item of docs) {
+        if (!item || !item.id) continue;
+        
+        let payload = { ...item };
+        
+        if (colName === 'users' && currentUserProfile && payload.id === currentUserProfile.uid) {
+          payload = { ...payload, ...currentUserProfile };
+        }
+        
+        // Helper to convert mock timestamps or objects with seconds/nanoseconds back to real Cloud Timestamps
+        const convertMockTimestamps = (val: any): any => {
+          if (!val) return val;
+          if (typeof val === 'object') {
+            if (val._isTimestamp) {
+              return RealTimestamp.fromMillis(val.seconds * 1000 + Math.floor(val.nanoseconds / 1000000));
+            }
+            if (typeof val.seconds === 'number' && typeof val.nanoseconds === 'number') {
+              return RealTimestamp.fromMillis(val.seconds * 1000 + Math.floor(val.nanoseconds / 1000000));
+            }
+            if (Array.isArray(val)) {
+              return val.map(convertMockTimestamps);
+            }
+            const res: any = {};
+            for (const k of Object.keys(val)) {
+              res[k] = convertMockTimestamps(val[k]);
+            }
+            return res;
+          }
+          return val;
+        };
+
+        const convertedPayload = convertMockTimestamps(payload);
+        
+        try {
+          const docRef = realDoc(realDb, colName, item.id);
+          await realSetDoc(docRef, convertedPayload, { merge: true });
+        } catch (err) {
+          console.error(`Erro ao salvar documento ${item.id} na coleção ${colName}:`, err);
+          throw err;
+        }
+      }
+    }
   }
 }
 

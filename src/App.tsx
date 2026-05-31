@@ -607,33 +607,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
       <main className="flex-1 flex flex-col min-w-0 relative bg-slate-50/50 print:overflow-visible print:block print:h-auto">
         {!useOnlineStatus() && (
           <div className="bg-rose-500 text-white text-center py-1.5 text-[10px] font-bold uppercase tracking-widest animate-pulse z-50 print:hidden">
-            Modo Offline Ativo • Os dados serão sincronizados quando houver conexão
-          </div>
-        )}
-        {localStorage.getItem('hortamanager_force_local') === 'true' && (
-          <div className="bg-gradient-to-r from-amber-500 via-amber-600 to-emerald-600 text-white text-center py-2 px-4 z-50 print:hidden shadow-md flex flex-wrap items-center justify-center gap-2 md:gap-4">
-            <span className="text-xs font-bold flex items-center gap-1.5">
-              📱 Modo Banco do Celular Ativo (Backup Local offline)
-            </span>
-            <div className="flex items-center gap-2 flex-wrap justify-center">
-              <button
-                disabled={syncing}
-                onClick={handleManualCloudUpload}
-                className="bg-emerald-800 hover:bg-emerald-900 text-white px-3.5 py-1.5 rounded-full text-[10px] font-black uppercase tracking-wider transition-all shadow-sm flex items-center gap-1 disabled:opacity-50"
-              >
-                <Cloud size={12} />
-                {syncing ? 'Sincronizando...' : '📤 Enviar para Nuvem'}
-              </button>
-              <button
-                onClick={() => {
-                  localStorage.removeItem('hortamanager_force_local');
-                  window.location.reload();
-                }}
-                className="bg-white text-amber-800 hover:bg-slate-100 px-3.5 py-1.5 rounded-full text-[10px] font-black uppercase tracking-wider transition-all shadow-sm"
-              >
-                Ativar Nuvem direta
-              </button>
-            </div>
+            Aguardando conexão com a internet • Os dados serão exibidos em tempo real...
           </div>
         )}
         <header className="h-16 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-4 sticky top-0 z-30 lg:hidden print:hidden">
@@ -1142,48 +1116,18 @@ const Login = () => {
         )}
 
         <div className="mt-6 pt-6 border-t border-slate-100 space-y-4">
-          <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200">
-            <p className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
-              <AlertCircle size={15} className="text-amber-600 shrink-0" />
-              Dificuldades para fazer login?
+          <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100">
+            <p className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
+              <Cloud size={15} className="text-emerald-600 shrink-0" />
+              Sincronização Ativa em Nuvem
             </p>
-            <p className="text-[11px] text-amber-700 mt-1 leading-relaxed">
-              O banco de dados em nuvem (Firebase) está ativo. Como o e-mail/senha real pode precisar de ativação ou você prefere salvar dados de forma rápida, você pode alternar para o <b>Modo Banco do Celular (Local)</b> para carregar todos os dados locais instantaneamente.
+            <p className="text-[11px] text-emerald-700 mt-1 leading-relaxed">
+              O sistema foi atualizado para operar <b>100% online na Nuvem (Firebase)</b>. Isso garante que as informações digitadas no seu celular e no seu computador fiquem idênticas imediatamente!
+            </p>
+            <p className="text-[11px] text-emerald-700 mt-2 leading-relaxed">
+              Para importar os dados do seu arquivo de backup (.json), basta fazer o login com seu usuário proprietário (ex: <b>Lucas</b>) e acessar o menu <b>Configurações</b> no topo do sistema.
             </p>
           </div>
-          
-          <button 
-            type="button"
-            onClick={() => {
-              localStorage.setItem('hortamanager_force_local', 'true');
-              // Bootstrap a default Lucas owner local profile if empty
-              const localUsersStr = localStorage.getItem('hortamanager_auth_users');
-              if (!localUsersStr) {
-                const initialUsers = [
-                  { uid: 'uid_lucas', email: 'lucas@hortamanager.com', displayName: 'Lucas', role: 'owner', password: 'Lgf091723' },
-                  { uid: 'uid_lucas_gmail', email: 'lucasfucilini3@gmail.com', displayName: 'Lucas Fucilini', role: 'owner', password: 'Lgf091723' }
-                ];
-                localStorage.setItem('hortamanager_auth_users', JSON.stringify(initialUsers));
-              }
-              window.location.reload();
-            }}
-            className="w-full py-3 bg-slate-100 text-slate-700 hover:bg-amber-100 hover:text-amber-800 rounded-2xl font-bold text-xs transition-all active:scale-95 flex items-center justify-center gap-2"
-          >
-            📱 Entrar com Banco do Celular (Dados Otimizados)
-          </button>
-
-          {isForceLocal && (
-            <button 
-              type="button"
-              onClick={() => {
-                localStorage.removeItem('hortamanager_force_local');
-                window.location.reload();
-              }}
-              className="w-full text-center text-xs text-emerald-600 hover:text-emerald-700 font-bold hover:underline"
-            >
-              🌐 Voltar para Sincronização na Nuvem (Firebase)
-            </button>
-          )}
         </div>
 
         <p className="text-center text-slate-400 text-[10px] mt-6 uppercase font-bold tracking-widest">

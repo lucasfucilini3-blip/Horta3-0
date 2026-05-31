@@ -141,14 +141,14 @@ export default function Admin() {
           throw new Error('Formato de arquivo inválido. O arquivo JSON deve conter as coleções do sistema.');
         }
 
-        if (!confirm('ATENÇÃO: Este processo irá apagar seus dados locais atuais de todas as tabelas (exceto seu próprio usuário) para carregar o backup. Deseja realmente prosseguir?')) {
+        if (!confirm('ATENÇÃO: Este processo irá ler os dados do backup e carregar o histórico diretamente no Banco de Dados em Nuvem (Firebase) para sincronizar seu computador e celular de forma definitiva. Deseja realmente prosseguir?')) {
           setImportLoading(false);
           e.target.value = '';
           return;
         }
 
-        // Executa a importação em lote altamente otimizada sem travar o browser
-        dbImportData(json, currentUserProfile);
+        // Executa a importação diretamente na nuvem
+        await dbImportData(json, currentUserProfile);
 
         // Registrar o restore de backup
         await addDoc(collection(db, 'backups'), {

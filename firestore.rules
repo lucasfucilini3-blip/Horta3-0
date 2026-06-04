@@ -165,6 +165,14 @@ service cloud.firestore {
              data.createdAt is timestamp;
     }
 
+    function isValidFair(data) {
+      return data.keys().hasAll(['name', 'status', 'totalSalesAmount', 'items']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 150 &&
+             data.status in ['active', 'closed'] &&
+             data.totalSalesAmount is number &&
+             data.items is list;
+    }
+
     // ===============================================================
     // Match Rules
     // ===============================================================
@@ -245,6 +253,12 @@ service cloud.firestore {
 
     match /backups/{backupId} {
       allow read, create: if isOwner();
+    }
+
+    match /fairs/{fairId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isOwner() || (hasPermission('canManageSales') && isValidFair(request.resource.data));
+      allow delete: if isOwner();
     }
 
     match /system/{systemId} {

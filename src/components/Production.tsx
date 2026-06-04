@@ -48,6 +48,7 @@ export default function ProductionComponent() {
   const [isQuickInputModalOpen, setQuickInputModalOpen] = useState(false);
   const [isLogModalOpen, setLogModalOpen] = useState(false);
   const [isHarvestModalOpen, setHarvestModalOpen] = useState(false);
+  const [harvestType, setHarvestType] = useState<'partial' | 'final'>('final');
   const [isProcessModalOpen, setProcessModalOpen] = useState(false);
   const [focusedProduction, setFocusedProduction] = useState<Production | null>(null);
   const [selectedProduction, setSelectedProduction] = useState<Production | null>(null);
@@ -358,14 +359,34 @@ export default function ProductionComponent() {
 
     try {
       const totalCost = selectedProduction.totalCost || 0;
-      const unitCost = harvestQuantity > 0 ? totalCost / harvestQuantity : 0;
+      const priorHarvestQuantity = selectedProduction.harvestQuantity || 0;
+      const totalNewHarvestQuantity = priorHarvestQuantity + harvestQuantity;
+      
+      let unitCost = 0;
+      if (harvestType === 'final') {
+        unitCost = totalNewHarvestQuantity > 0 ? totalCost / totalNewHarvestQuantity : 0;
+      } else {
+        unitCost = totalCost / (selectedProduction.quantityPlanted || 1);
+      }
+
+      const isFinal = harvestType === 'final';
+      const newStatus = isFinal ? 'harvested' : 'growing';
+
+      const harvestLog = {
+        date: harvestDate,
+        description: isFinal 
+          ? `Colheita Final realizada: ${harvestQuantity} ${selectedProduction.unit}. Lote encerrado.` 
+          : `Colheita Parcial realizada: ${harvestQuantity} ${selectedProduction.unit}. Lote continua ativo.`,
+        products: []
+      };
 
       await updateDoc(doc(db, 'production', selectedProduction.id), {
-        status: 'harvested',
-        harvestQuantity,
-        remainingQuantity: harvestQuantity,
+        status: newStatus,
+        harvestQuantity: increment(harvestQuantity),
+        remainingQuantity: increment(harvestQuantity),
         harvestDate,
-        unitCost
+        unitCost,
+        logs: [...(selectedProduction.logs || []), harvestLog]
       });
 
       // 3. Add/Update the harvested product in inventory (Expedição)
@@ -1290,7 +1311,11 @@ export default function ProductionComponent() {
                             </button>
                           ) : (
                             <button 
-                              onClick={() => { setSelectedProduction(p); setHarvestModalOpen(true); }}
+                              onClick={() => { 
+                                setSelectedProduction(p); 
+                                setHarvestType(p.isContinuousHarvest ? 'partial' : 'final');
+                                setHarvestModalOpen(true); 
+                              }}
                               className="flex items-center justify-center p-3 bg-blue-600 text-white rounded-2xl shadow-lg shadow-blue-100 hover:bg-blue-700 transition-all active:scale-95"
                               title="Colher"
                             >
@@ -1401,7 +1426,7 @@ export default function ProductionComponent() {
                                 Desfazer Transplante
                               </button>
                             )}
-                            {p.status === 'harvested' && (p.remainingQuantity ?? p.harvestQuantity ?? 0) > 0 && (
+                            {((p.status === 'harvested' || p.status === 'growing') && (p.remainingQuantity ?? 0) > 0) && (
                                <button 
                                 onClick={() => { setSelectedProduction(p); setProcessModalOpen(true); }}
                                 className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-amber-50 hover:text-amber-600 transition-colors"
@@ -2184,11 +2209,11 @@ export default function ProductionComponent() {
                         className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500"
                       >
                         <option value="">Selecione uma colheita...</option>
-                        {productions.filter(p => p.status === 'harvested' && (p.remainingQuantity ?? p.harvestQuantity ?? 0) > 0).map(p => (
-                          <option key={p.id} value={p.id}>{p.crop} - {p.bed} ({(p.remainingQuantity ?? p.harvestQuantity ?? 0)} {p.unit} disp.)</option>
+                        {productions.filter(p => (p.remainingQuantity ?? 0) > 0).map(p => (
+                          <option key={p.id} value={p.id}>{p.crop} - {p.bed} ({p.remainingQuantity} {p.unit} disp. {p.status === 'growing' ? '[Ativo]' : '[Finalizado]'})</option>
                         ))}
                       </select>
-                      {productions.filter(p => p.status === 'harvested' && (p.remainingQuantity ?? p.harvestQuantity ?? 0) > 0).length === 0 && (
+                      {productions.filter(p => (p.remainingQuantity ?? 0) > 0).length === 0 && (
                         <p className="text-xs text-rose-500 font-bold mt-1 ml-1">Nenhuma colheita disponível para processamento.</p>
                       )}
                     </div>
@@ -2361,6 +2386,42 @@ export default function ProductionComponent() {
                   <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100">
                     <p className="text-sm font-bold text-blue-700">Cultura: {selectedProduction?.crop}</p>
                     <p className="text-xs text-blue-600">Local: {selectedProduction?.bed}</p>
+                  </div>
+
+                  <div className="space-y-4">
+                    <label className="text-sm font-bold text-slate-700 ml-1">Tipo de Colheita</label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setHarvestType('partial')}
+                        className={cn(
+                          "flex items-center justify-center gap-2 p-3.5 border rounded-2xl cursor-pointer transition-all text-xs font-black uppercase tracking-wider",
+                          harvestType === 'partial' 
+                            ? "bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-100" 
+                            : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
+                        )}
+                      >
+                        🧺 Colheita Parcial
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHarvestType('final')}
+                        className={cn(
+                          "flex items-center justify-center gap-2 p-3.5 border rounded-2xl cursor-pointer transition-all text-xs font-black uppercase tracking-wider",
+                          harvestType === 'final' 
+                            ? "bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-100" 
+                            : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
+                        )}
+                      >
+                        🏁 Colheita Final
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-slate-400 font-medium leading-relaxed px-1">
+                      {harvestType === 'partial' 
+                        ? 'O canteiro continuará Ativo no status "Em Crescimento" permitindo novos lançamentos futuros.' 
+                        : 'O canteiro mudará de status para "Colhido" (Lote de produção será encerrado).'
+                      }
+                    </p>
                   </div>
 
                   <div className="space-y-2">

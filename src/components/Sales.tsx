@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { collection, query, onSnapshot, addDoc, updateDoc, doc, serverTimestamp, orderBy, getDoc, increment, where, deleteDoc, getDocs, limit, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Sale, SaleStatus, InventoryItem, SaleItem, Customer, Production, PaymentMethod } from '../types';
-import { Plus, Search, Filter, ShoppingCart, CheckCircle, XCircle, Clock, ChevronDown, Trash2, Package, X, Calendar, CreditCard, DollarSign, Edit2 } from 'lucide-react';
+import { Plus, Search, Filter, ShoppingCart, CheckCircle, XCircle, Clock, ChevronDown, Trash2, Package, X, Calendar, CreditCard, DollarSign, Edit2, Store, Truck, RotateCcw, AlertTriangle, RefreshCw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth, handleFirestoreError, OperationType } from '../App';
 import { format } from 'date-fns';
@@ -47,6 +47,21 @@ export default function Sales() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // New Fair (Modo Feira) States
+  const [activeTab, setActiveTab] = useState<'individual' | 'feira'>('individual');
+  const [fairs, setFairs] = useState<any[]>([]);
+  const [activeFair, setActiveFair] = useState<any | null>(null);
+  const [loadingFair, setLoadingFair] = useState(true);
+  const [newFairName, setNewFairName] = useState('');
+  const [selectedLoadQuantities, setSelectedLoadQuantities] = useState<Record<string, number>>({});
+  const [showCloseFairModal, setShowCloseFairModal] = useState(false);
+  const [closingPix, setClosingPix] = useState(0);
+  const [closingCash, setClosingCash] = useState(0);
+  const [closingCard, setClosingCard] = useState(0);
+  const [closingReturnToInventory, setClosingReturnToInventory] = useState(true);
+  const [closingSaving, setClosingSaving] = useState(false);
+  const [quickPaymentMethod, setQuickPaymentMethod] = useState<string>('Dinheiro');
+
   useEffect(() => {
     const q = query(collection(db, 'sales'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -73,7 +88,25 @@ export default function Sales() {
       setLoading(false);
     });
 
-    return () => { unsubscribe(); invUnsubscribe(); prodUnsubscribe(); custUnsubscribe(); };
+    const fairsQ = query(collection(db, 'fairs'), orderBy('date', 'desc'));
+    const fairsUnsubscribe = onSnapshot(fairsQ, (snapshot) => {
+      const allFairs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setFairs(allFairs);
+      const active = allFairs.find((f: any) => f.status === 'active');
+      setActiveFair(active || null);
+      setLoadingFair(false);
+    }, (error) => {
+      console.error("Erro ao carregar faturamento de feiras:", error);
+      setLoadingFair(false);
+    });
+
+    return () => { 
+      unsubscribe(); 
+      invUnsubscribe(); 
+      prodUnsubscribe(); 
+      custUnsubscribe(); 
+      fairsUnsubscribe();
+    };
   }, []);
 
   const handleAddItem = (id: string, type: 'inventory' | 'production') => {
@@ -378,6 +411,267 @@ export default function Sales() {
     }
   };
 
+  // Carrega lista com todos os itens de expedição com quantidade inicial 0
+  useEffect(() => {
+    if (activeTab === 'feira' && !activeFair) {
+      const initialLoads: Record<string, number> = {};
+      inventory.filter(item => item.type === 'dispatch').forEach(item => {
+        initialLoads[item.id] = 0;
+      });
+      setSelectedLoadQuantities(initialLoads);
+      
+      const days = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+      const dayName = days[new Date().getDay()];
+      setNewFairName(`Feira de ${dayName} - ${format(new Date(), 'dd/MM/yyyy')}`);
+    }
+  }, [activeTab, activeFair, inventory]);
+
+  const handleStartFair = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    try {
+      const itemsToLoad = Object.entries(selectedLoadQuantities)
+        .map(([id, qty]) => {
+          const invItem = inventory.find(i => i.id === id);
+          if (!invItem || qty <= 0) return null;
+          return {
+            itemId: id,
+            name: invItem.name,
+            unit: invItem.unit,
+            price: invItem.price || 0,
+            costPrice: invItem.costPrice || 0,
+            initialQty: qty,
+            soldQty: 0,
+            remainingQty: qty,
+            lostQty: 0,
+            returnedToInventory: false
+          };
+        })
+        .filter(Boolean) as any[];
+
+      if (itemsToLoad.length === 0) {
+        setError('Por favor, defina pelo menos um produto com quantidade maior que zero para carregar.');
+        return;
+      }
+
+      setSaving(true);
+      const fairId = `fair_${Date.now()}`;
+      const fairData = {
+        name: newFairName.trim() || `Feira - ${format(new Date(), 'dd/MM/yyyy')}`,
+        date: new Date(),
+        status: 'active',
+        items: itemsToLoad,
+        totalSalesAmount: 0,
+        createdAt: serverTimestamp()
+      };
+
+      await setDoc(doc(db, 'fairs', fairId), fairData);
+
+      for (const item of itemsToLoad) {
+        const invRef = doc(db, 'inventory', item.itemId);
+        await updateDoc(invRef, {
+          quantity: increment(-item.initialQty),
+          lastUpdated: serverTimestamp()
+        });
+
+        await addDoc(collection(db, 'inventory_history'), {
+          itemId: item.itemId,
+          itemName: item.name,
+          quantity: -item.initialQty,
+          unit: item.unit,
+          type: 'use_stock',
+          description: `Carga carregada para ${fairData.name}`,
+          date: serverTimestamp()
+        });
+      }
+
+      setSelectedLoadQuantities({});
+    } catch (err: any) {
+      console.error(err);
+      setError('Erro ao iniciar feira: ' + (err.message || 'Erro desconhecido'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleUpdateFairItemQty = async (itemId: string, saleChange: number, lossChange: number) => {
+    if (!activeFair) return;
+    
+    const updatedItems = activeFair.items.map((item: any) => {
+      if (item.itemId !== itemId) return item;
+      
+      const newSold = Math.max(0, item.soldQty + saleChange);
+      const newLost = Math.max(0, (item.lostQty || 0) + lossChange);
+      const newRemaining = Math.max(0, item.initialQty - newSold - newLost);
+      
+      return {
+        ...item,
+        soldQty: newSold,
+        lostQty: newLost,
+        remainingQty: newRemaining
+      };
+    });
+    
+    const newTotal = updatedItems.reduce((acc: number, item: any) => acc + (item.price * item.soldQty), 0);
+    
+    await updateDoc(doc(db, 'fairs', activeFair.id), {
+      items: updatedItems,
+      totalSalesAmount: newTotal
+    });
+  };
+
+  const handleFairItemInputChange = async (itemId: string, field: 'remainingQty' | 'lostQty' | 'price', value: number) => {
+    if (!activeFair) return;
+    
+    const updatedItems = activeFair.items.map((item: any) => {
+      if (item.itemId !== itemId) return item;
+      
+      let newPrice = item.price;
+      let newRemaining = item.remainingQty;
+      let newLost = item.lostQty || 0;
+      
+      if (field === 'price') newPrice = value;
+      if (field === 'remainingQty') newRemaining = Math.max(0, Math.min(item.initialQty - newLost, value));
+      if (field === 'lostQty') newLost = Math.max(0, Math.min(item.initialQty - newRemaining, value));
+      
+      const newSold = Math.max(0, item.initialQty - newRemaining - newLost);
+      
+      return {
+        ...item,
+        price: newPrice,
+        remainingQty: newRemaining,
+        lostQty: newLost,
+        soldQty: newSold
+      };
+    });
+    
+    const newTotal = updatedItems.reduce((acc: number, item: any) => acc + (item.price * item.soldQty), 0);
+    
+    await updateDoc(doc(db, 'fairs', activeFair.id), {
+      items: updatedItems,
+      totalSalesAmount: newTotal
+    });
+  };
+
+  const handleOpenCloseFairModal = () => {
+    if (!activeFair) return;
+    const total = activeFair.totalSalesAmount || 0;
+    setClosingPix(total);
+    setClosingCash(0);
+    setClosingCard(0);
+    setClosingReturnToInventory(true);
+    setShowCloseFairModal(true);
+  };
+
+  const handleConfirmCloseFair = async () => {
+    if (!activeFair) return;
+    setClosingSaving(true);
+    setError(null);
+    
+    try {
+      await updateDoc(doc(db, 'fairs', activeFair.id), {
+        status: 'closed',
+        closedAt: serverTimestamp(),
+        closingReturnToInventory,
+        closingPayments: {
+          pix: closingPix,
+          cash: closingCash,
+          card: closingCard
+        }
+      });
+
+      for (const item of activeFair.items) {
+        if (closingReturnToInventory && item.remainingQty > 0) {
+          const invRef = doc(db, 'inventory', item.itemId);
+          await updateDoc(invRef, {
+            quantity: increment(item.remainingQty),
+            lastUpdated: serverTimestamp()
+          });
+
+          await addDoc(collection(db, 'inventory_history'), {
+            itemId: item.itemId,
+            itemName: item.name,
+            quantity: item.remainingQty,
+            unit: item.unit,
+            type: 'add_stock',
+            description: `Retorno de sobra de feira (${activeFair.name})`,
+            date: serverTimestamp()
+          });
+        } else if (!closingReturnToInventory && item.remainingQty > 0) {
+          await addDoc(collection(db, 'inventory_history'), {
+            itemId: item.itemId,
+            itemName: item.name,
+            quantity: -item.remainingQty,
+            unit: item.unit,
+            type: 'use_stock',
+            description: `Sobra de feira não retornada (${activeFair.name})`,
+            date: serverTimestamp()
+          });
+        }
+
+        if (item.lostQty > 0) {
+          await addDoc(collection(db, 'inventory_history'), {
+            itemId: item.itemId,
+            itemName: item.name,
+            quantity: -item.lostQty,
+            unit: item.unit,
+            type: 'use_stock',
+            description: `Perda registrada na ${activeFair.name}`,
+            date: serverTimestamp()
+          });
+        }
+      }
+
+      const totalAmount = activeFair.totalSalesAmount;
+      if (totalAmount > 0) {
+        const paymentsToLog = [
+          { method: 'Pix', amt: closingPix },
+          { method: 'Dinheiro', amt: closingCash },
+          { method: 'Cartão', amt: closingCard }
+        ].filter(p => p.amt > 0);
+
+        if (paymentsToLog.length === 0) {
+          await addDoc(collection(db, 'transactions'), {
+            type: 'income',
+            amount: totalAmount,
+            description: `Faturamento Feira - ${activeFair.name}`,
+            category: 'Venda de Produção',
+            date: serverTimestamp(),
+            relatedFairId: activeFair.id
+          });
+        } else {
+          for (const pay of paymentsToLog) {
+            await addDoc(collection(db, 'transactions'), {
+              type: 'income',
+              amount: pay.amt,
+              description: `Fechamento Feira (${pay.method}) - ${activeFair.name}`,
+              category: 'Venda de Produção',
+              date: serverTimestamp(),
+              relatedFairId: activeFair.id
+            });
+          }
+        }
+      }
+
+      setShowCloseFairModal(false);
+    } catch (err: any) {
+      console.error(err);
+      setError('Erro ao concluir fechamento da feira: ' + (err.message || 'Erro desconhecido'));
+    } finally {
+      setClosingSaving(false);
+    }
+  };
+
+  const handleDeleteFair = async (fairId: string) => {
+    if (confirm('Tem certeza que deseja excluir o histórico desta feira?')) {
+      try {
+        await deleteDoc(doc(db, 'fairs', fairId));
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  };
+
   const filteredSales = sales.filter(sale => {
     const searchLower = searchTerm.toLowerCase();
     const matchesCustomer = sale.customerName.toLowerCase().includes(searchLower);
@@ -394,167 +688,577 @@ export default function Sales() {
     <div className="space-y-6 md:space-y-8">
       <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl md:text-3xl font-bold text-slate-900">Vendas e Pedidos</h2>
-          <p className="text-slate-500 mt-1 text-sm md:text-base">Lance novos pedidos e confirme vendas.</p>
+          <h2 className="text-2xl md:text-3xl font-bold text-slate-900">Vendas e Faturamento</h2>
+          <p className="text-slate-500 mt-1 text-sm md:text-base">Controle seus pedidos agendados ou registre vendas de forma ultra-rápida na feira.</p>
         </div>
-        <button 
-          onClick={() => handleOpenModal()}
-          className="w-full sm:w-auto flex items-center justify-center gap-2 bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 active:scale-95 text-sm md:text-base"
-        >
-          <Plus size={20} />
-          Novo Pedido
-        </button>
+        {activeTab === 'individual' && (
+          <button 
+            onClick={() => handleOpenModal()}
+            className="w-full sm:w-auto flex items-center justify-center gap-2 bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 active:scale-95 text-sm md:text-base"
+          >
+            <Plus size={20} />
+            Novo Pedido
+          </button>
+        )}
       </header>
 
-      <div className="flex flex-col md:flex-row gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
-        <div className="flex-1 relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
-          <input 
-            type="text" 
-            placeholder="Buscar por cliente, produto, pagamento..." 
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-sm md:text-base"
-          />
-        </div>
-        <div className="flex items-center gap-2">
-          <Filter className="text-slate-400 shrink-0" size={20} />
-          <select 
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value as any)}
-            className="flex-1 md:flex-none bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm md:text-base"
-          >
-            <option value="all">Todos Status</option>
-            <option value="ordered">Pedidos Feitos</option>
-            <option value="pending_delivery">Pendentes de Entrega</option>
-            <option value="delivered">Entregues</option>
-            <option value="paid">Pagos</option>
-            <option value="cancelled">Cancelados</option>
-          </select>
-        </div>
+      {/* Tabs Seletoras */}
+      <div className="flex bg-slate-100 p-1 rounded-2xl w-full max-w-lg shadow-sm border border-slate-200">
+        <button
+          onClick={() => setActiveTab('individual')}
+          className={cn(
+            "flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-black transition-all",
+            activeTab === 'individual' 
+              ? "bg-white text-emerald-700 shadow-md" 
+              : "text-slate-500 hover:text-slate-800"
+          )}
+        >
+          <Calendar size={16} />
+          Pedidos Individuais
+        </button>
+        <button
+          onClick={() => setActiveTab('feira')}
+          className={cn(
+            "flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-black transition-all",
+            activeTab === 'feira' 
+              ? "bg-white text-emerald-700 shadow-md" 
+              : "text-slate-500 hover:text-slate-800"
+          )}
+        >
+          <Store size={16} />
+          Modo Feira (Venda Ágil)
+        </button>
       </div>
 
-      <div className="grid grid-cols-1 gap-4">
-        {filteredSales.map((sale) => (
-          <motion.div 
-            layout
-            key={sale.id} 
-            className="bg-white p-4 md:p-6 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-all group"
-          >
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 md:gap-6">
-              <div className="flex items-start gap-3 md:gap-4">
-                <div className={cn(
-                  "w-10 h-10 md:w-12 md:h-12 rounded-xl md:rounded-2xl flex items-center justify-center border shrink-0",
-                  (STATUS_CONFIG[sale.status] || STATUS_CONFIG.ordered).color
-                )}>
-                  {(() => {
-                    const config = STATUS_CONFIG[sale.status] || STATUS_CONFIG.ordered;
-                    const Icon = config.icon;
-                    return <Icon size={20} className="md:w-6 md:h-6" />;
-                  })()}
-                </div>
-                <div className="min-w-0">
+      {activeTab === 'individual' && (
+        <>
+          <div className="flex flex-col md:flex-row gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+            <div className="flex-1 relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+              <input 
+                type="text" 
+                placeholder="Buscar por cliente, produto, pagamento..." 
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-sm md:text-base"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Filter className="text-slate-400 shrink-0" size={20} />
+              <select 
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value as any)}
+                className="flex-1 md:flex-none bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm md:text-base"
+              >
+                <option value="all">Todos Status</option>
+                <option value="ordered">Pedidos Feitos</option>
+                <option value="pending_delivery">Pendentes de Entrega</option>
+                <option value="delivered">Entregues</option>
+                <option value="paid">Pagos</option>
+                <option value="cancelled">Cancelados</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4">
+            {filteredSales.length === 0 ? (
+              <div className="bg-white rounded-3xl p-12 text-center border border-slate-200 text-slate-400 shadow-sm">
+                <ShoppingCart className="mx-auto text-slate-300 mb-3" size={40} />
+                <p className="font-bold text-slate-500">Nenhum pedido individual encontrado</p>
+                <p className="text-xs text-slate-400 mt-1">Sua lista está limpa. Clique em "Novo Pedido" para lançar uma entrega.</p>
+              </div>
+            ) : (
+              filteredSales.map((sale) => (
+                <motion.div 
+                  layout
+                  key={sale.id} 
+                  className="bg-white p-4 md:p-6 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-all group"
+                >
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 md:gap-6">
+                    <div className="flex items-start gap-3 md:gap-4">
+                      <div className={cn(
+                        "w-10 h-10 md:w-12 md:h-12 rounded-xl md:rounded-2xl flex items-center justify-center border shrink-0",
+                        (STATUS_CONFIG[sale.status] || STATUS_CONFIG.ordered).color
+                      )}>
+                        {(() => {
+                          const config = STATUS_CONFIG[sale.status] || STATUS_CONFIG.ordered;
+                          const Icon = config.icon;
+                          return <Icon size={20} className="md:w-6 md:h-6" />;
+                        })()}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-base md:text-lg font-bold text-slate-900 truncate">{sale.customerName}</h4>
+                          <span className="text-[10px] font-mono bg-slate-100 px-1.5 py-0.5 rounded text-slate-500">{sale.saleNumber || 'S/N'}</span>
+                        </div>
+                        <div className="flex flex-col gap-0.5 md:gap-1">
+                          <p className="text-[10px] md:text-xs text-slate-500">
+                            Status: {(STATUS_CONFIG[sale.status] || STATUS_CONFIG.ordered).label}
+                          </p>
+                          <p className="text-[10px] md:text-xs text-slate-500">
+                            Lançado: {sale.createdAt?.toDate ? format(sale.createdAt.toDate(), "dd/MM/yy HH:mm", { locale: ptBR }) : '...'}
+                          </p>
+                          {sale.deliveryDate && (
+                            <p className="text-[10px] md:text-xs font-bold text-emerald-600 flex items-center gap-1">
+                              <Calendar size={10} className="md:w-3 md:h-3" />
+                              Entrega: {format(sale.deliveryDate.toDate(), "dd 'de' MMMM", { locale: ptBR })}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex-1 lg:px-10">
+                      <div className="flex flex-col gap-2 md:gap-3">
+                        <div className="flex flex-wrap gap-1.5 md:gap-2">
+                          {sale.items.map((item, i) => (
+                            <span key={i} className="px-2 md:px-3 py-0.5 md:py-1 bg-slate-100 text-slate-700 rounded-lg text-[10px] md:text-xs font-medium whitespace-nowrap">
+                              {item.quantity}x {item.name}
+                            </span>
+                          ))}
+                        </div>
+                        {sale.paymentMethods && sale.paymentMethods.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5 md:gap-2">
+                            {sale.paymentMethods.map((pm, i) => (
+                              <span key={i} className="px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-100 rounded-md text-[9px] md:text-[10px] font-bold flex items-center gap-1 whitespace-nowrap">
+                                <CreditCard size={10} />
+                                {pm.method}: R$ {pm.amount.toFixed(2)}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between lg:justify-end gap-4 md:gap-8 pt-3 md:pt-0 border-t md:border-t-0 border-slate-100 font-sans">
+                      <div className="text-left lg:text-right">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total</p>
+                        <p className="text-lg md:text-xl font-black text-slate-900">R$ {sale.total.toFixed(2)}</p>
+                      </div>
+
+                      <div className="flex items-center gap-1 md:gap-2">
+                        <button 
+                          onClick={() => handleOpenModal(sale)}
+                          className="p-1.5 md:p-2 text-slate-400 hover:bg-slate-100 rounded-xl transition-all"
+                          title="Editar Pedido"
+                        >
+                          <Edit2 size={16} className="md:w-[18px] md:h-[18px]" />
+                        </button>
+                        <button 
+                          onClick={() => deleteSale(sale.id)}
+                          className="p-1.5 md:p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-600 rounded-xl transition-all"
+                          title="Excluir Pedido"
+                        >
+                          <Trash2 size={16} className="md:w-[18px] md:h-[18px]" />
+                        </button>
+                        {sale.status !== 'paid' && sale.status !== 'confirmed' && sale.status !== 'cancelled' && (
+                          <>
+                            <button 
+                              type="button"
+                              onClick={() => advanceStatus(sale)}
+                              className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold text-sm hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100"
+                            >
+                              {(sale.status === 'ordered' || sale.status === 'pending') && 'Pendente Entrega'}
+                              {sale.status === 'pending_delivery' && 'Confirmar Entrega'}
+                              {sale.status === 'delivered' && 'Confirmar Pagamento'}
+                            </button>
+                            <button 
+                              type="button"
+                              onClick={() => cancelSale(sale.id)}
+                              className="bg-slate-100 text-slate-600 px-4 py-2 rounded-xl font-bold text-sm hover:bg-rose-50 hover:text-rose-600 transition-all"
+                            >
+                              Cancelar
+                            </button>
+                          </>
+                        )}
+                        {(sale.status === 'paid' || sale.status === 'confirmed') && (
+                          <span className="text-emerald-600 font-bold text-sm flex items-center gap-1">
+                            <CheckCircle size={16} /> Pago
+                          </span>
+                        )}
+                        {sale.status !== 'ordered' && sale.status !== 'pending' && (
+                          <button 
+                            type="button"
+                            onClick={() => revertToPrevious(sale)}
+                            className="text-slate-400 hover:text-emerald-600 text-xs font-bold transition-all underline underline-offset-2"
+                          >
+                            Voltar Etapa
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </motion.div>
+              ))
+            )}
+          </div>
+        </>
+      )}
+
+      {activeTab === 'feira' && (
+        <div className="space-y-6">
+          {error && (
+            <div className="p-4 bg-rose-50 border border-rose-100 rounded-xl text-rose-600 text-sm font-medium flex items-center gap-2">
+              <XCircle size={18} />
+              {error}
+            </div>
+          )}
+
+          {activeFair ? (
+            /* ================= FEIRA EM ANDAMENTO (DASHBOARD) ================= */
+            <div className="space-y-6">
+              <div className="bg-emerald-50 border border-emerald-100 rounded-[2rem] p-6 md:p-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-sm animate-none">
+                <div>
                   <div className="flex items-center gap-2">
-                    <h4 className="text-base md:text-lg font-bold text-slate-900 truncate">{sale.customerName}</h4>
-                    <span className="text-[10px] font-mono bg-slate-100 px-1.5 py-0.5 rounded text-slate-500">{sale.saleNumber || 'S/N'}</span>
+                    <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <span className="text-emerald-800 text-[10px] font-black tracking-widest uppercase bg-emerald-100 px-3 py-1 rounded-full animate-none">Sessão da Feira Ativa</span>
                   </div>
-                  <div className="flex flex-col gap-0.5 md:gap-1">
-                    <p className="text-[10px] md:text-xs text-slate-500">
-                      Status: {(STATUS_CONFIG[sale.status] || STATUS_CONFIG.ordered).label}
-                    </p>
-                    <p className="text-[10px] md:text-xs text-slate-500">
-                      Lançado: {sale.createdAt?.toDate ? format(sale.createdAt.toDate(), "dd/MM/yy HH:mm", { locale: ptBR }) : '...'}
-                    </p>
-                    {sale.deliveryDate && (
-                      <p className="text-[10px] md:text-xs font-bold text-emerald-600 flex items-center gap-1">
-                        <Calendar size={10} className="md:w-3 md:h-3" />
-                        Entrega: {format(sale.deliveryDate.toDate(), "dd 'de' MMMM", { locale: ptBR })}
-                      </p>
-                    )}
-                  </div>
+                  <h3 className="text-2xl font-black text-slate-950 mt-3">{activeFair.name}</h3>
+                  <p className="text-xs text-slate-500 mt-1 font-medium">Iniciada em: {activeFair.date?.toDate ? format(activeFair.date.toDate(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR }) : ''}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleOpenCloseFairModal}
+                  className="w-full md:w-auto bg-emerald-600 text-white rounded-2xl px-6 py-4 font-black shadow-lg shadow-emerald-250 hover:bg-emerald-700 transition-all flex items-center justify-center gap-2 hover:scale-[1.02] active:scale-[0.98] text-sm md:text-base cursor-pointer"
+                >
+                  <CheckCircle size={20} />
+                  🏁 Fechar e Dar Baixa na Feira
+                </button>
+              </div>
+
+              {/* Grid de 3 Cards de Métricas */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Faturamento Realizado</span>
+                  <span className="text-3xl font-black text-emerald-600 block mt-2">R$ {(activeFair.totalSalesAmount || 0).toFixed(2)}</span>
+                  <span className="text-[10px] text-slate-400 mt-1 block font-medium">Calculado automaticamente a partir das vendas registradas</span>
+                </div>
+                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Estoque Inicial Carregado</span>
+                  <span className="text-2xl font-bold text-slate-800 block mt-2">
+                    R$ {activeFair.items.reduce((acc: number, item: any) => acc + ((item.price || 0) * (item.initialQty || 0)), 0).toFixed(2)}
+                  </span>
+                  <span className="text-[10px] text-slate-400 mt-1 block font-medium">Valor total das mercadorias levadas para a feira</span>
+                </div>
+                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Valor Restante das Sobras</span>
+                  <span className="text-2xl font-bold text-amber-600 block mt-2">
+                    R$ {activeFair.items.reduce((acc: number, item: any) => acc + ((item.price || 0) * (item.remainingQty || 0)), 0).toFixed(2)}
+                  </span>
+                  <span className="text-[10px] text-slate-400 mt-1 block font-medium">Valor correspondente aos produtos que restaram</span>
                 </div>
               </div>
 
-              <div className="flex-1 lg:px-10">
-                <div className="flex flex-col gap-2 md:gap-3">
-                  <div className="flex flex-wrap gap-1.5 md:gap-2">
-                    {sale.items.map((item, i) => (
-                      <span key={i} className="px-2 md:px-3 py-0.5 md:py-1 bg-slate-100 text-slate-700 rounded-lg text-[10px] md:text-xs font-medium whitespace-nowrap">
-                        {item.quantity}x {item.name}
-                      </span>
-                    ))}
+              {/* Informação do Checkout da feira */}
+              <div className="bg-amber-50/50 border border-amber-100 p-4 rounded-xl text-xs text-amber-805 flex items-start gap-2.5">
+                <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold">Como funciona o controle ágil da feira?</p>
+                  <p className="mt-0.5 opacity-90 leading-relaxed">Você pode clicar nos botões rápidos de <strong className="font-black">+ Venda</strong> e <strong className="font-black">+ Perda</strong> para registrar as saídas na correria. Se não tiver tempo, não se preocupe! No final da feira, basta preencher a <strong className="font-bold">Sobra Final</strong> (recontar produtos) que o sistema deduzirá as vendas e calculará seu faturamento total automaticamente!</p>
+                </div>
+              </div>
+
+              {/* Grid de Cards de Produtos Ativos */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {activeFair.items.map((item: any) => {
+                  const soldPct = Math.min(100, Math.round(((item.soldQty || 0) / (item.initialQty || 1)) * 100)) || 0;
+                  return (
+                    <div key={item.itemId} className="bg-white rounded-3xl border border-slate-200 p-5 md:p-6 shadow-sm hover:shadow-md transition-all flex flex-col space-y-4">
+                      {/* Topo Item */}
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <h4 className="font-black text-slate-800 text-lg truncate" title={item.name}>{item.name}</h4>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="text-xs text-slate-400 font-semibold">Preço Unitário:</span>
+                            <div className="relative flex items-center">
+                              <span className="text-xs font-bold text-slate-400 mr-0.5">R$</span>
+                              <input 
+                                type="number" 
+                                step="0.50"
+                                value={item.price}
+                                onChange={(e) => handleFairItemInputChange(item.itemId, 'price', Number(e.target.value))}
+                                className="w-16 px-1 py-0.5 border border-slate-200 rounded text-xs font-black text-slate-700 bg-slate-50 focus:outline-none focus:ring-1 focus:ring-emerald-500 text-center"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                        <div className="bg-slate-100 px-3 py-1.5 rounded-xl text-right shrink-0">
+                          <span className="text-[10px] uppercase font-bold text-slate-400 block">Restante</span>
+                          <span className="text-lg font-black text-slate-700">
+                            {item.remainingQty} <span className="text-xs font-normal text-slate-400">{item.unit}</span>
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Progresso visual */}
+                      <div>
+                        <div className="flex justify-between text-xs font-bold text-slate-500 mb-1 font-sans">
+                          <span>Vendidos: {item.soldQty} de {item.initialQty} {item.unit}</span>
+                          <span>{soldPct}%</span>
+                        </div>
+                        <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden border border-slate-150">
+                          <div 
+                            className="bg-emerald-500 h-full rounded-full transition-all duration-300" 
+                            style={{ width: `${soldPct}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Botoes Táteis Super Rápidos */}
+                      <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-3">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase block text-center tracking-wider">Painel de Cliques Rápidos</span>
+                        <div className="grid grid-cols-2 gap-3">
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateFairItemQty(item.itemId, 1, 0)}
+                            disabled={item.remainingQty <= 0}
+                            className="h-16 bg-emerald-600 text-white rounded-xl font-black hover:bg-emerald-700 active:scale-[0.95] disabled:opacity-40 disabled:pointer-events-none transition-all flex flex-col items-center justify-center shadow-lg shadow-emerald-100 cursor-pointer"
+                          >
+                            <span className="text-[10px] uppercase tracking-wider opacity-90 font-bold">Vendido (+1)</span>
+                            <span className="text-base font-black text-white">+ R$ {item.price.toFixed(2)}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateFairItemQty(item.itemId, 0, 1)}
+                            disabled={item.remainingQty <= 0}
+                            className="h-16 bg-amber-500 text-white rounded-xl font-black hover:bg-amber-600 active:scale-[0.95] disabled:opacity-40 disabled:pointer-events-none transition-all flex flex-col items-center justify-center shadow-lg shadow-amber-100 cursor-pointer"
+                          >
+                            <span className="text-[10px] uppercase tracking-wider opacity-90 font-bold">Perda (+1)</span>
+                            <span className="text-sm font-black text-white">Rachou / Perda</span>
+                          </button>
+                        </div>
+
+                        {/* Corretores pequenininhos embaixo */}
+                        <div className="flex justify-between items-center text-xs px-1 font-sans">
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateFairItemQty(item.itemId, -1, 0)}
+                            disabled={item.soldQty <= 0}
+                            className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 px-2 py-1 rounded-lg transition-all disabled:opacity-30 disabled:pointer-events-none font-bold"
+                          >
+                            Desfazer Venda (-1)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateFairItemQty(item.itemId, 0, -1)}
+                            disabled={item.lostQty <= 0}
+                            className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 px-2 py-1 rounded-lg transition-all disabled:opacity-30 disabled:pointer-events-none font-bold"
+                          >
+                            Desfazer Perda (-1)
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Recortadores manuais no final */}
+                      <div className="border-t border-slate-100 pt-3 grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Preencher Sobra Final</label>
+                          <div className="relative">
+                            <input 
+                              type="number"
+                              min="0"
+                              max={item.initialQty}
+                              value={item.remainingQty}
+                              onChange={(e) => handleFairItemInputChange(item.itemId, 'remainingQty', Number(e.target.value))}
+                              className="bg-slate-50 border border-slate-200 font-bold px-3 py-2 text-center text-sm text-slate-800 rounded-xl focus:ring-1 focus:ring-emerald-500 focus:outline-none w-full"
+                            />
+                            <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400">{item.unit}</span>
+                          </div>
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Perdas Totais</label>
+                          <div className="relative">
+                            <input 
+                              type="number"
+                              min="0"
+                              max={item.initialQty}
+                              value={item.lostQty || 0}
+                              onChange={(e) => handleFairItemInputChange(item.itemId, 'lostQty', Number(e.target.value))}
+                              className="bg-slate-50 border border-slate-200 font-bold px-3 py-2 text-center text-sm text-slate-800 rounded-xl focus:ring-1 focus:ring-emerald-500 focus:outline-none w-full"
+                            />
+                            <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400">{item.unit}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            /* ================= REGISTRAR / CARREGAR PARA NOVA FEIRA ================= */
+            <div className="space-y-8">
+              <form onSubmit={handleStartFair} className="bg-white rounded-3xl border border-slate-200 p-6 md:p-8 shadow-sm space-y-6">
+                <div>
+                  <h3 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+                    <Truck className="text-emerald-600 shrink-0" size={24} />
+                    Carregar Carga e Iniciar Sessão de Feira
+                  </h3>
+                  <p className="text-slate-400 text-xs mt-1 leading-relaxed animate-none">Você está carregando as mercadorias para vender hoje na feira. Essas mercadorias serão deduzidas temporariamente do seu estoque de expedição principal e alocadas na feira. No encerramento da feira, as sobras serão devolvidas automaticamente ao estoque!</p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1.5 col-span-2">
+                    <label className="text-sm font-bold text-slate-700 ml-1">Identificação / Nome da Feira</label>
+                    <input 
+                      type="text" 
+                      value={newFairName}
+                      onChange={(e) => setNewFairName(e.target.value)}
+                      placeholder="Ex: Feira de Quarta-feira - Centro"
+                      required
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 font-bold text-slate-800"
+                    />
                   </div>
-                  {sale.paymentMethods && sale.paymentMethods.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 md:gap-2">
-                      {sale.paymentMethods.map((pm, i) => (
-                        <span key={i} className="px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-100 rounded-md text-[9px] md:text-[10px] font-bold flex items-center gap-1 whitespace-nowrap">
-                          <CreditCard size={10} />
-                          {pm.method}: R$ {pm.amount.toFixed(2)}
-                        </span>
-                      ))}
+                </div>
+
+                <div className="space-y-3">
+                  <label className="text-sm font-bold text-slate-700 ml-1 block">Estoque de Expedição (Escolha o que levar no caminhão)</label>
+                  
+                  {inventory.filter(item => item.type === 'dispatch').length === 0 ? (
+                    <div className="bg-slate-50 p-8 text-center border border-slate-200 rounded-2xl text-slate-400">
+                      <p className="font-bold">Nenhum produto cadastrado no Estoque de Expedição.</p>
+                      <p className="text-xs mt-1">Vá até o menu de Estoque e adicione produtos do tipo "Expedição" primeiro.</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-96 overflow-y-auto p-1">
+                      {inventory.filter(item => item.type === 'dispatch').map(item => {
+                        const currentVal = selectedLoadQuantities[item.id] || 0;
+                        return (
+                          <div 
+                            key={item.id}
+                            className={cn(
+                              "p-3 rounded-2xl border transition-all flex flex-col justify-between space-y-2",
+                              currentVal > 0 
+                                ? "bg-emerald-50/50 border-emerald-500" 
+                                : "bg-slate-50 border-slate-200 hover:border-slate-300"
+                            )}
+                          >
+                            <div>
+                              <span className="font-bold text-slate-800 text-sm block truncate" title={item.name}>{item.name}</span>
+                              <span className="text-[10px] text-slate-400 block font-semibold">Preço ref: R$ {(item.price || 0).toFixed(2)}</span>
+                              <span className="text-[10px] text-slate-400 block">Estoque atual: {item.quantity} {item.unit}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-1.5">
+                              <div className="flex items-center gap-1 bg-white p-1 rounded-lg border border-slate-200">
+                                <button 
+                                  type="button"
+                                  onClick={() => setSelectedLoadQuantities({
+                                    ...selectedLoadQuantities,
+                                    [item.id]: Math.max(0, currentVal - 1)
+                                  })}
+                                  className="w-7 h-7 rounded bg-slate-100 hover:bg-slate-200 border border-slate-205 font-bold active:scale-90 flex items-center justify-center shrink-0"
+                                >
+                                  -
+                                </button>
+                                <input 
+                                  type="number" 
+                                  min="0"
+                                  max={item.quantity}
+                                  value={currentVal || ''}
+                                  onChange={(e) => setSelectedLoadQuantities({
+                                    ...selectedLoadQuantities,
+                                    [item.id]: Math.min(item.quantity, Math.max(0, Number(e.target.value)))
+                                  })}
+                                  placeholder="0"
+                                  className="w-12 h-7 text-center bg-transparent border-0 font-bold text-xs focus:ring-0 focus:outline-none"
+                                />
+                                <button 
+                                  type="button"
+                                  onClick={() => setSelectedLoadQuantities({
+                                    ...selectedLoadQuantities,
+                                    [item.id]: Math.min(item.quantity, currentVal + 1)
+                                  })}
+                                  className="w-7 h-7 rounded bg-slate-100 hover:bg-slate-200 border border-slate-205 font-bold active:scale-90 flex items-center justify-center shrink-0"
+                                >
+                                  +
+                                </button>
+                              </div>
+                              <span className="text-xs text-slate-450 font-black truncate shrink-0">{item.unit}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
-              </div>
 
-              <div className="flex items-center justify-between lg:justify-end gap-4 md:gap-8 pt-3 md:pt-0 border-t md:border-t-0 border-slate-100">
-                <div className="text-left lg:text-right">
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total</p>
-                  <p className="text-lg md:text-xl font-black text-slate-900">R$ {sale.total.toFixed(2)}</p>
+                <div className="pt-4 border-t border-slate-105 flex justify-end">
+                  <button 
+                    type="submit"
+                    disabled={saving}
+                    className="w-full sm:w-auto px-8 py-4 bg-emerald-600 text-white rounded-2xl font-black shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-all flex items-center justify-center gap-2 hover:scale-[1.01] active:scale-[0.99] cursor-pointer"
+                  >
+                    <Truck size={20} />
+                    {saving ? 'Iniciando Feira...' : '🚚 Iniciar Feira com os Produtos Carregados'}
+                  </button>
                 </div>
+              </form>
 
-                  <div className="flex items-center gap-1 md:gap-2">
-                    <button 
-                      onClick={() => handleOpenModal(sale)}
-                      className="p-1.5 md:p-2 text-slate-400 hover:bg-slate-100 rounded-xl transition-all"
-                      title="Editar Pedido"
-                    >
-                      <Edit2 size={16} className="md:w-[18px] md:h-[18px]" />
-                    </button>
-                    <button 
-                      onClick={() => deleteSale(sale.id)}
-                      className="p-1.5 md:p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-600 rounded-xl transition-all"
-                      title="Excluir Pedido"
-                    >
-                      <Trash2 size={16} className="md:w-[18px] md:h-[18px]" />
-                    </button>
-                    {sale.status !== 'paid' && sale.status !== 'confirmed' && sale.status !== 'cancelled' && (
-                      <>
-                        <button 
-                          onClick={() => advanceStatus(sale)}
-                          className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold text-sm hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100"
-                        >
-                          {(sale.status === 'ordered' || sale.status === 'pending') && 'Pendente Entrega'}
-                          {sale.status === 'pending_delivery' && 'Confirmar Entrega'}
-                          {sale.status === 'delivered' && 'Confirmar Pagamento'}
-                        </button>
-                        <button 
-                          onClick={() => cancelSale(sale.id)}
-                          className="bg-slate-100 text-slate-600 px-4 py-2 rounded-xl font-bold text-sm hover:bg-rose-50 hover:text-rose-600 transition-all"
-                        >
-                          Cancelar
-                        </button>
-                      </>
-                    )}
-                    {(sale.status === 'paid' || sale.status === 'confirmed') && (
-                      <span className="text-emerald-600 font-bold text-sm flex items-center gap-1">
-                        <CheckCircle size={16} /> Pago
-                      </span>
-                    )}
-                    {sale.status !== 'ordered' && sale.status !== 'pending' && (
-                      <button 
-                        onClick={() => revertToPrevious(sale)}
-                        className="text-slate-400 hover:text-emerald-600 text-xs font-bold transition-all underline underline-offset-2"
-                      >
-                        Voltar Etapa
-                      </button>
-                    )}
-                  </div>
+              {/* HISTORICO DE FEIRAS ANTERIORES */}
+              <div className="space-y-4">
+                <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                  <RotateCcw size={22} className="text-slate-500" />
+                  Histórico de Feiras Anteriores
+                </h3>
+
+                <div className="space-y-3">
+                  {fairs.filter(f => f.status === 'closed').length === 0 ? (
+                    <div className="bg-white p-8 text-center border border-slate-200 rounded-3xl text-slate-400 shadow-sm">
+                      <p className="font-semibold text-slate-500">Nenhuma feira anterior encerrada foi encontrada.</p>
+                      <p className="text-xs text-slate-400 mt-1 font-medium">Seus dados consolidados de feiras livre encerradas aparecerão listados aqui.</p>
+                    </div>
+                  ) : (
+                    fairs.filter(f => f.status === 'closed').map(fair => {
+                      const totalSoldQty = fair.items?.reduce((acc: number, item: any) => acc + (item.soldQty || 0), 0) || 0;
+                      const faturamento = fair.totalSalesAmount || 0;
+                      return (
+                        <div key={fair.id} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-4 hover:border-slate-350 transition-all">
+                          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                            <div>
+                              <span className="text-[9px] text-emerald-800 font-extrabold tracking-widest uppercase bg-emerald-50 border border-emerald-100 px-3 py-1 rounded-full w-fit block animate-none">Feira Encerrada</span>
+                              <h4 className="font-black text-slate-800 mt-2 text-lg">{fair.name}</h4>
+                              <p className="text-xs text-slate-400 font-medium">Realizada em: {fair.date?.toDate ? format(fair.date.toDate(), "dd 'de' MMMM 'de' yyyy", { locale: ptBR }) : ''}</p>
+                            </div>
+                            <div className="flex items-center gap-4">
+                              <div className="text-left sm:text-right">
+                                <span className="text-[10px] text-slate-400 uppercase font-black tracking-wider block">Faturamento Realizado</span>
+                                <span className="font-black text-emerald-600 text-xl block">R$ {faturamento.toFixed(2)}</span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteFair(fair.id)}
+                                className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all shrink-0 cursor-pointer"
+                                title="Excluir do Histórico"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Itens detalhados */}
+                          <div className="border-t border-slate-100 pt-3 flex flex-col gap-1.5 font-sans">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Balanço das Saídas:</span>
+                            <div className="flex flex-wrap gap-2">
+                              {fair.items?.map((item: any, i: number) => (
+                                <span key={i} className="px-2.5 py-1 bg-slate-50 text-slate-600 border border-slate-150 rounded-lg text-xs font-semibold flex items-center gap-1.5">
+                                  <strong>{item.name}:</strong> 
+                                  <span className="text-emerald-650 font-black">{item.soldQty} vend.</span> | 
+                                  <span className="text-slate-500 font-medium">{item.remainingQty} sob.</span> | 
+                                  <span className="text-amber-600 font-medium">{item.lostQty || 0} perdas</span>
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
               </div>
             </div>
-          </motion.div>
-        ))}
-      </div>
+          )}
+        </div>
+      )}
 
       {/* Modal */}
       <AnimatePresence>
@@ -741,6 +1445,160 @@ export default function Sales() {
                     </div>
                   </div>
                 </form>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {showCloseFairModal && activeFair && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowCloseFairModal(false)}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" 
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative bg-white w-full max-w-xl rounded-[2rem] shadow-2xl overflow-hidden"
+            >
+              <div className="p-8">
+                <div className="flex items-center justify-between mb-6">
+                  <div>
+                    <h3 className="text-2xl font-black text-slate-950">Fechamento de Caixa</h3>
+                    <p className="text-xs text-slate-400 mt-1 font-medium">Consolide os faturamentos e o estoque final da feira.</p>
+                  </div>
+                  <button onClick={() => setShowCloseFairModal(false)} className="p-2 text-slate-400 hover:bg-slate-50 rounded-full cursor-pointer">
+                    <XCircle size={24} />
+                  </button>
+                </div>
+
+                <div className="space-y-6 max-h-[65vh] overflow-y-auto pr-2">
+                  {/* Resumo financeiro de vendas e perdas */}
+                  <div className="bg-slate-50 p-5 rounded-2xl border border-slate-150 space-y-3 font-sans">
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-slate-500 font-medium">Faturamento Estimado:</span>
+                      <span className="font-extrabold text-slate-800">R$ {activeFair.totalSalesAmount.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-slate-500 font-medium">Quantidade Vendida:</span>
+                      <span className="font-bold text-slate-800">{activeFair.items.reduce((acc: number, item: any) => acc + item.soldQty, 0)} unidades</span>
+                    </div>
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-slate-500 font-medium">Perdas Totais:</span>
+                      <span className="font-bold text-amber-600">{activeFair.items.reduce((acc: number, item: any) => acc + (item.lostQty || 0), 0)} unidades</span>
+                    </div>
+                  </div>
+
+                  {/* Toggle para devolução automatica */}
+                  <label className="flex items-start gap-3 p-4 bg-emerald-50/40 border border-emerald-100 rounded-2xl cursor-pointer">
+                    <input 
+                      type="checkbox"
+                      checked={closingReturnToInventory}
+                      onChange={(e) => setClosingReturnToInventory(e.target.checked)}
+                      className="mt-1 h-4.5 w-4.5 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300"
+                    />
+                    <div className="font-sans">
+                      <p className="text-sm font-bold text-slate-800">Retornar sobras ao estoque principal</p>
+                      <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">Se ativado, as sobras ({activeFair.items.reduce((acc: number, item: any) => acc + item.remainingQty, 0)} un) retornam para o seu estoque principal automaticamente. Se desmarcado, as sobras serão perdidas permanentemente.</p>
+                    </div>
+                  </label>
+
+                  {/* Desdobramento Financeiro Detalhado */}
+                  <div className="space-y-4">
+                    <label className="text-sm font-bold text-slate-700 ml-1 block">Faturamento por Forma de Recebimento</label>
+                    <p className="text-xs text-slate-405 -mt-2 leading-relaxed">Distribua o faturamento total da feira (R$ {activeFair.totalSalesAmount.toFixed(2)}) entre os meios de pagamento recebidos:</p>
+
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-xs font-bold text-slate-500 block mb-1">Recebido via Pix / Transferências</label>
+                        <div className="relative">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">R$</span>
+                          <input 
+                            type="number" 
+                            step="0.01"
+                            value={closingPix || ''}
+                            onChange={(e) => setClosingPix(Number(e.target.value))}
+                            placeholder="0.00"
+                            className="w-full pl-8 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold text-slate-500 block mb-1">Recebido via Dinheiro (Espécie)</label>
+                        <div className="relative">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">R$</span>
+                          <input 
+                            type="number" 
+                            step="0.01"
+                            value={closingCash || ''}
+                            onChange={(e) => setClosingCash(Number(e.target.value))}
+                            placeholder="0.00"
+                            className="w-full pl-8 pr-4 py-2.5 bg-slate-50 border border-slate-205 rounded-xl font-bold font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold text-slate-500 block mb-1">Recebido via Cartão (Crédito / Débito)</label>
+                        <div className="relative">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">R$</span>
+                          <input 
+                            type="number" 
+                            step="0.01"
+                            value={closingCard || ''}
+                            onChange={(e) => setClosingCard(Number(e.target.value))}
+                            placeholder="0.00"
+                            className="w-full pl-8 pr-4 py-2.5 bg-slate-50 border border-slate-205 rounded-xl font-bold font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Somatório de validação de caixa amigável */}
+                    {(() => {
+                      const totalReported = (closingPix || 0) + (closingCash || 0) + (closingCard || 0);
+                      const difference = totalReported - activeFair.totalSalesAmount;
+                      const isMatched = Math.abs(difference) < 0.05;
+                      return (
+                        <div className={cn(
+                          "p-3 rounded-xl text-xs font-bold flex justify-between font-sans",
+                          isMatched 
+                            ? "bg-emerald-50 text-emerald-850" 
+                            : "bg-amber-50 text-amber-850"
+                        )}>
+                          <span>Soma Informada: R$ {totalReported.toFixed(2)}</span>
+                          <span>
+                            {isMatched 
+                              ? "✓ Caixa Consolidado" 
+                              : `Diferença: ${difference > 0 ? '+' : ''} R$ ${difference.toFixed(2)}`
+                            }
+                          </span>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+
+                <div className="pt-6 border-t border-slate-100 flex items-center justify-end gap-3 mt-6">
+                  <button 
+                    type="button" 
+                    onClick={() => setShowCloseFairModal(false)}
+                    className="px-5 py-3 rounded-xl font-bold text-slate-650 hover:bg-slate-50 transition-all text-sm cursor-pointer"
+                  >
+                    Voltar
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={handleConfirmCloseFair}
+                    disabled={closingSaving}
+                    className="px-6 py-3 bg-emerald-600 text-white rounded-xl font-black hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-50 font-sans text-sm cursor-pointer"
+                  >
+                    {closingSaving ? "Processando fechamento..." : "🏁 Confirmar Encerramento"}
+                  </button>
+                </div>
               </div>
             </motion.div>
           </div>

@@ -74,6 +74,7 @@ export default function BedRecordsComponent() {
   const [fertilizerDescription, setFertilizerDescription] = useState('');
   const [quantity, setQuantity] = useState('');
   const [unit, setUnit] = useState('unidades');
+  const [bedHarvestType, setBedHarvestType] = useState<'partial' | 'final'>('final');
 
   const [employeeName, setEmployeeName] = useState(profile?.displayName || '');
   const [notes, setNotes] = useState('');
@@ -180,6 +181,7 @@ export default function BedRecordsComponent() {
     setFertilizerDescription('');
     setQuantity('');
     setUnit('unidades');
+    setBedHarvestType('final');
     setNotes('');
     setSyncStatusMsg(null);
   };
@@ -192,6 +194,10 @@ export default function BedRecordsComponent() {
     const active = getBedStatus(bedName);
     if (active.status === 'growing') {
       setCrop(active.crop);
+      const productionMatch = productions.find(p => p.bed === bedName && p.status === 'growing' && p.crop.toLowerCase() === active.crop.toLowerCase());
+      if (productionMatch) {
+        setBedHarvestType(productionMatch.isContinuousHarvest ? 'partial' : 'final');
+      }
     }
     setModalOpen(true);
   };
@@ -283,15 +289,36 @@ export default function BedRecordsComponent() {
             matchedCycle = activeCycles[0];
             const harvestQty = parsedQuantity || 1;
             const originalCosts = matchedCycle.totalCost || 0;
-            const unitCost = harvestQty > 0 ? originalCosts / harvestQty : 0;
+            
+            const priorHarvestQuantity = matchedCycle.harvestQuantity || 0;
+            const totalNewHarvestQuantity = priorHarvestQuantity + harvestQty;
+            
+            let unitCost = 0;
+            if (bedHarvestType === 'final') {
+              unitCost = totalNewHarvestQuantity > 0 ? originalCosts / totalNewHarvestQuantity : 0;
+            } else {
+              unitCost = originalCosts / (matchedCycle.quantityPlanted || 1);
+            }
 
-            // Mark as harvested
+            const isFinal = bedHarvestType === 'final';
+            const newStatus = isFinal ? 'harvested' : 'growing';
+
+            const harvestLog = {
+              date: recordTimestamp,
+              description: isFinal 
+                ? `Colheita Final via Prontuário realizada: ${harvestQty} ${matchedCycle.unit || 'unidades'}. Lote encerrado.` 
+                : `Colheita Parcial via Prontuário realizada: ${harvestQty} ${matchedCycle.unit || 'unidades'}. Lote continua ativo.`,
+              products: []
+            };
+
+            // Mark as harvested / update production
             await updateDoc(doc(db, 'production', matchedCycle.id), {
-              status: 'harvested',
-              harvestQuantity: harvestQty,
-              remainingQuantity: harvestQty,
+              status: newStatus,
+              harvestQuantity: increment(harvestQty),
+              remainingQuantity: increment(harvestQty),
               harvestDate: recordTimestamp,
-              unitCost
+              unitCost,
+              logs: [...(matchedCycle.logs || []), harvestLog]
             });
             productionId = matchedCycle.id;
 
@@ -355,7 +382,9 @@ export default function BedRecordsComponent() {
                 date: serverTimestamp()
               });
             }
-            syncResultText = `✓ Colheita computada no estoque de expedição! Ciclo de produção fechado como colhido.`;
+            syncResultText = isFinal 
+              ? `✓ Colheita computada no estoque de expedição! Ciclo de produção finalizado.`
+              : `✓ Colheita parcial de ${harvestQty} computada no estoque! O ciclo continua Ativo para mais colheitas.`;
           } else {
             syncResultText = `⚠️ Colheita salva, mas não havia ciclo de [${crop}] ativo crescendo no [${bedId}].`;
           }
@@ -1087,31 +1116,69 @@ export default function BedRecordsComponent() {
                 )}
 
                 {activityType === 'harvest' && (
-                  <div className="grid grid-cols-2 gap-4 bg-rose-50/50 p-4 rounded-2xl border border-rose-100">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-600 uppercase mb-2">Qtd Colhida*</label>
-                      <input 
-                        type="number"
-                        required
-                        placeholder="Ex: 45"
-                        value={quantity}
-                        onChange={(e) => setQuantity(e.target.value)}
-                        className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
-                      />
+                  <div className="space-y-4 bg-emerald-50/40 p-4 rounded-2xl border border-emerald-100">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-600 uppercase mb-2">Qtd Colhida*</label>
+                        <input 
+                          type="number"
+                          required
+                          placeholder="Ex: 45"
+                          value={quantity}
+                          onChange={(e) => setQuantity(e.target.value)}
+                          className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-medium"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-600 uppercase mb-2">Unidade*</label>
+                        <select
+                          value={unit}
+                          onChange={(e) => setUnit(e.target.value)}
+                          className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm text-slate-700 font-bold"
+                        >
+                          <option value="kg">Quilos (kg)</option>
+                          <option value="maços">Maços</option>
+                          <option value="cabeças">Cabeças (un)</option>
+                          <option value="unidades">Unidades</option>
+                          <option value="caixas">Caixas</option>
+                        </select>
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-600 uppercase mb-2">Unidade*</label>
-                      <select
-                        value={unit}
-                        onChange={(e) => setUnit(e.target.value)}
-                        className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm text-slate-700 font-medium"
-                      >
-                        <option value="kg">Quilos (kg)</option>
-                        <option value="maços">Maços</option>
-                        <option value="cabeças">Cabeças (un)</option>
-                        <option value="unidades">Unidades</option>
-                        <option value="caixas">Caixas</option>
-                      </select>
+
+                    <div className="space-y-2 border-t border-emerald-100/60 pt-3">
+                      <label className="block text-xs font-bold text-slate-600 uppercase">Tipo de Colheita*</label>
+                      <div className="grid grid-cols-2 gap-2 mt-1">
+                        <button
+                          type="button"
+                          onClick={() => setBedHarvestType('partial')}
+                          className={cn(
+                            "flex items-center justify-center py-2.5 px-3 border rounded-xl text-xs font-bold transition-all",
+                            bedHarvestType === 'partial' 
+                              ? "bg-emerald-600 border-emerald-600 text-white shadow-md shadow-emerald-50" 
+                              : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                          )}
+                        >
+                          Parcial (manter ativo)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setBedHarvestType('final')}
+                          className={cn(
+                            "flex items-center justify-center py-2.5 px-3 border rounded-xl text-xs font-bold transition-all",
+                            bedHarvestType === 'final' 
+                              ? "bg-emerald-600 border-emerald-600 text-white shadow-md shadow-emerald-50" 
+                              : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                          )}
+                        >
+                          Final (encerrar canteiro)
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-slate-400 font-medium leading-normal mt-1">
+                        {bedHarvestType === 'partial' 
+                          ? '✓ O canteiro continua "Em Crescimento" e novos registros de colheita poderão ser feitos.' 
+                          : '✓ O canteiro será encerrado e marcado como concluído.'
+                        }
+                      </p>
                     </div>
                   </div>
                 )}

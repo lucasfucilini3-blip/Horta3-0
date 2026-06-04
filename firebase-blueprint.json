@@ -205,6 +205,47 @@
         "createdBy": { "type": "string" }
       },
       "required": ["timestamp", "createdBy"]
+    },
+    "Fair": {
+      "title": "Fair Cycle",
+      "description": "Tracking sales and inventory for off-site fairs.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["active", "closed"] },
+        "totalSalesAmount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "closedAt": { "type": "string", "format": "date-time" },
+        "closingReturnToInventory": { "type": "boolean" },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "itemId": { "type": "string" },
+              "name": { "type": "string" },
+              "unit": { "type": "string" },
+              "price": { "type": "number" },
+              "costPrice": { "type": "number" },
+              "initialQty": { "type": "number" },
+              "soldQty": { "type": "number" },
+              "remainingQty": { "type": "number" },
+              "lostQty": { "type": "number" },
+              "returnedToInventory": { "type": "boolean" }
+            }
+          }
+        },
+        "closingPayments": {
+          "type": "object",
+          "properties": {
+            "pix": { "type": "number" },
+            "cash": { "type": "number" },
+            "card": { "type": "number" }
+          }
+        }
+      },
+      "required": ["name", "status", "totalSalesAmount", "items"]
     }
   },
   "firestore": {
@@ -251,6 +292,10 @@
     "/backups/{backupId}": {
       "schema": "Backup",
       "description": "Database backup snapshots."
+    },
+    "/fairs/{fairId}": {
+      "schema": "Fair",
+      "description": "Fairs and mobile market sales tracking."
     }
   }
 }

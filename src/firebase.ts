@@ -793,7 +793,7 @@ export function writeBatch(dbInstance: any) {
 }
 
 export async function dbImportData(jsonData: any, currentUserProfile: any) {
-  const collections = ['users', 'customers', 'categories', 'inventory', 'sales', 'transactions', 'production', 'tasks', 'bed_records', 'inventory_history', 'backups'];
+  const collections = ['users', 'customers', 'categories', 'inventory', 'sales', 'transactions', 'production', 'tasks', 'bed_records', 'inventory_history', 'backups', 'fairs'];
   
   // Set in local cache/storage first as fallback
   for (const colName of collections) {
@@ -899,7 +899,8 @@ export async function migrateLocalDataToFirebaseFirestore(uid: string) {
     'tasks',
     'bed_records',
     'inventory_history',
-    'backups'
+    'backups',
+    'fairs'
   ];
   
   try {
@@ -965,7 +966,8 @@ export async function uploadLocalDataToFirebaseCloud() {
     'tasks',
     'bed_records',
     'inventory_history',
-    'backups'
+    'backups',
+    'fairs'
   ];
   
   for (const colName of collectionsToMigrate) {

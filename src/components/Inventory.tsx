@@ -46,6 +46,10 @@ export default function Inventory() {
   const [customStartDate, setCustomStartDate] = useState<string>('');
   const [customEndDate, setCustomEndDate] = useState<string>('');
 
+  const [rawHist, setRawHist] = useState<any[]>([]);
+  const [rawTrans, setRawTrans] = useState<any[]>([]);
+  const [rawProd, setRawProd] = useState<any[]>([]);
+
   useEffect(() => {
     if (editingItem) {
       setModalType(editingItem.type);
@@ -255,19 +259,168 @@ export default function Inventory() {
       setLoading(false);
     });
 
-    // Real-time general history subscription
+    // Real-time general history raw logs subscription
     const histQ = query(collection(db, 'inventory_history'), orderBy('date', 'desc'));
     const unsubHist = onSnapshot(histQ, (snapshot) => {
-      const logs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setGlobalHistory(logs);
-      setLoadingHistory(false);
+      setRawHist(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     }, (error) => {
       console.error("Erro ao carregar historico geral:", error);
-      setLoadingHistory(false);
     });
 
-    return () => { unsubscribe(); catUnsubscribe(); unsubHist(); };
+    // Real-time general transactions subscription
+    const transQ = query(collection(db, 'transactions'), where('category', '==', 'Compra de Insumos'), orderBy('date', 'desc'));
+    const unsubTrans = onSnapshot(transQ, (snapshot) => {
+      setRawTrans(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (error) => {
+      console.error("Erro ao carregar transações financeiras:", error);
+    });
+
+    // Real-time general production subscription
+    const prodQ = query(collection(db, 'production'));
+    const unsubProd = onSnapshot(prodQ, (snapshot) => {
+      setRawProd(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (error) => {
+      console.error("Erro ao carregar produções antigas:", error);
+    });
+
+    return () => { 
+      unsubscribe(); 
+      catUnsubscribe(); 
+      unsubHist(); 
+      unsubTrans();
+      unsubProd();
+    };
   }, []);
+
+  // Reactive combination of raw logs, transactions, and production transplante entries to reconstruct comprehensive general history
+  useEffect(() => {
+    if (loading) return;
+
+    // 1. Process transactions to create dynamic inputs (legacy fallback and comprehensive report)
+    const mappedTrans = rawTrans
+      .map(t => {
+        const desc = t.description || '';
+        const matchedItem = items.find(item => desc.toLowerCase().includes(item.name.toLowerCase()));
+        if (!matchedItem) return null;
+
+        const tTime = t.date ? (t.date.seconds ? t.date.seconds * 1000 : new Date(t.date).getTime()) : 0;
+        
+        // Prevent duplicate with inventory_history logs
+        const hasDuplicateHist = rawHist.some(h => {
+          const hTime = h.date ? (h.date.seconds ? h.date.seconds * 1000 : new Date(h.date).getTime()) : 0;
+          return h.itemId === matchedItem.id && Math.abs(tTime - hTime) < 60000;
+        });
+
+        if (hasDuplicateHist) return null;
+
+        let quantity = 0;
+        let supplier = '';
+        const qtyMatch = desc.match(/\(([\d,.]+)\s*(\w+)?\)/);
+        if (qtyMatch) {
+          quantity = Number(qtyMatch[1].replace(',', '.'));
+        }
+        const supplierMatch = desc.match(/fornecedor:\s*([^-)(]+)/i) || desc.match(/de onde:\s*([^-)(]+)/i);
+        if (supplierMatch) {
+          supplier = supplierMatch[1].trim();
+        }
+
+        return {
+          id: `trans-${t.id}`,
+          itemId: matchedItem.id,
+          itemName: matchedItem.name,
+          quantity: quantity || 0,
+          unit: matchedItem.unit,
+          costPrice: quantity ? t.amount / quantity : 0,
+          price: matchedItem.price || 0,
+          type: 'add_stock',
+          description: desc,
+          supplier: supplier || null,
+          date: t.date,
+          isFromTransaction: true
+        };
+      })
+      .filter(Boolean);
+
+    // 2. Process production transplant entries (Mudas)
+    const mappedProdLogs: any[] = [];
+    const seedlingItems = items.filter(item => item.category === 'Mudas' || item.name.toLowerCase().includes('muda'));
+
+    rawProd.forEach(p => {
+      const isTransplanted = p.productionType === 'bed' && (p.plantingSource === 'internal_seedlings' || p.transplantDate);
+      if (!isTransplanted) return;
+
+      const normalizedCropName = (p.crop || '').replace(/^(Mudas?\s+de\s+)/i, '').trim().toLowerCase();
+      if (!normalizedCropName) return;
+
+      const matchedItem = seedlingItems.find(item => {
+        const normalizedItemName = item.name.replace(/^(Mudas?\s+de\s+)/i, '').trim().toLowerCase();
+        return normalizedItemName === normalizedCropName || item.name.toLowerCase().includes(normalizedCropName);
+      });
+
+      if (!matchedItem) return;
+
+      const qty = p.quantityPlanted || 0;
+      const totalCost = p.totalCost || 0;
+      const unitCost = qty > 0 ? totalCost / qty : 0;
+      
+      const sowingDate = p.plantingDate || p.createdAt || p.date;
+      const transplantDate = p.transplantDate || p.updatedAt || p.date;
+      
+      const tTime = transplantDate ? (transplantDate.seconds ? transplantDate.seconds * 1000 : new Date(transplantDate).getTime()) : 0;
+      
+      const hasAddDuplicate = rawHist.some(h => {
+        if (h.type !== 'add_stock' || h.itemId !== matchedItem.id) return false;
+        const hTime = h.date ? (h.date.seconds ? h.date.seconds * 1000 : new Date(h.date).getTime()) : 0;
+        return Math.abs(tTime - hTime) < 30 * 60 * 1000;
+      });
+      
+      const hasUseDuplicate = rawHist.some(h => {
+        if (h.type !== 'use_stock' || h.itemId !== matchedItem.id) return false;
+        const hTime = h.date ? (h.date.seconds ? h.date.seconds * 1000 : new Date(h.date).getTime()) : 0;
+        return Math.abs(tTime - hTime) < 30 * 60 * 1000;
+      });
+      
+      if (!hasAddDuplicate) {
+        mappedProdLogs.push({
+          id: `prod-add-${p.id}`,
+          itemId: matchedItem.id,
+          itemName: matchedItem.name,
+          quantity: qty,
+          unit: matchedItem.unit || 'mudas',
+          costPrice: unitCost,
+          price: 0,
+          type: 'add_stock',
+          description: `Entrada via produção de mudas (Estufa de Origem) [Histórico Sincronizado]`,
+          date: sowingDate || transplantDate
+        });
+      }
+      
+      if (!hasUseDuplicate) {
+        mappedProdLogs.push({
+          id: `prod-use-${p.id}`,
+          itemId: matchedItem.id,
+          itemName: matchedItem.name,
+          quantity: -qty,
+          unit: matchedItem.unit || 'mudas',
+          costPrice: unitCost,
+          price: 0,
+          type: 'use_stock',
+          description: `Saída via transplante para canteiro de destino: ${p.bed || 'Canteiro'} [Histórico Sincronizado]`,
+          date: transplantDate
+        });
+      }
+    });
+
+    const combined = [...rawHist, ...mappedTrans, ...mappedProdLogs];
+    combined.sort((a, b) => {
+      const aTime = a.date ? (a.date.seconds ? a.date.seconds * 1000 : new Date(a.date).getTime()) : 0;
+      const bTime = b.date ? (b.date.seconds ? b.date.seconds * 1000 : new Date(b.date).getTime()) : 0;
+      return bTime - aTime;
+    });
+
+    setGlobalHistory(combined);
+    setLoadingHistory(false);
+  }, [items, loading, rawHist, rawTrans, rawProd]);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();

@@ -16,11 +16,23 @@
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
     <script>
+      // Clear all service worker registrations and cache storage to force-load the latest updates
       if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js')
-            .then((reg) => console.log('Service Worker registrado com sucesso: ', reg.scope))
-            .catch((err) => console.error('Falha ao registrar o Service Worker: ', err));
+        navigator.serviceWorker.getRegistrations().then((registrations) => {
+          for (let registration of registrations) {
+            registration.unregister().then(() => {
+              console.log('Service Worker removido para atualizar o app.');
+            });
+          }
+        });
+      }
+      if ('caches' in window) {
+        caches.keys().then((names) => {
+          for (let name of names) {
+            caches.delete(name).then(() => {
+              console.log('Cache limpo: ' + name);
+            });
+          }
         });
       }
     </script>

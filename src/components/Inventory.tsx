@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { collection, query, onSnapshot, addDoc, updateDoc, doc, deleteDoc as firestoreDeleteDoc, serverTimestamp, orderBy, where, increment } from 'firebase/firestore';
 import { db } from '../firebase';
 import { InventoryItem, InventoryCategory, Category } from '../types';
-import { Plus, Search, Filter, MoreVertical, Edit2, Trash2, AlertTriangle, Package, X as CloseIcon, ArrowDownCircle, Settings2, Tag, ShoppingCart, Scroll } from 'lucide-react';
+import { Plus, Search, Filter, MoreVertical, Edit2, Trash2, AlertTriangle, Package, X as CloseIcon, ArrowDownCircle, Settings2, Tag, ShoppingCart, Scroll, ArrowUpRight, ArrowDownRight, FileText, Download, Calendar } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth, handleFirestoreError, OperationType } from '../App';
 import { clsx, type ClassValue } from 'clsx';
@@ -36,6 +36,15 @@ export default function Inventory() {
   const [modalType, setModalType] = useState<'input' | 'dispatch'>('input');
   const [searchTerm, setSearchTerm] = useState('');
   const [historyLogs, setHistoryLogs] = useState<any[]>([]);
+
+  // States for general history report
+  const [activeTab, setActiveTab] = useState<'items' | 'history'>('items');
+  const [globalHistory, setGlobalHistory] = useState<any[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(true);
+  const [filterType, setFilterType] = useState<string>('all');
+  const [filterPeriod, setFilterPeriod] = useState<string>('all');
+  const [customStartDate, setCustomStartDate] = useState<string>('');
+  const [customEndDate, setCustomEndDate] = useState<string>('');
 
   useEffect(() => {
     if (editingItem) {
@@ -246,7 +255,18 @@ export default function Inventory() {
       setLoading(false);
     });
 
-    return () => { unsubscribe(); catUnsubscribe(); };
+    // Real-time general history subscription
+    const histQ = query(collection(db, 'inventory_history'), orderBy('date', 'desc'));
+    const unsubHist = onSnapshot(histQ, (snapshot) => {
+      const logs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setGlobalHistory(logs);
+      setLoadingHistory(false);
+    }, (error) => {
+      console.error("Erro ao carregar historico geral:", error);
+      setLoadingHistory(false);
+    });
+
+    return () => { unsubscribe(); catUnsubscribe(); unsubHist(); };
   }, []);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -523,6 +543,158 @@ export default function Inventory() {
     </div>
   );
 
+  // --- Global History calculations ---
+  const filteredHistory = globalHistory.filter(log => {
+    // 1. Search filter (item name or description)
+    const matchesSearch = 
+      (log.itemName || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
+      (log.description || '').toLowerCase().includes(searchTerm.toLowerCase());
+      
+    // 2. Category filter
+    const itemObj = items.find(i => i.id === log.itemId);
+    const itemCategory = itemObj ? itemObj.category : '';
+    const matchesCategory = filterCategory === 'all' || itemCategory === filterCategory;
+    
+    // 3. Type filter
+    let matchesType = true;
+    const qty = Number(log.quantity) || 0;
+    if (filterType === 'entries') {
+      matchesType = qty > 0;
+    } else if (filterType === 'exits') {
+      matchesType = qty < 0;
+    } else if (filterType === 'adjustments') {
+      matchesType = log.type === 'adjustment_in' || log.type === 'adjustment_out';
+    } else if (filterType === 'harvest') {
+      matchesType = log.type === 'harvest';
+    } else if (filterType === 'use_stock') {
+      matchesType = log.type === 'use_stock' || log.type === 'use_planting';
+    }
+    
+    // 4. Date period filter
+    let matchesDate = true;
+    if (log.date) {
+      const logDate = log.date.toDate ? log.date.toDate() : new Date(log.date.seconds * 1000 || log.date);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      if (filterPeriod === 'today') {
+        const itemDay = new Date(logDate);
+        itemDay.setHours(0, 0, 0, 0);
+        matchesDate = itemDay.getTime() === today.getTime();
+      } else if (filterPeriod === 'week') {
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+        matchesDate = logDate >= sevenDaysAgo;
+      } else if (filterPeriod === 'month') {
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        matchesDate = logDate >= thirtyDaysAgo;
+      } else if (filterPeriod === 'current_month') {
+        matchesDate = logDate.getMonth() === today.getMonth() && logDate.getFullYear() === today.getFullYear();
+      } else if (filterPeriod === 'custom') {
+        if (customStartDate) {
+          const sDate = new Date(customStartDate);
+          sDate.setHours(0, 0, 0, 0);
+          matchesDate = matchesDate && logDate >= sDate;
+        }
+        if (customEndDate) {
+          const eDate = new Date(customEndDate);
+          eDate.setHours(23, 59, 59, 999);
+          matchesDate = matchesDate && logDate <= eDate;
+        }
+      }
+    }
+    
+    return matchesSearch && matchesCategory && matchesType && matchesDate;
+  });
+
+  const stats = filteredHistory.reduce((acc, log) => {
+    const qty = Number(log.quantity) || 0;
+    const value = Math.abs(qty * (log.costPrice || log.price || 0));
+    
+    if (qty > 0) {
+      acc.totalEntriesQty += qty;
+      acc.totalEntriesValue += value;
+      acc.entriesCount += 1;
+    } else {
+      acc.totalExitsQty += Math.abs(qty);
+      acc.totalExitsValue += value;
+      acc.exitsCount += 1;
+    }
+    return acc;
+  }, {
+    totalEntriesQty: 0,
+    totalEntriesValue: 0,
+    entriesCount: 0,
+    totalExitsQty: 0,
+    totalExitsValue: 0,
+    exitsCount: 0
+  });
+
+  const handleExportCSV = (dataToExport: any[]) => {
+    const headers = [
+      'Data',
+      'Item',
+      'Tipo de Operacao',
+      'Quantidade',
+      'Unidade',
+      'Custo Unitario (R$)',
+      'Preco Venda (R$)',
+      'Valor Total (R$)',
+      'Descricao',
+      'Fornecedor/Origem/Canteiro'
+    ];
+    
+    const rows = dataToExport.map(log => {
+      const gDate = log.date ? (
+        typeof log.date.toDate === 'function' ? 
+        log.date.toDate() : 
+        new Date(log.date.seconds * 1000 || log.date)
+      ) : new Date();
+      
+      const dateStr = gDate.toLocaleDateString('pt-BR') + ' ' + gDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      
+      const typeLabel = 
+        log.type === 'initial' ? 'Cadastro Inicial' :
+        log.type === 'add_stock' ? 'Entrada / Compra' :
+        log.type === 'use_stock' ? 'Saida de Mudas' :
+        log.type === 'harvest' ? 'Colheita' :
+        log.type === 'adjustment_in' ? 'Ajuste de Entrada' :
+        log.type === 'adjustment_out' ? 'Ajuste de Saida' :
+        log.type === 'use_planting' ? 'Consumo Insumo' :
+        'Movimentacao';
+        
+      const refPrice = log.costPrice || log.price || 0;
+      const totalVal = Math.abs((Number(log.quantity) || 0) * refPrice);
+      
+      return [
+        `"${dateStr}"`,
+        `"${log.itemName || ''}"`,
+        `"${typeLabel}"`,
+        log.quantity || 0,
+        `"${log.unit || ''}"`,
+        refPrice,
+        log.price || 0,
+        totalVal,
+        `"${(log.description || '').replace(/"/g, '""')}"`,
+        `"${(log.supplier || '').replace(/"/g, '""')}"`
+      ];
+    });
+    
+    const csvString = [headers.join(';'), ...rows.map(e => e.join(';'))].join('\n');
+    const blob = new Blob(["\uFEFF" + csvString], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", `relatorio_movimentacoes_estoque_${new Date().toISOString().slice(0,10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const activeTabClass = "bg-white text-emerald-600 shadow-sm ring-1 ring-slate-200/60";
+  const inactiveTabClass = "text-slate-500 hover:text-slate-700 hover:bg-slate-200/50";
+
   return (
     <div className="space-y-6 md:space-y-8">
       <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -548,43 +720,365 @@ export default function Inventory() {
         </div>
       </header>
 
-      <div className="flex flex-col md:flex-row gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
-        <div className="flex-1 relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
-          <input 
-            type="text" 
-            placeholder="Buscar no estoque..." 
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-sm md:text-base"
-          />
-        </div>
-        <div className="flex items-center gap-2">
-          <Filter className="text-slate-400 shrink-0" size={20} />
-          <select 
-            value={filterCategory}
-            onChange={(e) => setFilterCategory(e.target.value)}
-            className="flex-1 md:flex-none bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm md:text-base"
-          >
-            <option value="all">Todas Categorias</option>
-            {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-          </select>
-        </div>
+      {/* Tabs Selector */}
+      <div className="flex flex-wrap bg-slate-200/50 p-1.5 rounded-2xl w-full md:w-fit gap-1">
+        <button
+          onClick={() => setActiveTab('items')}
+          className={cn(
+            "flex-1 md:flex-none px-6 py-2.5 rounded-xl text-sm font-bold transition-all duration-200",
+            activeTab === 'items' ? activeTabClass : inactiveTabClass
+          )}
+        >
+          <div className="flex items-center justify-center gap-2">
+            <Package size={18} />
+            Itens em Estoque
+          </div>
+        </button>
+        <button
+          onClick={() => setActiveTab('history')}
+          className={cn(
+            "flex-1 md:flex-none px-6 py-2.5 rounded-xl text-sm font-bold transition-all duration-200",
+            activeTab === 'history' ? activeTabClass : inactiveTabClass
+          )}
+        >
+          <div className="flex items-center justify-center gap-2">
+            <Scroll size={18} />
+            Histórico de Entradas / Saídas
+          </div>
+        </button>
       </div>
 
-      <div className="grid grid-cols-1 gap-8">
-        <InventoryTable 
-          items={inputItems} 
-          title="Estoque de Entrada (Insumos)" 
-          icon={Package} 
-        />
-        
-        <InventoryTable 
-          items={dispatchItems} 
-          title="Estoque de Expedição (Produtos)" 
-          icon={ShoppingCart} 
-        />
-      </div>
+      {activeTab === 'items' ? (
+        <>
+          <div className="flex flex-col md:flex-row gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+            <div className="flex-1 relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+              <input 
+                type="text" 
+                placeholder="Buscar no estoque..." 
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-sm md:text-base"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Filter className="text-slate-400 shrink-0" size={20} />
+              <select 
+                value={filterCategory}
+                onChange={(e) => setFilterCategory(e.target.value)}
+                className="flex-1 md:flex-none bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm md:text-base"
+              >
+                <option value="all">Todas Categorias</option>
+                {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-8">
+            <InventoryTable 
+              items={inputItems} 
+              title="Estoque de Entrada (Insumos)" 
+              icon={Package} 
+            />
+            
+            <InventoryTable 
+              items={dispatchItems} 
+              title="Estoque de Expedição (Produtos)" 
+              icon={ShoppingCart} 
+            />
+          </div>
+        </>
+      ) : (
+        <div className="space-y-6 animate-in fade-in duration-200">
+          {/* Metrics summary cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
+              <div className="p-3 bg-emerald-50 rounded-xl text-emerald-600">
+                <ArrowUpRight size={24} />
+              </div>
+              <div>
+                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Entradas / Ajustes In</span>
+                <span className="text-xl md:text-2xl font-bold text-slate-850 block">
+                  R$ {stats.totalEntriesValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+                <span className="text-[10px] text-slate-500 block mt-0.5">{stats.totalEntriesQty.toFixed(2)} unidades em {stats.entriesCount} operações</span>
+              </div>
+            </div>
+
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
+              <div className="p-3 bg-rose-50 rounded-xl text-rose-600">
+                <ArrowDownRight size={24} />
+              </div>
+              <div>
+                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Saídas / Consumo</span>
+                <span className="text-xl md:text-2xl font-bold text-slate-850 block">
+                  R$ {stats.totalExitsValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+                <span className="text-[10px] text-slate-500 block mt-0.5">{stats.totalExitsQty.toFixed(2)} unidades em {stats.exitsCount} operações</span>
+              </div>
+            </div>
+
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4 sm:col-span-2 lg:col-span-1">
+              <div className={cn(
+                "p-3 rounded-xl",
+                (stats.totalEntriesValue - stats.totalExitsValue) >= 0 ? "bg-indigo-50 text-indigo-600" : "bg-slate-100 text-slate-600"
+              )}>
+                <FileText size={24} />
+              </div>
+              <div>
+                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Balanço do Período</span>
+                <span className={cn(
+                  "text-xl md:text-2xl font-extrabold block",
+                  (stats.totalEntriesValue - stats.totalExitsValue) >= 0 ? "text-emerald-600" : "text-rose-650"
+                )}>
+                  R$ {(stats.totalEntriesValue - stats.totalExitsValue).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+                <span className="text-[10px] text-slate-450 block mt-0.5">Diferença total de movimentações</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Extended filters */}
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+            <div className="flex flex-col lg:flex-row gap-4">
+              <div className="flex-1 relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+                <input 
+                  type="text" 
+                  placeholder="Buscar por item, descrição ou origem..." 
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-sm md:text-base font-semibold"
+                />
+              </div>
+
+              <div className="flex flex-wrap gap-2 items-center">
+                {/* Category select block */}
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase mr-1">Cat.</span>
+                  <select 
+                    value={filterCategory}
+                    onChange={(e) => setFilterCategory(e.target.value)}
+                    className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs md:text-sm font-bold"
+                  >
+                    <option value="all">Todas Categorias</option>
+                    {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                  </select>
+                </div>
+
+                {/* Operation/Type select block */}
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase mr-1">Operação</span>
+                  <select 
+                    value={filterType}
+                    onChange={(e) => setFilterType(e.target.value)}
+                    className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs md:text-sm font-bold"
+                  >
+                    <option value="all">Todas</option>
+                    <option value="entries">Apenas Entradas</option>
+                    <option value="exits">Apenas Saídas</option>
+                    <option value="harvest">Colheitas</option>
+                    <option value="adjustments">Ajustes</option>
+                    <option value="use_stock">Consumos / Desvios</option>
+                  </select>
+                </div>
+
+                {/* Period select block */}
+                <div className="flex items-center gap-1">
+                  <Calendar className="text-slate-400 shrink-0" size={16} />
+                  <select 
+                    value={filterPeriod}
+                    onChange={(e) => setFilterPeriod(e.target.value)}
+                    className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs md:text-sm font-bold"
+                  >
+                    <option value="all">Qualquer Data</option>
+                    <option value="today">Hoje</option>
+                    <option value="week">Últimos 7 dias</option>
+                    <option value="month">Últimos 30 dias</option>
+                    <option value="current_month">Este Mês</option>
+                    <option value="custom">Período Customizado...</option>
+                  </select>
+                </div>
+
+                {/* Export button */}
+                <button 
+                  onClick={() => handleExportCSV(filteredHistory)}
+                  disabled={filteredHistory.length === 0}
+                  className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-4 py-2.5 rounded-xl font-bold hover:bg-emerald-100 transition-all text-xs md:text-sm disabled:opacity-50 h-full flex items-center gap-1.5 cursor-pointer leading-none"
+                  title="Exportar dados para Excel (.CSV)"
+                >
+                  <Download size={15} />
+                  <span>Excel CSV</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Custom interval rows */}
+            {filterPeriod === 'custom' && (
+              <div className="flex flex-wrap gap-4 items-center bg-slate-50 p-4 rounded-xl border border-slate-100 animate-in slide-in-from-top-2 duration-200">
+                <span className="text-[11px] font-black text-slate-500 uppercase">Intervalo Personalizado:</span>
+                <div className="flex items-center gap-2">
+                  <input 
+                    type="date"
+                    value={customStartDate}
+                    onChange={(e) => setCustomStartDate(e.target.value)}
+                    className="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs font-semibold"
+                  />
+                  <span className="text-slate-400 text-xs font-semibold">até</span>
+                  <input 
+                    type="date"
+                    value={customEndDate}
+                    onChange={(e) => setCustomEndDate(e.target.value)}
+                    className="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-xs font-semibold"
+                  />
+                </div>
+                {(customStartDate || customEndDate) && (
+                  <button 
+                    onClick={() => { setCustomStartDate(''); setCustomEndDate(''); }}
+                    className="text-xs font-black text-rose-500 hover:underline hover:text-rose-600 transition-colors"
+                  >
+                    Limpar
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Table display */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Scroll size={20} className="text-emerald-600" />
+                <h3 className="font-bold text-slate-800 text-sm md:text-base">Histórico Geral de Movimentações</h3>
+              </div>
+              <span className="px-2.5 py-1 bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-lg text-[10px] font-black uppercase">
+                {filteredHistory.length} lançamentos
+              </span>
+            </div>
+
+            <div className="overflow-x-auto scrollbar-hide">
+              <table className="w-full text-left border-collapse min-w-[750px] md:min-w-full">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200/60">
+                    <th className="px-6 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">Data / Hora</th>
+                    <th className="px-6 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">Item</th>
+                    <th className="px-6 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">Operação</th>
+                    <th className="px-6 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">Quantidade</th>
+                    <th className="px-6 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">Preço Ref.</th>
+                    <th className="px-6 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">Valor Total</th>
+                    <th className="px-6 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">Detalhamento / Histórico</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {loadingHistory ? (
+                    <tr>
+                      <td colSpan={7} className="text-center py-12">
+                        <div className="flex flex-col items-center justify-center gap-3">
+                          <div className="w-8 h-8 rounded-full border-4 border-emerald-500 border-t-transparent animate-spin" />
+                          <span className="text-sm font-semibold text-slate-500">Buscando histórico na nuvem...</span>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : filteredHistory.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="px-6 py-12 text-center text-slate-400 italic font-semibold">
+                        Nenhuma movimentação de estoque encontrada para os filtros ativos.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredHistory.map((log) => {
+                      const qtyVal = Number(log.quantity) || 0;
+                      const isPositive = qtyVal > 0;
+                      
+                      const logDate = log.date ? (
+                        typeof log.date.toDate === 'function' ? 
+                        log.date.toDate() : 
+                        new Date(log.date.seconds * 1000 || log.date)
+                      ) : new Date();
+
+                      const formattedDate = logDate.toLocaleDateString('pt-BR', { 
+                        day: '2-digit', 
+                        month: '2-digit', 
+                        year: 'numeric' 
+                      });
+                      const formattedTime = logDate.toLocaleTimeString('pt-BR', { 
+                        hour: '2-digit', 
+                        minute: '2-digit' 
+                      });
+
+                      const badgeColor = 
+                        log.type === 'initial' ? 'bg-slate-100 text-slate-700 border-slate-200' :
+                        log.type === 'add_stock' ? 'bg-emerald-100 text-emerald-800 border-emerald-200' :
+                        log.type === 'use_stock' ? 'bg-rose-100 text-rose-800 border-rose-200' :
+                        log.type === 'harvest' ? 'bg-blue-100 text-blue-800 border-blue-200' :
+                        log.type === 'adjustment_in' ? 'bg-indigo-100 text-indigo-800 border-indigo-200' :
+                        log.type === 'adjustment_out' ? 'bg-amber-100 text-amber-800 border-amber-200' :
+                        log.type === 'use_planting' ? 'bg-orange-100 text-orange-850 border-orange-200' :
+                        'bg-indigo-50 text-indigo-700 border-indigo-100';
+
+                      const typeLabel = 
+                        log.type === 'initial' ? 'Cadastro Inicial' :
+                        log.type === 'add_stock' ? 'Entrada / Compra' :
+                        log.type === 'use_stock' ? 'Saída Mudas / Venda' :
+                        log.type === 'harvest' ? 'Colheita' :
+                        log.type === 'adjustment_in' ? 'Ajuste In' :
+                        log.type === 'adjustment_out' ? 'Ajuste Out' :
+                        log.type === 'use_planting' ? 'Consumo Insumo' :
+                        'Movimentação';
+
+                      const refPrice = log.costPrice || log.price || 0;
+                      const totalValue = Math.abs(qtyVal * refPrice);
+
+                      return (
+                        <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="flex flex-col text-xs font-semibold text-slate-700">
+                              <span>{formattedDate}</span>
+                              <span className="text-slate-400 font-medium text-[10px]">{formattedTime}</span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className="font-extrabold text-slate-800 text-sm">{log.itemName || 'Sem Nome'}</span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <span className={cn("px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase border whitespace-nowrap/80", badgeColor)}>
+                              {typeLabel}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <span className={cn(
+                              "font-bold text-sm",
+                              isPositive ? "text-emerald-600" : "text-rose-600"
+                            )}>
+                              {isPositive ? `+${qtyVal.toFixed(2)}` : qtyVal.toFixed(2)} {log.unit}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-xs font-bold text-slate-500">
+                            {refPrice > 0 ? `R$ ${refPrice.toFixed(2)}` : '-'}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap font-extrabold text-sm text-slate-800">
+                            {totalValue > 0 ? `R$ ${totalValue.toFixed(2)}` : '-'}
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="flex flex-col space-y-1">
+                              <p className="text-xs font-semibold text-slate-655 line-clamp-2 max-w-sm md:max-w-md lg:max-w-lg">{log.description}</p>
+                              {log.supplier && (
+                                <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50/40 border border-indigo-100/50 px-1.5 py-0.5 rounded-md w-fit">
+                                  Origem/Fornecedor: {log.supplier}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Category Management Modal */}
       <AnimatePresence>

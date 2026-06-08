@@ -26,7 +26,8 @@ import {
   Thermometer,
   Maximize2,
   ShoppingBag,
-  ArrowUpDown
+  ArrowUpDown,
+  RotateCcw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth, handleFirestoreError, OperationType } from '../App';
@@ -772,6 +773,13 @@ export default function ProductionComponent() {
   const [isTransplantModalOpen, setTransplantModalOpen] = useState(false);
   const [transplantError, setTransplantError] = useState<string | null>(null);
 
+  const [isRevertHarvestModalOpen, setRevertHarvestModalOpen] = useState(false);
+  const [productionToRevertHarvest, setProductionToRevertHarvest] = useState<Production | null>(null);
+  const [revertError, setRevertError] = useState<string | null>(null);
+  const [revertHarvestQty, setRevertHarvestQty] = useState<number>(0);
+  const [revertHarvestLogIndex, setRevertHarvestLogIndex] = useState<number>(-1);
+  const [revertHarvestLogDesc, setRevertHarvestLogDesc] = useState<string>('');
+
   const handleTransplantSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!selectedProduction) return;
@@ -1057,6 +1065,135 @@ export default function ProductionComponent() {
     } catch (error: any) {
       console.error(error);
       alert('Erro ao tentar desfazer transplante: ' + (error.message || error));
+      handleFirestoreError(error, OperationType.WRITE, 'production');
+    }
+  };
+
+  const prepareRevertHarvest = (p: Production) => {
+    setRevertError(null);
+    setRevertHarvestQty(0);
+    setRevertHarvestLogIndex(-1);
+    setRevertHarvestLogDesc('');
+    setProductionToRevertHarvest(p);
+    setRevertHarvestModalOpen(true);
+
+    if (!p.logs || p.logs.length === 0) {
+      setRevertError("Nenhum registro de atividades encontrado para este lote.");
+      return;
+    }
+
+    // Find the last harvest log
+    const harvestLogIndex = [...p.logs].reverse().findIndex(log => 
+      log.description && (
+        log.description.includes('Colheita Final') || 
+        log.description.includes('Colheita Parcial') ||
+        log.description.includes('via Prontuário realizada')
+      )
+    );
+
+    if (harvestLogIndex === -1) {
+      setRevertError("Nenhuma colheita registrada foi encontrada nos registros deste lote.");
+      return;
+    }
+
+    const realIndex = p.logs.length - 1 - harvestLogIndex;
+    const lastHarvestLog = p.logs[realIndex];
+
+    // Parse quantity
+    const match = lastHarvestLog.description.match(/realizada: ([\d.,]+)/i);
+    if (!match) {
+      setRevertError("Não foi possível identificar a quantidade colhida no registro.");
+      return;
+    }
+
+    const qtyStr = match[1].replace(',', '.');
+    const harvestQty = Number(qtyStr);
+    if (isNaN(harvestQty) || harvestQty <= 0) {
+      setRevertError("Quantidade colhida inválida encontrada no registro.");
+      return;
+    }
+
+    setRevertHarvestQty(harvestQty);
+    setRevertHarvestLogIndex(realIndex);
+    setRevertHarvestLogDesc(lastHarvestLog.description);
+  };
+
+  const executeRevertLastHarvest = async () => {
+    if (!productionToRevertHarvest) return;
+    const p = productionToRevertHarvest;
+
+    try {
+      if (revertHarvestLogIndex === -1 || revertHarvestQty <= 0) {
+        setRevertError("Dados de colheita inválidos ou não carregados.");
+        return;
+      }
+
+      // Step 2: Remove or adjust in inventory / stock.
+      const invQ = query(collection(db, 'inventory'), where('name', '==', p.crop));
+      const invSnap = await getDocs(invQ);
+
+      if (!invSnap.empty) {
+        const existingDoc = invSnap.docs[0];
+        const existingData = existingDoc.data();
+        const currentQty = existingData.quantity || 0;
+        
+        // Subtract the harvested quantity from the main inventory.
+        const revertedQty = Math.max(0, currentQty - revertHarvestQty);
+
+        await updateDoc(doc(db, 'inventory', existingDoc.id), {
+          quantity: revertedQty,
+          lastUpdated: serverTimestamp()
+        });
+
+        // Add compensation log or delete history log to preserve auditable track
+        await addDoc(collection(db, 'inventory_history'), {
+          itemId: existingDoc.id,
+          itemName: p.crop,
+          quantity: -revertHarvestQty,
+          unit: p.unit,
+          costPrice: p.unitCost || 0,
+          price: existingData.price || 0,
+          type: 'harvest',
+          description: `Estorno de colheita por desfazer última colheita (Canteiro: ${p.bed})`,
+          date: serverTimestamp()
+        });
+      }
+
+      // Step 3: Update parent Production Document
+      const newLogs = [...p.logs];
+      newLogs.splice(revertHarvestLogIndex, 1); // Remove the harvest log
+
+      const priorTotalHarvestQty = p.harvestQuantity || 0;
+      const newHarvestQuantity = Math.max(0, priorTotalHarvestQty - revertHarvestQty);
+      const newRemainingQuantity = Math.max(0, (p.remainingQuantity || 0) - revertHarvestQty);
+
+      const newStatus = 'growing';
+
+      await updateDoc(doc(db, 'production', p.id), {
+        status: newStatus,
+        harvestQuantity: newHarvestQuantity,
+        remainingQuantity: newRemainingQuantity,
+        logs: newLogs,
+        unitCost: newHarvestQuantity > 0 ? (p.totalCost || 0) / newHarvestQuantity : deleteField(),
+        harvestDate: newHarvestQuantity > 0 ? p.harvestDate : deleteField()
+      });
+
+      if (focusedProduction?.id === p.id) {
+        setFocusedProduction(prev => prev ? {
+          ...prev,
+          status: newStatus,
+          harvestQuantity: newHarvestQuantity,
+          remainingQuantity: newRemainingQuantity,
+          logs: newLogs
+        } : null);
+      }
+
+      setRevertHarvestModalOpen(false);
+      setProductionToRevertHarvest(null);
+      setRevertError(null);
+    } catch (error: any) {
+      console.error(error);
+      setRevertError('Erro ao desfazer colheita: ' + (error.message || error));
       handleFirestoreError(error, OperationType.WRITE, 'production');
     }
   };
@@ -1433,6 +1570,15 @@ export default function ProductionComponent() {
                               >
                                 <Package size={16} />
                                 Processar Cultura
+                              </button>
+                            )}
+                            {p.logs?.some(l => l.description && (l.description.includes('Colheita Final') || l.description.includes('Colheita Parcial'))) && (
+                              <button 
+                                onClick={() => prepareRevertHarvest(p)}
+                                className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-amber-50 hover:text-amber-600 transition-colors"
+                              >
+                                <RotateCcw size={16} />
+                                Desfazer Última Colheita
                               </button>
                             )}
                         </div>
@@ -2602,6 +2748,100 @@ export default function ProductionComponent() {
         )}
       </AnimatePresence>
 
+      {/* Modal para Desfazer Última Colheita */}
+      <AnimatePresence>
+        {isRevertHarvestModalOpen && productionToRevertHarvest && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => { setRevertHarvestModalOpen(false); setProductionToRevertHarvest(null); setRevertError(null); }}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" 
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative bg-white w-full max-w-lg rounded-[2rem] shadow-2xl overflow-y-auto max-h-[90vh]"
+            >
+              <div className="p-8">
+                <div className="flex items-center justify-between mb-6">
+                  <h3 className="text-2xl font-bold text-amber-600 flex items-center gap-2">
+                    <RotateCcw size={24} />
+                    Desfazer Última Colheita
+                  </h3>
+                  <button onClick={() => { setRevertHarvestModalOpen(false); setProductionToRevertHarvest(null); setRevertError(null); }} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full">
+                    <XCircle size={24} />
+                  </button>
+                </div>
+
+                {revertError ? (
+                  <div className="space-y-4">
+                    <div className="p-4 bg-rose-50 border border-rose-200 text-rose-700 rounded-2xl text-xs font-bold leading-relaxed">
+                      {revertError}
+                    </div>
+                    <button 
+                      onClick={() => { setRevertHarvestModalOpen(false); setProductionToRevertHarvest(null); setRevertError(null); }}
+                      className="w-full px-6 py-4 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-2xl font-bold transition-all text-sm"
+                    >
+                      Voltar
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    <p className="text-sm text-slate-600 leading-relaxed">
+                      Você está prestes a desfazer o último registro de colheita realizado para este lote.
+                    </p>
+
+                    <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 space-y-2">
+                      <p className="text-sm font-bold text-amber-900">Cultura: {productionToRevertHarvest.crop}</p>
+                      <p className="text-xs text-amber-800">Local/Canteiro: <b className="font-black">{productionToRevertHarvest.bed}</b></p>
+                      <p className="text-xs text-amber-800">Status Atual: <b className="font-black text-rose-600 uppercase">{productionToRevertHarvest.status}</b></p>
+                      {revertHarvestQty > 0 && (
+                        <p className="text-xs text-amber-1000 font-bold text-amber-900">
+                          Quantidade a ser estornada do estoque: {revertHarvestQty} {productionToRevertHarvest.unit}
+                        </p>
+                      )}
+                      {revertHarvestLogDesc && (
+                        <p className="text-[11px] text-amber-700 leading-tight bg-white/60 p-2.5 rounded-xl border border-amber-200/50 italic mt-2">
+                          Registro: {revertHarvestLogDesc}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/60 text-xs text-slate-500 leading-relaxed">
+                      📌 <b className="text-slate-700">O que vai acontecer?</b>
+                      <ul className="list-disc pl-4 mt-1.5 space-y-1">
+                        <li>O canteiro/lote voltará para o status original <b className="text-emerald-600">"Em Crescimento"</b>.</li>
+                        <li>A quantidade colhida ({revertHarvestQty} {productionToRevertHarvest.unit}) será removida do estoque da Expedição de forma automática.</li>
+                        <li>Um registro de estorno será gerado no histórico do seu estoque para manter a auditoria.</li>
+                      </ul>
+                    </div>
+
+                    <div className="pt-4 flex gap-3">
+                      <button 
+                        type="button" 
+                        onClick={() => { setRevertHarvestModalOpen(false); setProductionToRevertHarvest(null); }}
+                        className="flex-1 px-6 py-4 rounded-2xl font-bold text-slate-600 hover:bg-slate-50 transition-colors text-sm"
+                      >
+                        Cancelar
+                      </button>
+                      <button 
+                        onClick={executeRevertLastHarvest}
+                        className="flex-1 px-6 py-4 bg-amber-600 text-white rounded-2xl font-bold hover:bg-amber-700 transition-all shadow-lg shadow-amber-100 text-sm"
+                      >
+                        Confirmar e Desfazer
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Modal de Visão Focada */}
       <AnimatePresence>
         {focusedProduction && (
@@ -2662,6 +2902,15 @@ export default function ProductionComponent() {
                       >
                         <ArrowLeft size={14} />
                         Desfazer Transplante
+                      </button>
+                    )}
+                    {focusedProduction.logs?.some(l => l.description && (l.description.includes('Colheita Final') || l.description.includes('Colheita Parcial'))) && (
+                      <button 
+                        onClick={() => prepareRevertHarvest(focusedProduction)}
+                        className="px-4 py-2 bg-amber-50 text-amber-700 rounded-2xl border border-amber-200 shadow-sm flex items-center gap-2 hover:bg-amber-100 transition-all font-bold text-xs"
+                      >
+                        <RotateCcw size={14} />
+                        Desfazer Última Colheita
                       </button>
                     )}
                     <button 

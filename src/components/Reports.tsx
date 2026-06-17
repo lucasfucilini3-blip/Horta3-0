@@ -31,23 +31,34 @@ export default function Reports() {
   // Safe Firebase date parser
   const parseFirebaseDate = (val: any): Date | null => {
     if (!val) return null;
-    if (val instanceof Date) return val;
-    if (typeof val.toDate === 'function') {
+    let d: Date;
+    if (val instanceof Date) {
+      d = val;
+    } else if (typeof val.toDate === 'function') {
       try {
-        return val.toDate();
-      } catch (e) {}
+        d = val.toDate();
+      } catch (e) {
+        return null;
+      }
+    } else if (typeof val.seconds === 'number') {
+      d = new Date(val.seconds * 1000);
+    } else if (typeof val._seconds === 'number') {
+      d = new Date(val._seconds * 1000);
+    } else {
+      d = new Date(val);
     }
-    if (typeof val.seconds === 'number') {
-      return new Date(val.seconds * 1000);
+
+    if (isNaN(d.getTime())) return null;
+
+    // Se a data estiver exatamente em UTC 00:00:00 (geralmente gerada por novos inputs de data sem horário de venda normal)
+    // normalizamos para o meio-dia (12:00:00) local para evitar distorções de fuso horário que jogam a data pro dia anterior
+    const utcHours = d.getUTCHours();
+    const utcMinutes = d.getUTCMinutes();
+    if (utcHours === 0 && utcMinutes === 0) {
+      return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 12, 0, 0);
     }
-    if (typeof val._seconds === 'number') {
-      return new Date(val._seconds * 1000);
-    }
-    const d = new Date(val);
-    if (!isNaN(d.getTime())) {
-      return d;
-    }
-    return null;
+
+    return d;
   };
 
   const safeFormatDate = (val: any, formatStr: string = "dd/MM/yyyy") => {
@@ -64,6 +75,10 @@ export default function Reports() {
   const filteredPendingDeliveries = sales.filter((s) => {
     const isPending = s.status === 'ordered' || s.status === 'pending_delivery' || s.status === 'pending';
     if (!isPending) return false;
+
+    // Garante que é uma entrega (tem flag isDelivery OU tem uma data de entrega definida OU tem endereço preenchido)
+    const hasDeliveryIntent = s.isDelivery === true || !!s.deliveryDate || !!s.deliveryAddress?.trim();
+    if (!hasDeliveryIntent) return false;
 
     if (deliveryFilterPreset === 'all') {
       return true;

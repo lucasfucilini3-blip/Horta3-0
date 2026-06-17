@@ -28,6 +28,38 @@ export default function Reports() {
   const [deliveryDateStart, setDeliveryDateStart] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [deliveryDateEnd, setDeliveryDateEnd] = useState(format(subDays(new Date(), -7), 'yyyy-MM-dd'));
 
+  // Safe Firebase date parser
+  const parseFirebaseDate = (val: any): Date | null => {
+    if (!val) return null;
+    if (val instanceof Date) return val;
+    if (typeof val.toDate === 'function') {
+      try {
+        return val.toDate();
+      } catch (e) {}
+    }
+    if (typeof val.seconds === 'number') {
+      return new Date(val.seconds * 1000);
+    }
+    if (typeof val._seconds === 'number') {
+      return new Date(val._seconds * 1000);
+    }
+    const d = new Date(val);
+    if (!isNaN(d.getTime())) {
+      return d;
+    }
+    return null;
+  };
+
+  const safeFormatDate = (val: any, formatStr: string = "dd/MM/yyyy") => {
+    const d = parseFirebaseDate(val);
+    if (!d) return 'Sem data';
+    try {
+      return format(d, formatStr, { locale: ptBR });
+    } catch (e) {
+      return 'Sem data';
+    }
+  };
+
   // Filter pending delivery sales based on selected date or preset
   const filteredPendingDeliveries = sales.filter((s) => {
     const isPending = s.status === 'ordered' || s.status === 'pending_delivery' || s.status === 'pending';
@@ -37,7 +69,7 @@ export default function Reports() {
       return true;
     }
 
-    const dDate = s.deliveryDate?.toDate ? s.deliveryDate.toDate() : (s.deliveryDate ? new Date(s.deliveryDate) : null);
+    const dDate = parseFirebaseDate(s.deliveryDate);
     if (!dDate) return false;
 
     const todayDate = new Date();
@@ -1399,7 +1431,7 @@ export default function Reports() {
               </thead>
               <tbody className="divide-y divide-slate-100 text-xs">
                 {filteredPendingDeliveries.map((s, idx) => {
-                  const dDate = s.deliveryDate?.toDate ? s.deliveryDate.toDate() : (s.deliveryDate ? new Date(s.deliveryDate) : null);
+                  const dDate = parseFirebaseDate(s.deliveryDate);
                   return (
                     <tr key={s.id} className="hover:bg-slate-50/30 transition-colors">
                       <td className="py-1.5 px-3">
@@ -1419,7 +1451,7 @@ export default function Reports() {
                         {dDate ? (
                           <div className="flex items-center gap-1 font-bold text-slate-700 text-[10px] bg-slate-50 border border-slate-100 px-1.5 py-0.5 rounded w-max">
                             <Calendar size={10} className="text-amber-500 shrink-0" />
-                            {format(dDate, "dd/MM/yyyy")}
+                            {safeFormatDate(s.deliveryDate, "dd/MM/yyyy")}
                           </div>
                         ) : (
                           <span className="text-[10px] text-slate-400 italic">Não agendado</span>
@@ -1514,108 +1546,207 @@ export default function Reports() {
       </div>
 
       {/* PRINT-ONLY RELATÓRIO DE ENTREGAS */}
-      <div className="hidden print:block font-sans p-4 space-y-6 bg-white min-h-screen text-slate-900">
+      <style dangerouslySetInnerHTML={{ __html: `
+        @media print {
+          /* Force plain white page setup */
+          body, html, #root {
+            background: white !important;
+            color: black !important;
+            width: 100% !important;
+            height: auto !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            overflow: visible !important;
+          }
+          
+          /* Hide non-printable app containers */
+          .print\\:hidden, 
+          aside, 
+          header, 
+          button, 
+          nav {
+            display: none !important;
+          }
+          
+          /* Force report visualization to fill the screen */
+          .print\\:block {
+            display: block !important;
+          }
+
+          /* Set A4 standard page rules */
+          @page {
+            size: A4 portrait;
+            margin: 10mm 12mm 10mm 12mm;
+          }
+
+          /* Avoid breaking cards in half across pages */
+          .print-item-card {
+            break-inside: avoid !important;
+            page-break-inside: avoid !important;
+            border: 1px solid #1e293b !important;
+          }
+        }
+      `}} />
+
+      <div className="hidden print:block font-sans p-6 space-y-6 bg-white min-h-screen text-slate-900">
         {/* Header da Folha */}
         <div className="border-b-4 border-slate-900 pb-4 flex justify-between items-end">
           <div>
-            <h1 className="text-xl font-black text-slate-900 tracking-tight uppercase">RELATÓRIO DE ENTREGAS (DELIVERY)</h1>
-            <p className="text-xs text-slate-500 mt-1 font-bold">Horta e Produção Orgânica - Lista de Remessas Pendentes</p>
+            <h1 className="text-2xl font-black text-slate-900 tracking-tight uppercase">Manifesto de Entregas Pendentes</h1>
+            <p className="text-sm text-slate-500 mt-1 font-bold">Relação de Remessas para Entrega em Campo e Logística</p>
           </div>
-          <div className="text-right text-[10px] text-slate-500 font-medium">
-            <p><b>Emissão:</b> {format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}</p>
-            <p>
+          <div className="text-right text-[11px] text-slate-600 font-medium">
+            <p className="font-bold">Emissão: <span className="font-mono text-xs">{format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}</span></p>
+            <p className="mt-0.5">
               <b>Período:</b> {
                 deliveryFilterPreset === 'all' ? 'Todas as Pendentes' :
-                deliveryFilterPreset === 'today' ? 'Hoje' :
+                deliveryFilterPreset === 'today' ? 'Hoje (Hoje)' :
                 deliveryFilterPreset === 'tomorrow' ? 'Amanhã' :
                 deliveryFilterPreset === 'next7' ? 'Próximos 7 Dias' :
-                `De ${deliveryDateStart ? format(new Date(deliveryDateStart + 'T12:00:00'), 'dd/MM/yyyy') : 'Início'} até ${deliveryDateEnd ? format(new Date(deliveryDateEnd + 'T12:00:00'), 'dd/MM/yyyy') : 'Fim'}`
+                `De ${deliveryDateStart ? safeFormatDate(deliveryDateStart) : 'Início'} até ${deliveryDateEnd ? safeFormatDate(deliveryDateEnd) : 'Fim'}`
               }
             </p>
           </div>
         </div>
 
-        {/* Resumo da Carga */}
-        <div className="grid grid-cols-2 gap-4">
-          <div className="border border-slate-300 p-2.5 rounded-lg bg-slate-50">
-            <p className="text-[8px] font-black uppercase text-slate-400">Total de Entregas</p>
-            <p className="text-base font-black text-slate-800">{filteredPendingDeliveries.length} pedidos pendentes</p>
+        {/* Resumo de Carga */}
+        <div className="grid grid-cols-2 gap-4 border border-slate-300 p-4 rounded-xl bg-slate-50">
+          <div>
+            <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Quantidade Total</p>
+            <p className="text-xl font-extrabold text-slate-800">{filteredPendingDeliveries.length} pedidos pendentes</p>
           </div>
-          <div className="border border-slate-300 p-2.5 rounded-lg text-right bg-slate-50">
-            <p className="text-[8px] font-black uppercase text-slate-400">Faturamento da Remessa</p>
-            <p className="text-base font-black text-emerald-700">R$ {filteredPendingDeliveries.reduce((acc, s) => acc + s.total, 0).toFixed(2)}</p>
+          <div className="text-right">
+            <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Valor em Remessa</p>
+            <p className="text-xl font-extrabold text-emerald-700">R$ {filteredPendingDeliveries.reduce((acc, s) => acc + s.total, 0).toFixed(2)}</p>
           </div>
         </div>
 
-        {/* Pedidos Iterados */}
-        <div className="space-y-4">
+        {/* Lista de Fichas de Entrega */}
+        <div className="space-y-6">
           {filteredPendingDeliveries.map((s, index) => {
-            const saleDate = s.deliveryDate?.toDate ? s.deliveryDate.toDate() : (s.deliveryDate ? new Date(s.deliveryDate) : null);
+            const saleDate = parseFirebaseDate(s.deliveryDate);
             return (
-              <div key={s.id} className="border border-slate-400 rounded-lg p-3 space-y-2.5 break-inside-avoid bg-white">
-                <div className="flex justify-between items-center border-b border-dashed border-slate-200 pb-1.5">
-                  <div>
-                    <h3 className="text-sm font-black text-slate-900">{s.customerName}</h3>
+              <div key={s.id} className="print-item-card border border-slate-400 rounded-xl p-5 space-y-4 bg-white shadow-sm">
+                
+                {/* Cabeçalho da Ficha */}
+                <div className="flex justify-between items-start border-b border-slate-300 pb-2.5">
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Destinatário / Cliente:</span>
+                    <h3 className="text-base font-black text-slate-900 leading-none">{s.customerName}</h3>
                     {getCustomerPhone(s) && (
-                      <p className="text-[10px] font-bold text-slate-500">Contato: {getCustomerPhone(s)}</p>
+                      <p className="text-xs font-bold text-slate-600 mt-1">Contato: <span className="font-mono text-sm">{getCustomerPhone(s)}</span></p>
                     )}
                   </div>
-                  <div className="text-right">
-                    <span className="text-[10px] font-black bg-slate-900 text-white px-2 py-0.5 rounded mr-1">
+                  <div className="text-right flex flex-col items-end gap-1">
+                    <span className="text-xs font-black bg-slate-900 text-white px-3 py-1 rounded">
+                      ENTREGA {index + 1} de {filteredPendingDeliveries.length}
+                    </span>
+                    <span className="text-[11px] font-bold text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded uppercase">
                       PEDIDO {s.saleNumber || `#${index + 1}`}
                     </span>
-                    {saleDate && (
-                      <span className="text-[10px] font-bold border border-slate-300 bg-slate-50 px-2 py-0.5 rounded text-slate-700">
-                        Entrega: {format(saleDate, "dd/MM/yyyy")}
+                  </div>
+                </div>
+
+                {/* Bloco de Endereço em Destaque */}
+                <div className="bg-slate-50/50 border border-slate-300 rounded-lg p-3">
+                  <span className="text-[10px] font-black uppercase text-slate-500 tracking-wider leading-none block">Endereço de Destino:</span>
+                  <p className="font-extrabold text-slate-900 text-sm leading-snug mt-1.5 uppercase">
+                    {s.deliveryAddress || "Retirada Local / Balcão da Horta"}
+                  </p>
+                </div>
+
+                {/* Checklist de Produtos */}
+                <div className="space-y-2">
+                  <span className="text-[10px] font-black uppercase text-slate-500 tracking-wider leading-none">Checklist de Itens do Pedido (Conferir e marcar):</span>
+                  <div className="border border-slate-300 rounded-lg overflow-hidden">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="bg-slate-100 border-b border-slate-300 text-[10px] font-black uppercase text-slate-500 tracking-wider">
+                          <th className="py-2 px-3 w-8 text-center">[ X ]</th>
+                          <th className="py-2 px-3">Nome do Produto</th>
+                          <th className="py-2 px-3 text-center">Unidades / Peso</th>
+                          <th className="py-2 px-3 text-right">Preço Un.</th>
+                          <th className="py-2 px-3 text-right">Subtotal</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {s.items.map((item, i) => {
+                          const itemPrice = typeof item.price === 'number' ? item.price : Number(item.price) || 0;
+                          const itemQty = typeof item.quantity === 'number' ? item.quantity : Number(item.quantity) || 0;
+                          return (
+                            <tr key={i} className="text-slate-800 font-medium">
+                              <td className="py-2 px-3 text-center font-mono font-bold text-base text-slate-400 border-r border-slate-200">[  ]</td>
+                              <td className="py-2 px-3 font-bold text-slate-900 text-[13px]">{item.name}</td>
+                              <td className="py-2 px-3 text-center font-black text-[13px] bg-slate-50/60 font-mono">{itemQty}x</td>
+                              <td className="py-2 px-3 text-right font-mono text-slate-600">R$ {itemPrice.toFixed(2)}</td>
+                              <td className="py-2 px-3 text-right font-black font-mono text-slate-900 text-[13px]">R$ {(itemPrice * itemQty).toFixed(2)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Grid de Informações Adicionais */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {/* Observações / Observatório */}
+                  <div className="border border-amber-300 bg-amber-50/50 p-3 rounded-lg">
+                    <span className="text-[10px] font-black text-amber-800 uppercase block tracking-wider leading-none">Observações de Entrega ou Troco:</span>
+                    <p className="text-slate-900 text-xs font-bold leading-relaxed mt-1.5 italic">
+                      {s.observations?.trim() ? s.observations : "Nenhuma instrução especial inserida."}
+                    </p>
+                  </div>
+
+                  {/* Informações Faturas e Assinaturas */}
+                  <div className="border border-slate-300 p-3 rounded-lg space-y-2">
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-slate-500 font-bold">Cobrança:</span>
+                      <span className="font-extrabold text-slate-900 uppercase font-mono">
+                        {s.paymentMethods && s.paymentMethods.length > 0 ? s.paymentMethods.map(pm => pm.method).join(', ') : 'Pagar na Entrega'}
                       </span>
-                    )}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-12 gap-1.5 text-xs">
-                  {/* Endereço */}
-                  <div className="col-span-12">
-                    <p className="text-[8px] font-black uppercase text-slate-400 leading-none">Endereço de Entrega:</p>
-                    <p className="font-bold text-slate-800 leading-tight mt-0.5">{s.deliveryAddress || "Retirada Local / Não Cadastrado"}</p>
-                  </div>
-                </div>
-
-                {/* Itens do Pedido */}
-                <div className="bg-slate-50 p-2 rounded border border-slate-200">
-                  <p className="text-[8px] font-black uppercase text-slate-400 mb-1 leading-none">Itens Relacionados:</p>
-                  <div className="grid grid-cols-1 gap-1 text-[11px]">
-                    {s.items.map((item, i) => (
-                      <div key={i} className="flex justify-between border-b border-slate-100 last:border-0 pb-0.5 last:pb-0 font-medium text-slate-700">
-                        <span>{item.quantity}x {item.name}</span>
-                        <span className="font-bold text-slate-800">
-                          R$ {(item.price * item.quantity).toFixed(2)} <span className="text-[9px] text-slate-400 font-normal">(R$ {item.price.toFixed(2)} un)</span>
+                    </div>
+                    
+                    {/* Data Programada */}
+                    {saleDate && (
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="text-slate-500 font-bold">Data Agendada:</span>
+                        <span className="font-extrabold text-slate-900 uppercase font-mono">
+                          {safeFormatDate(s.deliveryDate, "dd/MM/yyyy")}
                         </span>
                       </div>
-                    ))}
+                    )}
+
+                    <div className="flex justify-between items-center text-xs border-t border-dashed border-slate-300 pt-1.5">
+                      <span className="text-slate-700 font-black uppercase text-[10px]">Valor do Recebimento:</span>
+                      <span className="font-black text-emerald-800 text-sm font-mono">
+                        R$ {s.total.toFixed(2)}
+                      </span>
+                    </div>
                   </div>
                 </div>
 
-                {/* Observações */}
-                {s.observations && (
-                  <div className="bg-amber-50 border border-amber-200 p-1.5 rounded text-[10px]">
-                    <span className="text-[8px] font-black text-amber-800 uppercase block leading-none">Observações / Troco:</span>
-                    <p className="text-amber-950 font-bold leading-normal mt-0.5">{s.observations}</p>
+                {/* Box de Assinatura */}
+                <div className="border-t border-dashed border-slate-300 pt-3 flex flex-col sm:flex-row sm:justify-between items-center gap-4 text-xs">
+                  <div className="flex items-center gap-1.5 text-slate-500">
+                    <span className="font-bold">Status:</span>
+                    <span className="px-2 py-0.5 rounded font-bold text-[10px] tracking-wider uppercase bg-amber-100 text-amber-800 border border-amber-200">
+                      Remessa Pendente
+                    </span>
                   </div>
-                )}
-
-                {/* Linha de Recebimento */}
-                <div className="pt-2 flex justify-between items-center text-[9px] text-slate-400 border-t border-dashed border-slate-200">
-                  <span>Forma: {s.paymentMethods && s.paymentMethods.length > 0 ? s.paymentMethods.map(pm => pm.method).join(', ') : 'Pagar na Entrega'}</span>
-                  <span><b>Valor Total: R$ {s.total.toFixed(2)}</b></span>
-                  <span>Recebido por: ________________________ (Assinatura)</span>
+                  <div className="w-full sm:w-auto text-right flex items-center gap-2">
+                    <span className="text-slate-500 font-bold shrink-0">Assinatura do Recebedor:</span>
+                    <div className="border-b border-black w-48 h-5 font-mono text-[9px] text-slate-300 pl-2">Assinar aqui</div>
+                  </div>
                 </div>
+
               </div>
             );
           })}
 
           {filteredPendingDeliveries.length === 0 && (
-            <div className="text-center py-12 text-slate-400 italic border border-dashed border-slate-300 rounded-xl">
-              Nenhuma entrega pendente para este intervalo de datas.
+            <div className="text-center py-16 text-slate-400 italic font-bold border-2 border-dashed border-slate-300 rounded-xl">
+              Nenhuma entrega pendente registrada para a remessa atual neste intervalo de datas.
             </div>
           )}
         </div>

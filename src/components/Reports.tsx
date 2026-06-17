@@ -1545,7 +1545,7 @@ export default function Reports() {
       )}
       </div>
 
-      {/* PRINT-ONLY RELATÓRIO DE ENTREGAS */}
+      {/* PRINT-ONLY RELATÓRIO DE ENTREGAS COMPACTO EM TABELA */}
       <style dangerouslySetInnerHTML={{ __html: `
         /* Screen mode adjustment: completely hide the printed document from view */
         .only-print {
@@ -1582,36 +1582,33 @@ export default function Reports() {
             display: block !important;
           }
 
-          /* General A4 Page margins setup */
+          /* General A4 Page margins setup - optimized for high density */
           @page {
             size: A4 portrait;
-            margin: 10mm 12mm 10mm 12mm;
+            margin: 8mm 10mm 8mm 10mm;
           }
 
-          /* Prevent delivery cards from splitting awkwardly across A4 pages */
-          .print-item-card {
+          /* Prevent table rows from splitting awkwardly across A4 pages */
+          .print-item-row {
             break-inside: avoid !important;
             page-break-inside: avoid !important;
-            border: 1px solid #1e293b !important;
-            display: block !important;
-            margin-bottom: 20px !important;
           }
         }
       `}} />
 
-      <div className="only-print font-sans p-6 space-y-6 bg-white text-slate-900">
+      <div className="only-print font-sans p-2 bg-white text-slate-900 w-full">
         {/* Header da Folha */}
-        <div className="border-b-4 border-slate-900 pb-4 flex justify-between items-end">
+        <div className="border-b-[3px] border-slate-900 pb-2 flex justify-between items-end">
           <div>
-            <h1 className="text-2xl font-black text-slate-900 tracking-tight uppercase">Manifesto de Entregas Pendentes</h1>
-            <p className="text-sm text-slate-500 mt-1 font-bold">Relação de Remessas para Entrega em Campo e Logística</p>
+            <h1 className="text-xl font-black text-slate-900 tracking-tight uppercase">Manifesto de Entregas Pendentes</h1>
+            <p className="text-[10px] text-slate-500 font-bold mt-0.5 uppercase">Logística de Despacho e Entrega em Campo</p>
           </div>
-          <div className="text-right text-[11px] text-slate-600 font-medium">
-            <p className="font-bold">Emissão: <span className="font-mono text-xs">{format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}</span></p>
+          <div className="text-right text-[10px] text-slate-600 font-medium">
+            <p className="font-bold">Gerado: <span className="font-mono">{format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}</span></p>
             <p className="mt-0.5">
               <b>Período:</b> {
                 deliveryFilterPreset === 'all' ? 'Todas as Pendentes' :
-                deliveryFilterPreset === 'today' ? 'Hoje (Hoje)' :
+                deliveryFilterPreset === 'today' ? 'Hoje' :
                 deliveryFilterPreset === 'tomorrow' ? 'Amanhã' :
                 deliveryFilterPreset === 'next7' ? 'Próximos 7 Dias' :
                 `De ${deliveryDateStart ? safeFormatDate(deliveryDateStart) : 'Início'} até ${deliveryDateEnd ? safeFormatDate(deliveryDateEnd) : 'Fim'}`
@@ -1620,147 +1617,99 @@ export default function Reports() {
           </div>
         </div>
 
-        {/* Resumo de Carga */}
-        <div className="grid grid-cols-2 gap-4 border border-slate-300 p-4 rounded-xl bg-slate-50">
+        {/* Resumos de Carga */}
+        <div className="flex justify-between items-center text-[10px] border border-slate-300 px-3 py-1.5 rounded-lg bg-slate-50 my-2.5">
           <div>
-            <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Quantidade Total</p>
-            <p className="text-xl font-extrabold text-slate-800">{filteredPendingDeliveries.length} pedidos pendentes</p>
+            <span className="font-bold text-slate-500 uppercase tracking-wider text-[9px]">Total de Remessas:</span>{' '}
+            <span className="font-black text-slate-800 text-xs">{filteredPendingDeliveries.length} pedidos em rota</span>
           </div>
           <div className="text-right">
-            <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Valor em Remessa</p>
-            <p className="text-xl font-extrabold text-emerald-700">R$ {filteredPendingDeliveries.reduce((acc, s) => acc + s.total, 0).toFixed(2)}</p>
+            <span className="font-bold text-slate-500 uppercase tracking-wider text-[9px]">Valor Total a Receber:</span>{' '}
+            <span className="font-black text-emerald-800 text-xs">R$ {filteredPendingDeliveries.reduce((acc, s) => acc + s.total, 0).toFixed(2)}</span>
           </div>
         </div>
 
-        {/* Lista de Fichas de Entrega */}
-        <div className="space-y-6">
-          {filteredPendingDeliveries.map((s, index) => {
-            const saleDate = parseFirebaseDate(s.deliveryDate);
-            return (
-              <div key={s.id} className="print-item-card border border-slate-400 rounded-xl p-5 space-y-4 bg-white shadow-sm">
-                
-                {/* Cabeçalho da Ficha */}
-                <div className="flex justify-between items-start border-b border-slate-300 pb-2.5">
-                  <div className="space-y-0.5">
-                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Destinatário / Cliente:</span>
-                    <h3 className="text-base font-black text-slate-900 leading-none">{s.customerName}</h3>
+        {/* Quadro Geral em Tabela Altamente Compacta e Legível */}
+        <table className="w-full text-left border-collapse border border-slate-400">
+          <thead>
+            <tr className="bg-slate-100 text-[10px] font-black uppercase text-slate-700 tracking-wider">
+              <th className="py-1 px-1.5 border border-slate-400 text-center w-[6%] font-sans">Seq / Reg</th>
+              <th className="py-1 px-1.5 border border-slate-400 w-[18%]">Cliente / Contato</th>
+              <th className="py-1 px-1.5 border border-slate-400 w-[24%]">Endereço de Entrega</th>
+              <th className="py-1 px-1.5 border border-slate-400 w-[24%]">Itens do Pedido (Conferência)</th>
+              <th className="py-1 px-1.5 border border-slate-400 w-[13%]">Instruções / Obs</th>
+              <th className="py-1 px-1.5 border border-slate-400 w-[9%] text-right text-xs">Valor</th>
+              <th className="py-1 px-1.5 border border-slate-400 text-center w-[6%]">[ ✓ ]</th>
+            </tr>
+          </thead>
+          <tbody className="text-[10px] divide-y divide-slate-300">
+            {filteredPendingDeliveries.map((s, idx) => {
+              const saleDate = parseFirebaseDate(s.deliveryDate);
+              const pmStr = s.paymentMethods && s.paymentMethods.length > 0 
+                ? s.paymentMethods.map(pm => pm.method).join(', ') 
+                : 'Pagar na Entrega';
+
+              return (
+                <tr key={s.id} className="print-item-row break-inside-avoid text-slate-900 border-b border-slate-300">
+                  {/* Caixa de Verificação e Número de Sequência */}
+                  <td className="py-1.5 px-1.5 border border-slate-300 text-center font-mono font-bold whitespace-nowrap bg-slate-50/50">
+                    <span className="text-slate-400 text-xs mr-1">[  ]</span> #{s.saleNumber || `${idx + 1}`}
+                  </td>
+                  
+                  {/* Nome do Cliente e Contato */}
+                  <td className="py-1.5 px-1.5 border border-slate-300">
+                    <div className="font-extrabold text-slate-950 text-[11px] leading-tight">{s.customerName}</div>
                     {getCustomerPhone(s) && (
-                      <p className="text-xs font-bold text-slate-600 mt-1">Contato: <span className="font-mono text-sm">{getCustomerPhone(s)}</span></p>
+                      <div className="text-[9px] text-slate-500 font-bold mt-0.5 font-mono">{getCustomerPhone(s)}</div>
                     )}
-                  </div>
-                  <div className="text-right flex flex-col items-end gap-1">
-                    <span className="text-xs font-black bg-slate-900 text-white px-3 py-1 rounded">
-                      ENTREGA {index + 1} de {filteredPendingDeliveries.length}
-                    </span>
-                    <span className="text-[11px] font-bold text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded uppercase">
-                      PEDIDO {s.saleNumber || `#${index + 1}`}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Bloco de Endereço em Destaque */}
-                <div className="bg-slate-50/50 border border-slate-300 rounded-lg p-3">
-                  <span className="text-[10px] font-black uppercase text-slate-500 tracking-wider leading-none block">Endereço de Destino:</span>
-                  <p className="font-extrabold text-slate-900 text-sm leading-snug mt-1.5 uppercase">
-                    {s.deliveryAddress || "Retirada Local / Balcão da Horta"}
-                  </p>
-                </div>
-
-                {/* Checklist de Produtos */}
-                <div className="space-y-2">
-                  <span className="text-[10px] font-black uppercase text-slate-500 tracking-wider leading-none">Checklist de Itens do Pedido (Conferir e marcar):</span>
-                  <div className="border border-slate-300 rounded-lg overflow-hidden">
-                    <table className="w-full text-left text-xs border-collapse">
-                      <thead>
-                        <tr className="bg-slate-100 border-b border-slate-300 text-[10px] font-black uppercase text-slate-500 tracking-wider">
-                          <th className="py-2 px-3 w-8 text-center">[ X ]</th>
-                          <th className="py-2 px-3">Nome do Produto</th>
-                          <th className="py-2 px-3 text-center">Unidades / Peso</th>
-                          <th className="py-2 px-3 text-right">Preço Un.</th>
-                          <th className="py-2 px-3 text-right">Subtotal</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-200">
-                        {s.items.map((item, i) => {
-                          const itemPrice = typeof item.price === 'number' ? item.price : Number(item.price) || 0;
-                          const itemQty = typeof item.quantity === 'number' ? item.quantity : Number(item.quantity) || 0;
-                          return (
-                            <tr key={i} className="text-slate-800 font-medium">
-                              <td className="py-2 px-3 text-center font-mono font-bold text-base text-slate-400 border-r border-slate-200">[  ]</td>
-                              <td className="py-2 px-3 font-bold text-slate-900 text-[13px]">{item.name}</td>
-                              <td className="py-2 px-3 text-center font-black text-[13px] bg-slate-50/60 font-mono">{itemQty}x</td>
-                              <td className="py-2 px-3 text-right font-mono text-slate-600">R$ {itemPrice.toFixed(2)}</td>
-                              <td className="py-2 px-3 text-right font-black font-mono text-slate-900 text-[13px]">R$ {(itemPrice * itemQty).toFixed(2)}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                {/* Grid de Informações Adicionais */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {/* Observações / Observatório */}
-                  <div className="border border-amber-300 bg-amber-50/50 p-3 rounded-lg">
-                    <span className="text-[10px] font-black text-amber-800 uppercase block tracking-wider leading-none">Observações de Entrega ou Troco:</span>
-                    <p className="text-slate-900 text-xs font-bold leading-relaxed mt-1.5 italic">
-                      {s.observations?.trim() ? s.observations : "Nenhuma instrução especial inserida."}
-                    </p>
-                  </div>
-
-                  {/* Informações Faturas e Assinaturas */}
-                  <div className="border border-slate-300 p-3 rounded-lg space-y-2">
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="text-slate-500 font-bold">Cobrança:</span>
-                      <span className="font-extrabold text-slate-900 uppercase font-mono">
-                        {s.paymentMethods && s.paymentMethods.length > 0 ? s.paymentMethods.map(pm => pm.method).join(', ') : 'Pagar na Entrega'}
-                      </span>
+                  </td>
+                  
+                  {/* Endereço de Destino bem visível */}
+                  <td className="py-1.5 px-1.5 border border-slate-300 font-extrabold text-[10.5px] leading-tight text-slate-900 uppercase">
+                    {s.deliveryAddress || "Retirada Local / Horta"}
+                  </td>
+                  
+                  {/* Itens do Pedido bem organizados */}
+                  <td className="py-1.5 px-1.5 border border-slate-300">
+                    <div className="space-y-0.5">
+                      {s.items.map((item, i) => {
+                        const itemQty = typeof item.quantity === 'number' ? item.quantity : Number(item.quantity) || 0;
+                        return (
+                          <div key={i} className="flex justify-between font-bold leading-tight">
+                            <span><span className="font-mono text-xs font-black text-slate-900 bg-slate-100 px-1 py-0.2 rounded border border-slate-200 mr-1">{itemQty}x</span> {item.name}</span>
+                          </div>
+                        );
+                      })}
                     </div>
-                    
-                    {/* Data Programada */}
-                    {saleDate && (
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-slate-500 font-bold">Data Agendada:</span>
-                        <span className="font-extrabold text-slate-900 uppercase font-mono">
-                          {safeFormatDate(s.deliveryDate, "dd/MM/yyyy")}
-                        </span>
-                      </div>
-                    )}
+                  </td>
+                  
+                  {/* Instruções de entrega / Observações */}
+                  <td className="py-1.5 px-1.5 border border-slate-300 text-[9px] leading-tight text-slate-700 italic font-semibold">
+                    {s.observations?.trim() ? s.observations : "—"}
+                  </td>
+                  
+                  {/* Preço de cobrança e forma */}
+                  <td className="py-1.5 px-1.5 border border-slate-300 text-right font-mono whitespace-nowrap">
+                    <div className="font-black text-[11px] text-slate-950">R$ {s.total.toFixed(2)}</div>
+                    <div className="text-[8px] text-slate-500 font-extrabold font-sans uppercase tracking-tight">{pmStr}</div>
+                  </td>
 
-                    <div className="flex justify-between items-center text-xs border-t border-dashed border-slate-300 pt-1.5">
-                      <span className="text-slate-700 font-black uppercase text-[10px]">Valor do Recebimento:</span>
-                      <span className="font-black text-emerald-800 text-sm font-mono">
-                        R$ {s.total.toFixed(2)}
-                      </span>
-                    </div>
-                  </div>
-                </div>
+                  {/* Visto / Assinatura Compacta */}
+                  <td className="py-1.5 px-1 border border-slate-300 text-center font-mono text-[9px] text-slate-300 bg-slate-50/25">
+                    <div className="border-b border-dashed border-slate-400 w-full mt-2.5"></div>
+                    <div className="text-[7px] text-slate-400 mt-1 uppercase font-bold tracking-tighter">Assinatura</div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
 
-                {/* Box de Assinatura */}
-                <div className="border-t border-dashed border-slate-300 pt-3 flex flex-col sm:flex-row sm:justify-between items-center gap-4 text-xs">
-                  <div className="flex items-center gap-1.5 text-slate-500">
-                    <span className="font-bold">Status:</span>
-                    <span className="px-2 py-0.5 rounded font-bold text-[10px] tracking-wider uppercase bg-amber-100 text-amber-800 border border-amber-200">
-                      Remessa Pendente
-                    </span>
-                  </div>
-                  <div className="w-full sm:w-auto text-right flex items-center gap-2">
-                    <span className="text-slate-500 font-bold shrink-0">Assinatura do Recebedor:</span>
-                    <div className="border-b border-black w-48 h-5 font-mono text-[9px] text-slate-300 pl-2">Assinar aqui</div>
-                  </div>
-                </div>
-
-              </div>
-            );
-          })}
-
-          {filteredPendingDeliveries.length === 0 && (
-            <div className="text-center py-16 text-slate-400 italic font-bold border-2 border-dashed border-slate-300 rounded-xl">
-              Nenhuma entrega pendente registrada para a remessa atual neste intervalo de datas.
-            </div>
-          )}
-        </div>
+        {filteredPendingDeliveries.length === 0 && (
+          <div className="text-center py-10 text-slate-400 italic font-bold border border-dashed border-slate-300 rounded-lg text-xs">
+            Nenhuma entrega pendente registrada para a remessa atual neste intervalo de datas.
+          </div>
+        )}
       </div>
     </>
   );

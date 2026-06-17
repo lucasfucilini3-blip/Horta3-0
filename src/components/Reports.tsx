@@ -1547,56 +1547,15 @@ export default function Reports() {
 
       {/* PRINT-ONLY RELATÓRIO DE ENTREGAS COMPACTO EM TABELA */}
       <style dangerouslySetInnerHTML={{ __html: `
-        /* Screen mode adjustment: completely hide the printed document from view */
-        .only-print {
-          display: none !important;
-        }
-
         @media print {
-          /* Force standard document layout rules for the whole browser viewport on print */
-          html, body, #root, .min-h-screen, main, [class*="overflow-"], [class*="max-h-"] {
-            overflow: visible !important;
-            height: auto !important;
-            min-height: 0 !important;
-            max-height: none !important;
-            position: relative !important;
-            display: block !important;
-            background: white !important;
-            color: black !important;
-            margin: 0 !important;
-            padding: 0 !important;
-          }
-
-          /* Hide everything labeled screen-only or elements we don't want printed */
-          .no-print,
-          .print\\:hidden, 
-          aside, 
-          header, 
-          button, 
-          nav {
-            display: none !important;
-          }
-
-          /* Force our printable document section to display */
-          .only-print {
-            display: block !important;
-          }
-
-          /* General A4 Page margins setup - optimized for high density */
-          @page {
-            size: A4 portrait;
-            margin: 8mm 10mm 8mm 10mm;
-          }
-
-          /* Prevent table rows from splitting awkwardly across A4 pages */
-          .print-item-row {
+          tr.print-item-row {
             break-inside: avoid !important;
             page-break-inside: avoid !important;
           }
         }
       `}} />
 
-      <div className="only-print font-sans p-2 bg-white text-slate-900 w-full">
+      <div className="hidden print:block font-sans p-2 bg-white text-slate-900 w-full">
         {/* Header da Folha */}
         <div className="border-b-[3px] border-slate-900 pb-2 flex justify-between items-end">
           <div>

@@ -488,7 +488,7 @@ export default function Reports() {
   return (
     <>
       {/* Visualização de Tela (Oculta na impressão para layout limpo) */}
-      <div className="space-y-8 pb-12 print:hidden bg-transparent">
+      <div className="space-y-8 pb-12 print:hidden no-print bg-transparent">
       <header className="flex items-center justify-between print:hidden">
         <div>
           <h2 className="text-3xl font-bold text-slate-900">Relatórios e Custos</h2>
@@ -1547,19 +1547,28 @@ export default function Reports() {
 
       {/* PRINT-ONLY RELATÓRIO DE ENTREGAS */}
       <style dangerouslySetInnerHTML={{ __html: `
+        /* Screen mode adjustment: completely hide the printed document from view */
+        .only-print {
+          display: none !important;
+        }
+
         @media print {
-          /* Force plain white page setup */
-          body, html, #root {
+          /* Force standard document layout rules for the whole browser viewport on print */
+          html, body, #root, .min-h-screen, main, [class*="overflow-"], [class*="max-h-"] {
+            overflow: visible !important;
+            height: auto !important;
+            min-height: 0 !important;
+            max-height: none !important;
+            position: relative !important;
+            display: block !important;
             background: white !important;
             color: black !important;
-            width: 100% !important;
-            height: auto !important;
             margin: 0 !important;
             padding: 0 !important;
-            overflow: visible !important;
           }
-          
-          /* Hide non-printable app containers */
+
+          /* Hide everything labeled screen-only or elements we don't want printed */
+          .no-print,
           .print\\:hidden, 
           aside, 
           header, 
@@ -1567,28 +1576,30 @@ export default function Reports() {
           nav {
             display: none !important;
           }
-          
-          /* Force report visualization to fill the screen */
-          .print\\:block {
+
+          /* Force our printable document section to display */
+          .only-print {
             display: block !important;
           }
 
-          /* Set A4 standard page rules */
+          /* General A4 Page margins setup */
           @page {
             size: A4 portrait;
             margin: 10mm 12mm 10mm 12mm;
           }
 
-          /* Avoid breaking cards in half across pages */
+          /* Prevent delivery cards from splitting awkwardly across A4 pages */
           .print-item-card {
             break-inside: avoid !important;
             page-break-inside: avoid !important;
             border: 1px solid #1e293b !important;
+            display: block !important;
+            margin-bottom: 20px !important;
           }
         }
       `}} />
 
-      <div className="hidden print:block font-sans p-6 space-y-6 bg-white min-h-screen text-slate-900">
+      <div className="only-print font-sans p-6 space-y-6 bg-white text-slate-900">
         {/* Header da Folha */}
         <div className="border-b-4 border-slate-900 pb-4 flex justify-between items-end">
           <div>

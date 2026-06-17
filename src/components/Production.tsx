@@ -65,6 +65,19 @@ export default function ProductionComponent() {
   const [sortBy, setSortBy] = useState<'harvest' | 'planting'>('harvest');
   const [expandedBeds, setExpandedBeds] = useState<Record<string, boolean>>({});
 
+  // Batch Operation States
+  const [isBatchModalOpen, setBatchModalOpen] = useState(false);
+  const [batchBedName, setBatchBedName] = useState('');
+  const [batchProductions, setBatchProductions] = useState<Production[]>([]);
+  const [batchActionType, setBatchActionType] = useState<'manejo' | 'harvest'>('manejo');
+  const [selectedBatchProdIds, setSelectedBatchProdIds] = useState<Record<string, boolean>>({});
+  const [batchLogDescription, setBatchLogDescription] = useState('');
+  const [batchLogDate, setBatchLogDate] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedBatchLogProducts, setSelectedBatchLogProducts] = useState<LogProduct[]>([]);
+  const [batchHarvestQuantities, setBatchHarvestQuantities] = useState<Record<string, string>>({});
+  const [batchHarvestTypes, setBatchHarvestTypes] = useState<Record<string, 'partial' | 'final'>>({});
+  const [batchHarvestDate, setBatchHarvestDate] = useState(new Date().toISOString().split('T')[0]);
+
   useEffect(() => {
     const q = query(collection(db, 'production'), orderBy('plantingDate', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -332,6 +345,227 @@ export default function ProductionComponent() {
     setSelectedLogProducts(selectedLogProducts.map(p => 
       p.itemId === itemId ? { ...p, quantity } : p
     ));
+  };
+
+  const toggleBatchLogProduct = (item: InventoryItem) => {
+    const existing = selectedBatchLogProducts.find(p => p.itemId === item.id);
+    if (existing) {
+      setSelectedBatchLogProducts(selectedBatchLogProducts.filter(p => p.itemId !== item.id));
+    } else {
+      setSelectedBatchLogProducts([...selectedBatchLogProducts, { 
+        itemId: item.id, 
+        name: item.name, 
+        quantity: 1, 
+        unit: item.unit 
+      }]);
+    }
+  };
+
+  const updateBatchLogProductQuantity = (itemId: string, quantity: number) => {
+    setSelectedBatchLogProducts(selectedBatchLogProducts.map(p => 
+      p.itemId === itemId ? { ...p, quantity } : p
+    ));
+  };
+
+  const openBatchModal = (bedName: string, bedProds: Production[]) => {
+    const activeProds = bedProds.filter(p => p.status === 'growing');
+    setBatchBedName(bedName);
+    setBatchProductions(activeProds);
+    setBatchActionType('manejo');
+    
+    const initialSelected: Record<string, boolean> = {};
+    const initialHarvestTypes: Record<string, 'partial' | 'final'> = {};
+    const initialHarvestQuantities: Record<string, string> = {};
+    activeProds.forEach(p => {
+      initialSelected[p.id] = true;
+      initialHarvestTypes[p.id] = 'final';
+      initialHarvestQuantities[p.id] = '';
+    });
+    setSelectedBatchProdIds(initialSelected);
+    setBatchHarvestTypes(initialHarvestTypes);
+    setBatchHarvestQuantities(initialHarvestQuantities);
+    
+    setBatchLogDescription('');
+    setBatchLogDate(new Date().toISOString().split('T')[0]);
+    setSelectedBatchLogProducts([]);
+    setBatchHarvestDate(new Date().toISOString().split('T')[0]);
+    
+    setBatchModalOpen(true);
+  };
+
+  const handleBatchSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const selectedProdsToApply = batchProductions.filter(p => selectedBatchProdIds[p.id]);
+    if (selectedProdsToApply.length === 0) {
+      alert("Por favor, selecione pelo menos um cultivo ativo para aplicar a ação.");
+      return;
+    }
+
+    if (batchActionType === 'manejo') {
+      if (!batchLogDescription.trim()) {
+        alert("Por favor, informe a descrição do manejo.");
+        return;
+      }
+
+      try {
+        let totalBatchCost = 0;
+        const productsWithCost = selectedBatchLogProducts.map(p => {
+          const invItem = inventory.find(i => i.id === p.itemId);
+          const costAtTime = invItem?.costPrice || 0;
+          const totalItemCost = costAtTime * p.quantity;
+          totalBatchCost += totalItemCost;
+          return { ...p, costAtTime };
+        });
+
+        // Deduct inventory items once for the entire batch
+        for (const product of selectedBatchLogProducts) {
+          const invRef = doc(db, 'inventory', product.itemId);
+          await updateDoc(invRef, {
+            quantity: increment(-product.quantity),
+            lastUpdated: serverTimestamp()
+          });
+        }
+
+        const divisor = selectedProdsToApply.length;
+        const dividedProducts = productsWithCost.map(p => ({
+          ...p,
+          quantity: p.quantity / divisor
+        }));
+        const dividedCost = totalBatchCost / divisor;
+
+        const batchLog = {
+          date: new Date(batchLogDate),
+          description: `[Manejo Coletivo] ${batchLogDescription}`,
+          products: dividedProducts
+        };
+
+        // Update each of the active selected productions
+        for (const crop of selectedProdsToApply) {
+          await updateDoc(doc(db, 'production', crop.id), {
+            logs: [...(crop.logs || []), batchLog],
+            totalCost: increment(dividedCost)
+          });
+        }
+
+        setBatchModalOpen(false);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.WRITE, 'production');
+      }
+
+    } else {
+      // Colheita Coletiva (Batch Harvest)
+      // Check if some quantities are entered
+      const cropsToHarvest = selectedProdsToApply.filter(p => {
+        const qty = Number(batchHarvestQuantities[p.id]);
+        return !isNaN(qty) && qty > 0;
+      });
+
+      if (cropsToHarvest.length === 0) {
+        alert("Por favor, insira uma quantidade de colheita válida maior que zero para pelo menos um dos cultivos selecionados.");
+        return;
+      }
+
+      try {
+        const harvestDateObj = new Date(batchHarvestDate);
+
+        for (const crop of cropsToHarvest) {
+          const qty = Number(batchHarvestQuantities[crop.id]);
+          const mode = batchHarvestTypes[crop.id] || 'final';
+
+          const totalCost = crop.totalCost || 0;
+          const priorHarvestQuantity = crop.harvestQuantity || 0;
+          const totalNewHarvestQuantity = priorHarvestQuantity + qty;
+          
+          let unitCost = 0;
+          if (mode === 'final') {
+            unitCost = totalNewHarvestQuantity > 0 ? totalCost / totalNewHarvestQuantity : 0;
+          } else {
+            unitCost = totalCost / (crop.quantityPlanted || 1);
+          }
+
+          const isFinal = mode === 'final';
+          const newStatus = isFinal ? 'harvested' : 'growing';
+
+          const harvestLog = {
+            date: harvestDateObj,
+            description: isFinal 
+              ? `Colheita Final Coletiva: ${qty} ${crop.unit}. Lote encerrado.` 
+              : `Colheita Parcial Coletiva: ${qty} ${crop.unit}. Lote continua ativo.`,
+            products: []
+          };
+
+          await updateDoc(doc(db, 'production', crop.id), {
+            status: newStatus,
+            harvestQuantity: increment(qty),
+            remainingQuantity: increment(qty),
+            harvestDate: harvestDateObj,
+            unitCost,
+            logs: [...(crop.logs || []), harvestLog]
+          });
+
+          // update or add product in inventory (Expedição)
+          const invQ = query(collection(db, 'inventory'), where('name', '==', crop.crop));
+          const invSnap = await getDocs(invQ);
+          
+          if (!invSnap.empty) {
+            const existingDoc = invSnap.docs[0];
+            const existingData = existingDoc.data();
+            const currentQty = existingData.quantity || 0;
+            const currentCost = existingData.costPrice || 0;
+            const newTotalCost = (currentQty * currentCost) + (qty * unitCost);
+            const newQty = currentQty + qty;
+            const newAvgCost = newQty > 0 ? newTotalCost / newQty : 0;
+
+            await updateDoc(doc(db, 'inventory', existingDoc.id), {
+              quantity: increment(qty),
+              type: 'dispatch',
+              lastUpdated: serverTimestamp(),
+              costPrice: newAvgCost
+            });
+
+            await addDoc(collection(db, 'inventory_history'), {
+              itemId: existingDoc.id,
+              itemName: crop.crop,
+              quantity: qty,
+              unit: crop.unit,
+              costPrice: unitCost,
+              price: existingData.price || 0,
+              type: 'harvest',
+              description: `Entrada via colheita coletiva (Canteiro: ${crop.bed})`,
+              date: serverTimestamp()
+            });
+          } else {
+            const docRef = await addDoc(collection(db, 'inventory'), {
+              name: crop.crop,
+              type: 'dispatch',
+              category: 'produce',
+              quantity: qty,
+              unit: crop.unit,
+              price: 0,
+              costPrice: unitCost,
+              minStock: 0,
+              lastUpdated: serverTimestamp()
+            });
+
+            await addDoc(collection(db, 'inventory_history'), {
+              itemId: docRef.id,
+              itemName: crop.crop,
+              quantity: qty,
+              unit: crop.unit,
+              costPrice: unitCost,
+              price: 0,
+              type: 'harvest',
+              description: `Entrada via colheita coletiva (Canteiro: ${crop.bed})`,
+              date: serverTimestamp()
+            });
+          }
+        }
+
+        setBatchModalOpen(false);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.WRITE, 'production');
+      }
+    }
   };
 
   const togglePlantingInput = (item: InventoryItem) => {
@@ -1406,12 +1640,29 @@ export default function ProductionComponent() {
                                 <h3 className="text-[15px] font-black text-slate-900 tracking-tight leading-none">{bedName}</h3>
                               </div>
                             </div>
-                            <div className="flex items-center gap-2 shrink-0">
-                              <span className="px-2.5 py-1 bg-slate-50 border border-slate-200 text-slate-600 rounded-md text-[11px] font-bold">
+                            <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
+                              {isExpanded && growingCount > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => openBatchModal(bedName, bedProds)}
+                                  className="flex items-center gap-1.5 bg-indigo-50 hover:bg-indigo-150 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-wider shadow-sm transition-all"
+                                  title="Registrar manejo ou colheita em lote para este canteiro"
+                                >
+                                  <ClipboardList size={12} className="text-indigo-600" />
+                                  Lançamento Coletivo
+                                </button>
+                              )}
+                              <span 
+                                onClick={toggleBed}
+                                className="px-2.5 py-1 bg-slate-50 border border-slate-200 text-slate-600 rounded-md text-[11px] font-bold cursor-pointer hover:bg-slate-100"
+                              >
                                 {bedProds.length} {bedProds.length === 1 ? 'cultivo' : 'cultivos'}
                                 {growingCount > 0 && ` (${growingCount} ativo${growingCount !== 1 ? 's' : ''})`}
                               </span>
-                              <div className="p-1 text-slate-400 rounded-lg bg-slate-50 border border-slate-100 transition-colors">
+                              <div 
+                                onClick={toggleBed}
+                                className="p-1 text-slate-400 rounded-lg bg-slate-50 border border-slate-100 transition-colors cursor-pointer hover:bg-slate-100"
+                              >
                                 {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                               </div>
                             </div>
@@ -2812,6 +3063,309 @@ export default function ProductionComponent() {
                       className="flex-1 px-6 py-4 bg-amber-600 text-white rounded-2xl font-bold hover:bg-amber-700 transition-all shadow-lg shadow-amber-100"
                     >
                       Finalizar Processamento
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Collective Launch (Lançamento Coletivo) Modal */}
+      <AnimatePresence>
+        {isBatchModalOpen && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setBatchModalOpen(false)}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" 
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative bg-white w-full max-w-lg rounded-[2rem] shadow-2xl overflow-y-auto max-h-[90vh]-custom scrollbar-thin z-10 p-6 md:p-8"
+              style={{ maxHeight: '92vh' }}
+            >
+              <div>
+                <div className="flex items-center justify-between mb-6">
+                  <div>
+                    <span className="text-[10px] bg-indigo-50 border border-indigo-150 text-indigo-700 px-2 py-0.5 rounded-md font-mono font-bold uppercase">
+                      Lançamento em Lote
+                    </span>
+                    <h3 className="text-xl font-black text-slate-900 mt-1">Canteiro: {batchBedName}</h3>
+                  </div>
+                  <button onClick={() => setBatchModalOpen(false)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full">
+                    <XCircle size={22} />
+                  </button>
+                </div>
+
+                <form onSubmit={handleBatchSubmit} className="space-y-6">
+                  {/* Selector: Manejo vs Colheita */}
+                  <div className="grid grid-cols-2 gap-2 bg-slate-110 p-1 rounded-2xl border border-slate-200">
+                    <button
+                      type="button"
+                      onClick={() => setBatchActionType('manejo')}
+                      className={cn(
+                        "py-3 rounded-xl font-black text-xs uppercase tracking-wider transition-all",
+                        batchActionType === 'manejo'
+                          ? "bg-white text-indigo-700 shadow-sm"
+                          : "text-slate-500 hover:bg-slate-50/50"
+                      )}
+                    >
+                      <span className="flex items-center justify-center gap-1.5">
+                        <ClipboardList size={14} />
+                        Manejos
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBatchActionType('harvest')}
+                      className={cn(
+                        "py-3 rounded-xl font-black text-xs uppercase tracking-wider transition-all",
+                        batchActionType === 'harvest'
+                          ? "bg-white text-emerald-700 shadow-sm"
+                          : "text-slate-500 hover:bg-slate-50/50"
+                      )}
+                    >
+                      <span className="flex items-center justify-center gap-1.5">
+                        <Sprout size={14} />
+                        Colheita
+                      </span>
+                    </button>
+                  </div>
+
+                  {/* Cultivos do Canteiro Select Section */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-black uppercase text-slate-400 tracking-wider">
+                        Selecione as Culturas Ativas ({batchProductions.filter(p => selectedBatchProdIds[p.id]).length})
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const allSelected = batchProductions.every(p => selectedBatchProdIds[p.id]);
+                          const next: Record<string, boolean> = {};
+                          batchProductions.forEach(p => next[p.id] = !allSelected);
+                          setSelectedBatchProdIds(next);
+                        }}
+                        className="text-[10px] font-bold text-slate-550 hover:text-indigo-600 underline"
+                      >
+                        Alternar Todos
+                      </button>
+                    </div>
+
+                    <div className="divide-y divide-slate-100 border border-slate-250 rounded-2xl bg-slate-50/30 max-h-48 overflow-y-auto scrollbar-thin">
+                      {batchProductions.map(p => {
+                        const isChecked = selectedBatchProdIds[p.id] === true;
+                        return (
+                          <div
+                            key={p.id}
+                            onClick={() => {
+                              setSelectedBatchProdIds(prev => ({ ...prev, [p.id]: !prev[p.id] }));
+                            }}
+                            className={cn(
+                              "flex items-center justify-between p-3.5 cursor-pointer hover:bg-slate-50 transition-colors select-none",
+                              isChecked ? "bg-slate-50/40" : ""
+                            )}
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <div className={cn(
+                                "w-4 h-4 rounded-md flex items-center justify-center border shrink-0 text-white font-black text-[10px]",
+                                isChecked ? "bg-indigo-650 border-indigo-650" : "bg-white border-slate-300"
+                              )}>
+                                {isChecked && "✓"}
+                              </div>
+                              <span className="text-sm font-black text-slate-900 truncate">{p.crop}</span>
+                            </div>
+                            <span className="text-[10px] text-slate-500 font-bold bg-slate-100/80 px-2 py-0.5 rounded-md">
+                              Plantado: {p.plantingDate?.toDate ? format(p.plantingDate.toDate(), 'dd/MM/yyyy') : '---'}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Form fields based on Action Type */}
+                  {batchActionType === 'manejo' ? (
+                    <div className="space-y-4">
+                      {/* Description input */}
+                      <div className="space-y-2">
+                        <label className="text-xs font-black uppercase text-slate-400 tracking-wider">Descrição do Manejo</label>
+                        <input
+                          type="text"
+                          required={batchActionType === 'manejo'}
+                          placeholder="Ex: Adubação foliar, pulverização, capina..."
+                          value={batchLogDescription}
+                          onChange={(e) => setBatchLogDescription(e.target.value)}
+                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all font-bold placeholder:text-slate-400"
+                        />
+                      </div>
+
+                      {/* Date selection */}
+                      <div className="space-y-2">
+                        <label className="text-xs font-black uppercase text-slate-400 tracking-wider">Data do Registro</label>
+                        <input
+                          type="date"
+                          required
+                          value={batchLogDate}
+                          onChange={(e) => setBatchLogDate(e.target.value)}
+                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all font-bold"
+                        />
+                      </div>
+
+                      {/* Select associated inputs */}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-black uppercase text-slate-400 tracking-wider">
+                            Vincular Insumo do Estoque (Custo Rateado entre Culturas)
+                          </label>
+                          <button 
+                            type="button"
+                            onClick={() => setQuickInputModalOpen(true)}
+                            className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 px-2 py-1 rounded-lg border border-indigo-150 transition-all flex items-center gap-1"
+                          >
+                            <Plus size={10} />
+                            Novo Insumo
+                          </button>
+                        </div>
+
+                        <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto p-2 border border-slate-220 rounded-2xl bg-slate-50/20 scrollbar-thin">
+                          {inventory.filter(item => item.type === 'input' || !item.type).map(item => {
+                            const isSelected = selectedBatchLogProducts.some(p => p.itemId === item.id);
+                            return (
+                              <button
+                                key={item.id}
+                                type="button"
+                                onClick={() => toggleBatchLogProduct(item)}
+                                className={cn(
+                                  "flex items-center justify-between p-2.5 rounded-xl border transition-all text-left",
+                                  isSelected
+                                    ? "bg-indigo-50/60 border-indigo-250 text-indigo-950 shadow-sm font-bold"
+                                    : "bg-white border-slate-150 text-slate-700 hover:bg-slate-50"
+                                )}
+                              >
+                                <div className="flex items-center gap-2.5 min-w-0">
+                                  <div className={cn(
+                                    "w-4 h-4 rounded flex items-center justify-center border shrink-0 text-white font-black text-[10px] leading-none",
+                                    isSelected ? "bg-indigo-600 border-indigo-600" : "bg-white border-slate-300"
+                                  )}>
+                                    {isSelected && "✓"}
+                                  </div>
+                                  <span className="text-xs font-bold truncate">{item.name}</span>
+                                </div>
+                                <span className="text-[10px] text-slate-500 font-bold bg-slate-100/80 px-2 py-0.5 rounded-md shrink-0">
+                                  {item.quantity} {item.unit} disp.
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Input Quantity entry list */}
+                      {selectedBatchLogProducts.length > 0 && (
+                        <div className="space-y-2">
+                          <label className="text-xs font-black uppercase text-slate-400 tracking-wider">Quantidades Globais do Insumo</label>
+                          <div className="space-y-2">
+                            {selectedBatchLogProducts.map(prod => (
+                              <div key={prod.itemId} className="flex items-center justify-between gap-4 bg-slate-50 p-3 rounded-xl border border-slate-100">
+                                <span className="text-sm font-medium text-slate-700">{prod.name}</span>
+                                <div className="flex items-center gap-2">
+                                  <input 
+                                    type="number"
+                                    step="0.01"
+                                    value={prod.quantity}
+                                    onChange={(e) => updateBatchLogProductQuantity(prod.itemId, Number(e.target.value))}
+                                    className="w-24 px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-right text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                  />
+                                  <span className="text-xs text-slate-500 font-bold w-8">{prod.unit}</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    // Type: COLHEITA (Harvest)
+                    <div className="space-y-4">
+                      {/* Date of Harvest */}
+                      <div className="space-y-2">
+                        <label className="text-xs font-black uppercase text-slate-400 tracking-wider">Data da Colheita</label>
+                        <input
+                          type="date"
+                          required
+                          value={batchHarvestDate}
+                          onChange={(e) => setBatchHarvestDate(e.target.value)}
+                          className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all font-bold"
+                        />
+                      </div>
+
+                      <div className="space-y-3">
+                        <label className="text-xs font-black uppercase text-slate-400 tracking-wider block">Insira as Quantidades Colhidas</label>
+                        <div className="space-y-3">
+                          {batchProductions.filter(p => selectedBatchProdIds[p.id]).map(p => (
+                            <div key={p.id} className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
+                              <div className="flex items-center justify-between">
+                                <h4 className="text-sm font-black text-slate-900">{p.crop}</h4>
+                                <span className="text-[10px] text-slate-550 font-medium font-mono">Lote plantou {p.quantityPlanted} {p.unit}</span>
+                              </div>
+                              <div className="grid grid-cols-2 gap-3">
+                                {/* Qty input */}
+                                <div className="space-y-1">
+                                  <label className="text-[10px] text-slate-450 font-bold uppercase tracking-wider">Quantidade ({p.unit})</label>
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    placeholder="Ex: 15"
+                                    value={batchHarvestQuantities[p.id] || ''}
+                                    onChange={(e) => setBatchHarvestQuantities(prev => ({ ...prev, [p.id]: e.target.value }))}
+                                    className="w-full px-3 py-2 bg-white border border-slate-250 rounded-xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                                  />
+                                </div>
+                                {/* Harvest Mode */}
+                                <div className="space-y-1">
+                                  <label className="text-[10px] text-slate-455 font-bold uppercase tracking-wider">Modo Colheita</label>
+                                  <select
+                                    value={batchHarvestTypes[p.id] || 'final'}
+                                    onChange={(e) => setBatchHarvestTypes(prev => ({ ...prev, [p.id]: e.target.value as 'partial' | 'final' }))}
+                                    className="w-full px-3 py-2 bg-white border border-slate-250 rounded-xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                                  >
+                                    <option value="final">Final (Fecha lote)</option>
+                                    <option value="partial">Parcial (Mantém lote)</option>
+                                  </select>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="pt-4 flex gap-3">
+                    <button 
+                      type="button" 
+                      onClick={() => setBatchModalOpen(false)}
+                      className="flex-1 px-6 py-4 rounded-xl font-bold bg-slate-100 text-slate-600 hover:bg-slate-200 transition-colors text-xs uppercase tracking-wider"
+                    >
+                      Cancelar
+                    </button>
+                    <button 
+                      type="submit"
+                      className={cn(
+                        "flex-1 px-6 py-4 text-white rounded-xl font-bold transition-all shadow-lg text-xs uppercase tracking-wider",
+                        batchActionType === 'manejo'
+                          ? "bg-indigo-600 hover:bg-indigo-700 shadow-indigo-100"
+                          : "bg-emerald-600 hover:bg-emerald-700 shadow-emerald-100"
+                      )}
+                    >
+                      Salvar Lançamento
                     </button>
                   </div>
                 </form>

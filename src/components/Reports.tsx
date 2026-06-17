@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, onSnapshot, orderBy, limit } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Sale, Transaction, Production } from '../types';
+import { Sale, Transaction, Production, Customer } from '../types';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Cell, PieChart, Pie, Legend } from 'recharts';
 import { format, subDays, startOfDay, endOfDay, isWithinInterval } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -12,6 +12,7 @@ export default function Reports() {
   const [sales, setSales] = useState<Sale[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [productions, setProductions] = useState<Production[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeReport, setActiveReport] = useState<'general' | 'operational' | 'customer' | 'product' | 'pending_deliveries' | 'receivables'>('general');
 
@@ -87,6 +88,7 @@ export default function Reports() {
     const salesQ = query(collection(db, 'sales'), orderBy('createdAt', 'desc'));
     const transQ = query(collection(db, 'transactions'), orderBy('date', 'desc'));
     const prodQ = query(collection(db, 'production'), orderBy('plantingDate', 'desc'));
+    const custQ = query(collection(db, 'customers'), orderBy('companyName', 'asc'));
 
     const unsubSales = onSnapshot(salesQ, (snapshot) => {
       setSales(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Sale)));
@@ -101,8 +103,22 @@ export default function Reports() {
       setLoading(false);
     });
 
-    return () => { unsubSales(); unsubTrans(); unsubProd(); };
+    const unsubCust = onSnapshot(custQ, (snapshot) => {
+      setCustomers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Customer)));
+    });
+
+    return () => { unsubSales(); unsubTrans(); unsubProd(); unsubCust(); };
   }, []);
+
+  const getCustomerPhone = (sale: Sale) => {
+    if (sale.customerPhone && sale.customerPhone.trim() !== '') {
+      return sale.customerPhone;
+    }
+    const found = customers.find(c => 
+      c.companyName?.trim().toLowerCase() === sale.customerName?.trim().toLowerCase()
+    );
+    return found?.phone || '';
+  };
 
   // Prepare data for charts
   const last7Days = Array.from({ length: 7 }).map((_, i) => {
@@ -1394,8 +1410,8 @@ export default function Reports() {
                             </span>
                             {s.customerName}
                           </p>
-                          {s.customerPhone && (
-                            <p className="text-[9px] text-slate-400 font-bold leading-none">{s.customerPhone}</p>
+                          {getCustomerPhone(s) && (
+                            <p className="text-[9px] text-slate-400 font-bold leading-none">{getCustomerPhone(s)}</p>
                           )}
                         </div>
                       </td>
@@ -1540,8 +1556,8 @@ export default function Reports() {
                 <div className="flex justify-between items-center border-b border-dashed border-slate-200 pb-1.5">
                   <div>
                     <h3 className="text-sm font-black text-slate-900">{s.customerName}</h3>
-                    {s.customerPhone && (
-                      <p className="text-[10px] font-bold text-slate-500">Contato: {s.customerPhone}</p>
+                    {getCustomerPhone(s) && (
+                      <p className="text-[10px] font-bold text-slate-500">Contato: {getCustomerPhone(s)}</p>
                     )}
                   </div>
                   <div className="text-right">

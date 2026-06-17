@@ -27,7 +27,9 @@ import {
   Maximize2,
   ShoppingBag,
   ArrowUpDown,
-  RotateCcw
+  RotateCcw,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth, handleFirestoreError, OperationType } from '../App';
@@ -61,6 +63,7 @@ export default function ProductionComponent() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [sortBy, setSortBy] = useState<'harvest' | 'planting'>('harvest');
+  const [expandedBeds, setExpandedBeds] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     const q = query(collection(db, 'production'), orderBy('plantingDate', 'desc'));
@@ -1326,278 +1329,556 @@ export default function ProductionComponent() {
 
       {activeTab !== 'processed' ? (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-            {filteredProductions.map((p) => {
-              const daysIn = getDaysSincePlanting(p.plantingDate);
-              const progress = getStatusProgress(p);
-              
-              return (
-                <motion.div 
-                  layout
-                  key={p.id} 
-                  className={cn(
-                    "flex flex-col bg-white rounded-3xl border border-slate-200 shadow-sm hover:shadow-xl transition-all duration-300 overflow-hidden group relative",
-                    p.status === 'lost' && "opacity-80 grayscale-[0.5]"
-                  )}
-                >
-                  <div className="p-6 space-y-5">
-                    {/* Header */}
-                    <div className="flex items-start justify-between">
-                      <div className="space-y-1">
-                        <h4 className="text-xl font-black text-slate-900 truncate tracking-tight">{p.crop}</h4>
-                        <div className="flex flex-wrap items-center gap-3">
-                          <div className="flex items-center gap-1.5 text-sm font-bold text-slate-500">
-                            <div className="w-5 h-5 rounded-md bg-slate-100 flex items-center justify-center">
-                              <MapPin size={10} className="text-slate-400" />
+          {activeTab === 'bed' ? (
+            <div className="space-y-8 mb-8">
+              {(() => {
+                const grouped = filteredProductions.reduce((acc, p) => {
+                  const bName = p.bed || 'Não Definido';
+                  if (!acc[bName]) acc[bName] = [];
+                  acc[bName].push(p);
+                  return acc;
+                }, {} as Record<string, Production[]>);
+
+                const sortedBeds = Object.keys(grouped).sort((a, b) => {
+                  const numA = parseInt(a.replace(/\D/g, ''), 10);
+                  const numB = parseInt(b.replace(/\D/g, ''), 10);
+                  if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+                  return a.localeCompare(b);
+                });
+
+                return (
+                  <div className="space-y-4">
+                    {sortedBeds.length > 0 && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 p-1.5 bg-slate-50 border border-slate-200 rounded-xl">
+                        <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest pl-2">
+                          Visualização de Canteiros ({sortedBeds.length})
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const allCollapsed: Record<string, boolean> = {};
+                              sortedBeds.forEach(b => { allCollapsed[b] = false; });
+                              setExpandedBeds(allCollapsed);
+                            }}
+                            className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 text-[10px] font-black rounded-lg border border-slate-200 shadow-sm transition-all"
+                          >
+                            Recolher Todos
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const allExpanded: Record<string, boolean> = {};
+                              sortedBeds.forEach(b => { allExpanded[b] = true; });
+                              setExpandedBeds(allExpanded);
+                            }}
+                            className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black rounded-lg shadow-sm transition-all"
+                          >
+                            Expandir Todos
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {sortedBeds.map((bedName) => {
+                      const bedProds = grouped[bedName];
+                      const isExpanded = expandedBeds[bedName] === true;
+                      const growingCount = bedProds.filter(p => p.status === 'growing').length;
+
+                      const toggleBed = () => {
+                        setExpandedBeds(prev => ({
+                          ...prev,
+                          [bedName]: !prev[bedName]
+                        }));
+                      };
+
+                      return (
+                        <div key={bedName} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden p-4 md:p-5 transition-all">
+                          <div 
+                            onClick={toggleBed}
+                            className="flex flex-row items-center justify-between gap-4 cursor-pointer select-none hover:bg-slate-50/50 transition-colors p-4 md:p-5 -m-4 md:-m-5"
+                          >
+                            <div className="flex items-center gap-2 bg-transparent">
+                              <div className="w-8 h-8 bg-emerald-50 text-emerald-600 rounded-lg flex items-center justify-center border border-emerald-100">
+                                <MapPin size={16} />
+                              </div>
+                              <div>
+                                <h3 className="text-[15px] font-black text-slate-900 tracking-tight leading-none">{bedName}</h3>
+                              </div>
                             </div>
-                            {p.bed}
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className="px-2.5 py-1 bg-slate-50 border border-slate-200 text-slate-600 rounded-md text-[11px] font-bold">
+                                {bedProds.length} {bedProds.length === 1 ? 'cultivo' : 'cultivos'}
+                                {growingCount > 0 && ` (${growingCount} ativo${growingCount !== 1 ? 's' : ''})`}
+                              </span>
+                              <div className="p-1 text-slate-400 rounded-lg bg-slate-50 border border-slate-100 transition-colors">
+                                {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                              </div>
+                            </div>
                           </div>
-                          {p.plantingSource && (
-                            <div className="flex items-center gap-1 text-[9px] font-black uppercase text-slate-400 border border-slate-100 px-1.5 py-0.5 rounded-lg bg-slate-50/80">
-                              {p.plantingSource === 'seeds' && <Package size={10} />}
-                              {p.plantingSource === 'internal_seedlings' && <Sprout size={10} />}
-                              {p.plantingSource === 'purchased_seedlings' && <ShoppingBag size={10} />}
-                              {p.plantingSource === 'seeds' ? 'Semente' : p.plantingSource === 'internal_seedlings' ? 'Muda Própria' : 'Muda Comprada'}
+
+                          {isExpanded && (
+                            <div className="overflow-x-auto rounded-xl border border-slate-100 mt-4 animate-in fade-in duration-200">
+                        <table className="w-full text-left border-collapse">
+                          <thead>
+                            <tr className="bg-slate-50/60 border-b border-slate-100 text-slate-400 text-[10px] font-black uppercase tracking-wider">
+                              <th className="py-2 px-3 text-slate-400 text-[9px] font-black uppercase tracking-wider">Cultura</th>
+                              <th className="py-2 px-3 text-slate-400 text-[9px] font-black uppercase tracking-wider">Qtd./Plantio</th>
+                              <th className="py-2 px-3 text-slate-400 text-[9px] font-black uppercase tracking-wider">Idade/Previsão</th>
+                              <th className="py-2 px-3 text-slate-400 text-[9px] font-black uppercase tracking-wider">Progresso</th>
+                              <th className="py-2 px-3 text-slate-400 text-[9px] font-black uppercase tracking-wider text-right">Ação</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-xs">
+                            {bedProds.map((p) => {
+                              const daysIn = getDaysSincePlanting(p.plantingDate);
+                              const progress = getStatusProgress(p);
+                              return (
+                                <tr key={p.id} className="hover:bg-slate-50/50 transition-colors group">
+                                  <td className="py-1.5 px-3 font-bold text-slate-900">
+                                    <div className="flex items-center gap-2">
+                                      <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100 shrink-0">
+                                        <Sprout size={14} />
+                                      </div>
+                                      <div>
+                                        <p className="font-bold text-[13px] text-slate-900 leading-tight">{p.crop}</p>
+                                        <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                                          {p.plantingSource && (
+                                            <span className="text-[8px] font-bold text-slate-400 bg-slate-100 px-1 py-0.2 rounded">
+                                              {p.plantingSource === 'seeds' ? 'Sem.' : p.plantingSource === 'internal_seedlings' ? 'Muda Pr.' : 'Muda Co.'}
+                                            </span>
+                                          )}
+                                          <span className={cn(
+                                            "text-[8px] font-bold px-1 py-0.2 rounded",
+                                            p.status === 'growing' ? "bg-emerald-50 text-emerald-600 border border-emerald-100" :
+                                            p.status === 'harvested' ? "bg-blue-50 text-blue-600 border-blue-100" :
+                                            "bg-rose-50 text-rose-600 border border-rose-100"
+                                          )}>
+                                            {p.status === 'growing' ? 'Crescendo' : p.status === 'harvested' ? 'Colhido' : 'Perdido'}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </td>
+                                  <td className="py-1.5 px-3 font-medium text-slate-500 whitespace-nowrap">
+                                    <p className="font-bold text-xs text-slate-800 leading-tight">{p.quantityPlanted} {p.unit}</p>
+                                    <p className="text-[9px] text-slate-400">
+                                      {p.plantingDate?.toDate ? format(p.plantingDate.toDate(), "dd/MM/yy") : format(new Date(p.plantingDate), "dd/MM/yy")}
+                                    </p>
+                                  </td>
+                                  <td className="py-1.5 px-3 font-medium text-slate-500 whitespace-nowrap">
+                                    <p className="font-bold text-xs text-slate-800 leading-tight">{daysIn} d</p>
+                                    {p.estimatedHarvestDate && (
+                                      <p className="text-[9px] text-emerald-600 font-bold flex items-center gap-0.5 mt-0.5">
+                                        <Calendar size={8} />
+                                        {p.estimatedHarvestDate?.toDate ? format(p.estimatedHarvestDate.toDate(), "dd/MM") : format(new Date(p.estimatedHarvestDate), "dd/MM")}
+                                      </p>
+                                    )}
+                                  </td>
+                                  <td className="py-1.5 px-3 whitespace-nowrap">
+                                    <div className="w-16 space-y-0.5">
+                                      <div className="flex justify-between text-[8px] font-bold text-slate-400 leading-none">
+                                        <span>{progress}%</span>
+                                      </div>
+                                      <div className="h-1 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
+                                        <div 
+                                          className={cn(
+                                            "h-full rounded-full shadow-sm",
+                                            p.status === 'growing' ? "bg-gradient-to-r from-emerald-400 to-emerald-600" :
+                                            p.status === 'harvested' ? "bg-gradient-to-r from-blue-400 to-blue-600" : "bg-rose-500"
+                                          )}
+                                          style={{ width: `${progress}%` }}
+                                        />
+                                      </div>
+                                    </div>
+                                  </td>
+                                  <td className="py-1.5 px-3 text-right whitespace-nowrap">
+                                    <div className="flex items-center justify-end gap-1 opacity-90 group-hover:opacity-100 transition-opacity">
+                                      <button 
+                                        onClick={() => { setSelectedProduction(p); setLogModalOpen(true); }}
+                                        className="px-2 py-1 bg-slate-950 hover:bg-slate-800 text-white rounded-lg text-[10px] font-bold transition-all shadow-sm"
+                                      >
+                                        Manejar
+                                      </button>
+                                      {p.status === 'growing' && (
+                                        <button 
+                                          onClick={() => { 
+                                            setSelectedProduction(p); 
+                                            setHarvestType(p.isContinuousHarvest ? 'partial' : 'final');
+                                            setHarvestModalOpen(true); 
+                                          }}
+                                          className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[10px] font-bold transition-all shadow-sm"
+                                          title="Colher"
+                                        >
+                                          Colher
+                                        </button>
+                                      )}
+                                      <button 
+                                        onClick={() => setFocusedProduction(p)}
+                                        className="px-1.5 py-1 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-600 rounded-lg transition-all font-bold text-[10px]"
+                                        title="Ver"
+                                      >
+                                        Ver
+                                      </button>
+                                      
+                                      <div className="relative group/more-row">
+                                        <button className="px-1 py-1 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-600 rounded-lg transition-all font-bold text-[10px]">
+                                          •••
+                                        </button>
+                                        <div className="absolute top-full right-0 pt-1 w-44 hidden group-hover/more-row:block z-50 animate-in fade-in zoom-in-95 origin-top-right">
+                                          <div className="bg-white rounded-xl shadow-xl border border-slate-100 py-1.5 text-left text-xs">
+                                            <button 
+                                              onClick={() => handleEditProduction(p)}
+                                              className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 font-bold text-slate-600 hover:bg-slate-50 transition-colors"
+                                            >
+                                              <Edit2 size={12} />
+                                              Editar Lote
+                                            </button>
+                                            <button 
+                                              onClick={() => handleDelete(p.id)}
+                                              className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 font-bold text-rose-600 hover:bg-rose-50 transition-colors"
+                                            >
+                                              <Trash2 size={12} />
+                                              Excluir Lote
+                                            </button>
+                                            {p.status === 'growing' && (
+                                              <button 
+                                                onClick={() => markAsLost(p.id)}
+                                                className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-600 transition-colors"
+                                              >
+                                                <XCircle size={12} />
+                                                Marcar Perda
+                                              </button>
+                                            )}
+                                            {p.status === 'growing' && p.productionType === 'seedling' && (
+                                               <button 
+                                                onClick={() => { setSelectedProduction(p); setTransplantModalOpen(true); }}
+                                                className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 font-bold text-slate-600 hover:bg-emerald-50 hover:text-emerald-600 transition-colors"
+                                              >
+                                                <ArrowRight size={12} />
+                                                Transplantar Mudas
+                                              </button>
+                                            )}
+                                            {p.status === 'growing' && p.productionType === 'bed' && (p.plantingSource === 'internal_seedlings' || p.transplantDate || p.logs?.some(l => l.description && (l.description.toLowerCase().includes('transplant') || l.description.toLowerCase().includes('muda')))) && (
+                                               <button 
+                                                onClick={() => handleRevertTransplant(p)}
+                                                className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 font-bold text-slate-600 hover:bg-orange-50 hover:text-orange-600 transition-colors"
+                                              >
+                                                <ArrowLeft size={12} />
+                                                Desfazer Transplante
+                                              </button>
+                                            )}
+                                            {((p.status === 'harvested' || p.status === 'growing') && (p.remainingQuantity ?? 0) > 0) && (
+                                               <button 
+                                                onClick={() => { setSelectedProduction(p); setProcessModalOpen(true); }}
+                                                className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 font-bold text-slate-600 hover:bg-amber-50 hover:text-amber-600 transition-colors"
+                                              >
+                                                <Package size={12} />
+                                                Processar Cultura
+                                              </button>
+                                            )}
+                                            {p.logs?.some(l => l.description && (l.description.includes('Colheita Final') || l.description.includes('Colheita Parcial'))) && (
+                                              <button 
+                                                onClick={() => prepareRevertHarvest(p)}
+                                                className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 font-bold text-slate-600 hover:bg-amber-50 hover:text-amber-600 transition-colors"
+                                              >
+                                                <RotateCcw size={12} />
+                                                Desfazer Última Colheita
+                                              </button>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
+      </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+              {filteredProductions.map((p) => {
+                const daysIn = getDaysSincePlanting(p.plantingDate);
+                const progress = getStatusProgress(p);
+                
+                return (
+                  <motion.div 
+                    layout
+                    key={p.id} 
+                    className={cn(
+                      "flex flex-col bg-white rounded-3xl border border-slate-200 shadow-sm hover:shadow-xl transition-all duration-300 overflow-hidden group relative",
+                      p.status === 'lost' && "opacity-80 grayscale-[0.5]"
+                    )}
+                  >
+                    <div className="p-6 space-y-5">
+                      {/* Header */}
+                      <div className="flex items-start justify-between">
+                        <div className="space-y-1">
+                          <h4 className="text-xl font-black text-slate-900 truncate tracking-tight">{p.crop}</h4>
+                          <div className="flex flex-wrap items-center gap-3">
+                            <div className="flex items-center gap-1.5 text-sm font-bold text-slate-500">
+                              <div className="w-5 h-5 rounded-md bg-slate-100 flex items-center justify-center">
+                                <MapPin size={10} className="text-slate-400" />
+                              </div>
+                              {p.bed}
                             </div>
-                          )}
+                            {p.plantingSource && (
+                              <div className="flex items-center gap-1 text-[9px] font-black uppercase text-slate-400 border border-slate-100 px-1.5 py-0.5 rounded-lg bg-slate-50/80">
+                                {p.plantingSource === 'seeds' && <Package size={10} />}
+                                {p.plantingSource === 'internal_seedlings' && <Sprout size={10} />}
+                                {p.plantingSource === 'purchased_seedlings' && <ShoppingBag size={10} />}
+                                {p.plantingSource === 'seeds' ? 'Semente' : p.plantingSource === 'internal_seedlings' ? 'Muda Própria' : 'Muda Comprada'}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <div className={cn(
+                          "px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest border",
+                          p.status === 'growing' ? "bg-emerald-50 text-emerald-600 border-emerald-100 shadow-sm shadow-emerald-50" :
+                          p.status === 'harvested' ? "bg-blue-50 text-blue-600 border-blue-100 shadow-sm shadow-blue-50" :
+                          "bg-rose-50 text-rose-600 border-rose-100"
+                        )}>
+                          {p.status === 'growing' ? 'Em Crescimento' : 
+                           p.status === 'harvested' ? 'Colhido' : 'Perdido'}
                         </div>
                       </div>
-                      <div className={cn(
-                        "px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest border",
-                        p.status === 'growing' ? "bg-emerald-50 text-emerald-600 border-emerald-100 shadow-sm shadow-emerald-50" :
-                        p.status === 'harvested' ? "bg-blue-50 text-blue-600 border-blue-100 shadow-sm shadow-blue-50" :
-                        "bg-rose-50 text-rose-600 border-rose-100"
-                      )}>
-                        {p.status === 'growing' ? 'Em Crescimento' : 
-                         p.status === 'harvested' ? 'Colhido' : 'Perdido'}
-                      </div>
-                    </div>
 
-                    {/* Stats Grid */}
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Idade</p>
-                        <p className="text-lg font-black text-slate-700">{daysIn} <span className="text-xs font-bold text-slate-400">dias</span></p>
-                      </div>
-                      <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Plantado</p>
-                        <p className="text-lg font-black text-slate-700">{p.quantityPlanted} <span className="text-xs font-bold text-slate-400">{p.unit}</span></p>
-                      </div>
-                      {p.transplantDate && (
-                        <div className="col-span-2 p-3 bg-indigo-50/50 rounded-2xl border border-indigo-100">
-                          <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-1 flex items-center gap-1">
-                            <TrendingUp size={10} /> 
-                            Previsão de Transplante
-                          </p>
-                          <p className="text-sm font-black text-indigo-700">
-                            {p.transplantDate?.toDate ? format(p.transplantDate.toDate(), "dd/MM/yyyy") : format(new Date(p.transplantDate), "dd/MM/yyyy")}
-                          </p>
+                      {/* Stats Grid */}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Idade</p>
+                          <p className="text-lg font-black text-slate-700">{daysIn} <span className="text-xs font-bold text-slate-400">dias</span></p>
                         </div>
-                      )}
-                      {p.estimatedHarvestDate && (
-                        <div className="col-span-2 p-3 bg-emerald-50/50 rounded-2xl border border-emerald-100">
-                          <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider mb-1 flex items-center gap-1">
-                            <Calendar size={10} /> 
-                            Previsão de Colheita
-                          </p>
-                          <p className="text-sm font-black text-emerald-700">
-                            {p.estimatedHarvestDate?.toDate ? format(p.estimatedHarvestDate.toDate(), "dd/MM/yyyy") : format(new Date(p.estimatedHarvestDate), "dd/MM/yyyy")}
-                          </p>
+                        <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Plantado</p>
+                          <p className="text-lg font-black text-slate-700">{p.quantityPlanted} <span className="text-xs font-bold text-slate-400">{p.unit}</span></p>
                         </div>
-                      )}
-                    </div>
-
-                    {/* Lifecycle Progress */}
-                    <div className="space-y-2">
-                      <div className="flex justify-between text-[10px] font-black text-slate-400 uppercase tracking-wider">
-                        <span>Ciclo de Vida</span>
-                        <span className={cn(
-                          p.status === 'growing' ? "text-emerald-500" :
-                          p.status === 'harvested' ? "text-blue-500" : "text-rose-500"
-                        )}>{progress}%</span>
-                      </div>
-                      <div className="h-3 bg-slate-100 rounded-full overflow-hidden p-0.5 border border-slate-200">
-                        <motion.div 
-                          initial={{ width: 0 }}
-                          animate={{ width: `${progress}%` }}
-                          className={cn(
-                            "h-full rounded-full shadow-[0_0_10px_rgba(0,0,0,0.05)]",
-                            p.status === 'growing' ? "bg-gradient-to-r from-emerald-400 to-emerald-600" :
-                            p.status === 'harvested' ? "bg-gradient-to-r from-blue-400 to-blue-600" : "bg-rose-500"
-                          )}
-                        />
-                      </div>
-                    <div className="flex flex-col gap-3 pt-2">
-                      <div className="flex items-center gap-2">
-                        <button 
-                          onClick={() => { setSelectedProduction(p); setLogModalOpen(true); }}
-                          className="flex-1 flex items-center justify-center gap-2 py-3 bg-slate-900 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-800 transition-all shadow-lg shadow-slate-200 active:scale-95"
-                        >
-                          <Zap size={14} fill="currentColor" />
-                          Manejar
-                        </button>
-                        {p.status === 'growing' && (
-                          p.productionType === 'seedling' ? (
-                            <button 
-                              onClick={() => { setSelectedProduction(p); setTransplantModalOpen(true); }}
-                              className="flex-1 flex items-center justify-center gap-1.5 py-3 bg-emerald-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-200 active:scale-95"
-                              title="Transplantar Lote para o Campo"
-                            >
-                              <ArrowRight size={14} />
-                              Transplantar
-                            </button>
-                          ) : (
-                            <button 
-                              onClick={() => { 
-                                setSelectedProduction(p); 
-                                setHarvestType(p.isContinuousHarvest ? 'partial' : 'final');
-                                setHarvestModalOpen(true); 
-                              }}
-                              className="flex items-center justify-center p-3 bg-blue-600 text-white rounded-2xl shadow-lg shadow-blue-100 hover:bg-blue-700 transition-all active:scale-95"
-                              title="Colher"
-                            >
-                              <CheckCircle2 size={20} />
-                            </button>
-                          )
+                        {p.transplantDate && (
+                          <div className="col-span-2 p-3 bg-indigo-50/50 rounded-2xl border border-indigo-100">
+                            <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-1 flex items-center gap-1">
+                              <TrendingUp size={10} /> 
+                              Previsão de Transplante
+                            </p>
+                            <p className="text-sm font-black text-indigo-700">
+                              {p.transplantDate?.toDate ? format(p.transplantDate.toDate(), "dd/MM/yyyy") : format(new Date(p.transplantDate), "dd/MM/yyyy")}
+                            </p>
+                          </div>
+                        )}
+                        {p.estimatedHarvestDate && (
+                          <div className="col-span-2 p-3 bg-emerald-50/50 rounded-2xl border border-emerald-100">
+                            <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider mb-1 flex items-center gap-1">
+                              <Calendar size={10} /> 
+                              Previsão de Colheita
+                            </p>
+                            <p className="text-sm font-black text-emerald-700">
+                              {p.estimatedHarvestDate?.toDate ? format(p.estimatedHarvestDate.toDate(), "dd/MM/yyyy") : format(new Date(p.estimatedHarvestDate), "dd/MM/yyyy")}
+                            </p>
+                          </div>
                         )}
                       </div>
-                    </div>
-                  </div>
-                </div>
 
-                {/* Log Vertical Timeline (Inside Card - Mini) */}
-                  {p.logs.length > 0 && (
-                    <div className="px-6 py-4 bg-slate-50/40 border-t border-slate-100 max-h-40 overflow-y-auto custom-scrollbar">
-                      <div className="space-y-4">
-                        {p.logs.slice().reverse().slice(0, 5).map((log, i) => {
-                          const originalIndex = p.logs.length - 1 - i;
-                          return (
-                            <div key={i} className="group/log relative pl-6 before:absolute before:left-[7px] before:top-2 before:bottom-[-20px] before:w-[2px] before:bg-slate-200 last:before:hidden">
-                              <div className="absolute left-0 top-1 w-4 h-4 rounded-full border-2 border-slate-200 bg-white flex items-center justify-center z-10">
-                                <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                              </div>
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="space-y-0.5 min-w-0">
-                                  <p className="text-[10px] font-bold text-slate-800 line-clamp-1">{log.description}</p>
-                                  <p className="text-[9px] font-black text-slate-400 uppercase">
-                                    {log.date?.toDate ? format(log.date.toDate(), "dd/MM 'às' HH:mm", { locale: ptBR }) : format(new Date(log.date), "dd/MM 'às' HH:mm")}
-                                  </p>
-                                </div>
-                                <div className="flex items-center gap-1 opacity-0 group-hover/log:opacity-100 transition-all">
-                                  <button 
-                                    onClick={() => handleEditLog(p, originalIndex)}
-                                    className="p-1 text-slate-400 hover:text-emerald-600 transition-all"
-                                    title="Editar"
-                                  >
-                                    <Edit2 size={12} />
-                                  </button>
-                                  <button 
-                                    onClick={() => handleDeleteLog(p, originalIndex)}
-                                    className="p-1 text-slate-400 hover:text-rose-600 transition-all"
-                                    title="Excluir"
-                                  >
-                                    <Trash2 size={12} />
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Card Options Menu (Absolute positioned for overlay) */}
-                  <div className="absolute top-4 right-4 flex gap-2">
-                    <button 
-                      onClick={() => setFocusedProduction(p)}
-                      className="flex items-center justify-center w-8 h-8 bg-white/90 hover:bg-white shadow-sm text-emerald-600 rounded-full transition-all active:scale-95"
-                      title="Focar / Detalhes"
-                    >
-                      <Maximize2 size={14} />
-                    </button>
-                    <div className="relative group/more">
-                      <button className="flex items-center justify-center w-8 h-8 bg-black/5 hover:bg-black/10 backdrop-blur-md text-slate-600 rounded-full transition-all">
-                        <ArrowRight size={14} className="rotate-90" />
-                      </button>
-                      <div className="absolute top-full right-0 pt-2 w-48 hidden group-hover/more:block z-50 animate-in fade-in zoom-in-95 origin-top-right">
-                        <div className="bg-white rounded-2xl shadow-2xl border border-slate-100 py-2">
+                      {/* Lifecycle Progress */}
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                          <span>Ciclo de Vida</span>
+                          <span className={cn(
+                            p.status === 'growing' ? "text-emerald-500" :
+                            p.status === 'harvested' ? "text-blue-500" : "text-rose-500"
+                          )}>{progress}%</span>
+                        </div>
+                        <div className="h-3 bg-slate-100 rounded-full overflow-hidden p-0.5 border border-slate-200">
+                          <motion.div 
+                            initial={{ width: 0 }}
+                            animate={{ width: `${progress}%` }}
+                            className={cn(
+                              "h-full rounded-full shadow-[0_0_10px_rgba(0,0,0,0.05)]",
+                              p.status === 'growing' ? "bg-gradient-to-r from-emerald-400 to-emerald-600" :
+                              p.status === 'harvested' ? "bg-gradient-to-r from-blue-400 to-blue-600" : "bg-rose-500"
+                            )}
+                          />
+                        </div>
+                      <div className="flex flex-col gap-3 pt-2">
+                        <div className="flex items-center gap-2">
                           <button 
-                              onClick={() => handleEditProduction(p)}
-                              className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50 transition-colors"
-                            >
-                              <Edit2 size={16} />
-                              Editar Produção
-                            </button>
-                          <button 
-                              onClick={() => handleDelete(p.id)}
-                              className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-rose-600 hover:bg-rose-50 transition-colors"
-                            >
-                              <Trash2 size={16} />
-                              Excluir Registro
-                            </button>
-                            {p.status === 'growing' && (
-                               <button 
-                                onClick={() => markAsLost(p.id)}
-                                className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-600 transition-colors"
-                              >
-                                <XCircle size={16} />
-                                Marcar Perda
-                              </button>
-                            )}
-                            {p.status === 'growing' && p.productionType === 'seedling' && (
-                               <button 
-                                onClick={() => { setSelectedProduction(p); setTransplantModalOpen(true); }}
-                                className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-emerald-50 hover:text-emerald-600 transition-colors"
-                              >
-                                <ArrowRight size={16} />
-                                Transplantar Mudas
-                              </button>
-                            )}
-                            {p.status === 'growing' && p.productionType === 'bed' && (p.plantingSource === 'internal_seedlings' || p.transplantDate || p.logs?.some(l => l.description && (l.description.toLowerCase().includes('transplant') || l.description.toLowerCase().includes('muda')))) && (
-                               <button 
-                                onClick={() => handleRevertTransplant(p)}
-                                className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-orange-50 hover:text-orange-600 transition-colors"
-                              >
-                                <ArrowLeft size={16} />
-                                Desfazer Transplante
-                              </button>
-                            )}
-                            {((p.status === 'harvested' || p.status === 'growing') && (p.remainingQuantity ?? 0) > 0) && (
-                               <button 
-                                onClick={() => { setSelectedProduction(p); setProcessModalOpen(true); }}
-                                className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-amber-50 hover:text-amber-600 transition-colors"
-                              >
-                                <Package size={16} />
-                                Processar Cultura
-                              </button>
-                            )}
-                            {p.logs?.some(l => l.description && (l.description.includes('Colheita Final') || l.description.includes('Colheita Parcial'))) && (
+                            onClick={() => { setSelectedProduction(p); setLogModalOpen(true); }}
+                            className="flex-1 flex items-center justify-center gap-2 py-3 bg-slate-900 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-800 transition-all shadow-lg shadow-slate-200 active:scale-95"
+                          >
+                            <Zap size={14} fill="currentColor" />
+                            Manejar
+                          </button>
+                          {p.status === 'growing' && (
+                            p.productionType === 'seedling' ? (
                               <button 
-                                onClick={() => prepareRevertHarvest(p)}
-                                className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-amber-50 hover:text-amber-600 transition-colors"
+                                onClick={() => { setSelectedProduction(p); setTransplantModalOpen(true); }}
+                                className="flex-1 flex items-center justify-center gap-1.5 py-3 bg-emerald-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-200 active:scale-95"
+                                title="Transplantar Lote para o Campo"
                               >
-                                <RotateCcw size={16} />
-                                Desfazer Última Colheita
+                                <ArrowRight size={14} />
+                                Transplantar
                               </button>
-                            )}
+                            ) : (
+                              <button 
+                                onClick={() => { 
+                                  setSelectedProduction(p); 
+                                  setHarvestType(p.isContinuousHarvest ? 'partial' : 'final');
+                                  setHarvestModalOpen(true); 
+                                }}
+                                className="flex items-center justify-center p-3 bg-blue-600 text-white rounded-2xl shadow-lg shadow-blue-100 hover:bg-blue-700 transition-all active:scale-95"
+                                title="Colher"
+                              >
+                                <CheckCircle2 size={20} />
+                              </button>
+                            )
+                          )}
                         </div>
                       </div>
                     </div>
                   </div>
 
-                  {/* Footer Stats summary */}
-                  <div className="px-6 py-4 bg-white border-t border-slate-100 flex items-center justify-between text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                    <div className="flex items-center gap-1.5">
-                      <Calendar size={12} />
-                      <span>{p.plantingDate?.toDate ? format(p.plantingDate.toDate(), "dd.MM.yy") : format(new Date(p.plantingDate), "dd.MM.yy")}</span>
+                  {/* Log Vertical Timeline (Inside Card - Mini) */}
+                    {p.logs.length > 0 && (
+                      <div className="px-6 py-4 bg-slate-50/40 border-t border-slate-100 max-h-40 overflow-y-auto custom-scrollbar">
+                        <div className="space-y-4">
+                          {p.logs.slice().reverse().slice(0, 5).map((log, i) => {
+                            const originalIndex = p.logs.length - 1 - i;
+                            return (
+                              <div key={i} className="group/log relative pl-6 before:absolute before:left-[7px] before:top-2 before:bottom-[-20px] before:w-[2px] before:bg-slate-200 last:before:hidden">
+                                <div className="absolute left-0 top-1 w-4 h-4 rounded-full border-2 border-slate-200 bg-white flex items-center justify-center z-10">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                </div>
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="space-y-0.5 min-w-0">
+                                    <p className="text-[10px] font-bold text-slate-800 line-clamp-1">{log.description}</p>
+                                    <p className="text-[9px] font-black text-slate-400 uppercase">
+                                      {log.date?.toDate ? format(log.date.toDate(), "dd/MM 'às' HH:mm", { locale: ptBR }) : format(new Date(log.date), "dd/MM 'às' HH:mm")}
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center gap-1 opacity-0 group-hover/log:opacity-100 transition-all">
+                                    <button 
+                                      onClick={() => handleEditLog(p, originalIndex)}
+                                      className="p-1 text-slate-400 hover:text-emerald-600 transition-all"
+                                      title="Editar"
+                                    >
+                                      <Edit2 size={12} />
+                                    </button>
+                                    <button 
+                                      onClick={() => handleDeleteLog(p, originalIndex)}
+                                      className="p-1 text-slate-400 hover:text-rose-600 transition-all"
+                                      title="Excluir"
+                                    >
+                                      <Trash2 size={12} />
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Card Options Menu (Absolute positioned for overlay) */}
+                    <div className="absolute top-4 right-4 flex gap-2">
+                      <button 
+                        onClick={() => setFocusedProduction(p)}
+                        className="flex items-center justify-center w-8 h-8 bg-white/90 hover:bg-white shadow-sm text-emerald-600 rounded-full transition-all active:scale-95"
+                        title="Focar / Detalhes"
+                      >
+                        <Maximize2 size={14} />
+                      </button>
+                      <div className="relative group/more">
+                        <button className="flex items-center justify-center w-8 h-8 bg-black/5 hover:bg-black/10 backdrop-blur-md text-slate-600 rounded-full transition-all">
+                          <ArrowRight size={14} className="rotate-90" />
+                        </button>
+                        <div className="absolute top-full right-0 pt-2 w-48 hidden group-hover/more:block z-50 animate-in fade-in zoom-in-95 origin-top-right">
+                          <div className="bg-white rounded-2xl shadow-2xl border border-slate-100 py-2">
+                            <button 
+                                onClick={() => handleEditProduction(p)}
+                                className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50 transition-colors"
+                              >
+                                <Edit2 size={16} />
+                                Editar Produção
+                              </button>
+                            <button 
+                                onClick={() => handleDelete(p.id)}
+                                className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-rose-600 hover:bg-rose-50 transition-colors"
+                              >
+                                <Trash2 size={16} />
+                                Excluir Registro
+                              </button>
+                              {p.status === 'growing' && (
+                                 <button 
+                                  onClick={() => markAsLost(p.id)}
+                                  className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-600 transition-colors"
+                                >
+                                  <XCircle size={16} />
+                                  Marcar Perda
+                                </button>
+                              )}
+                              {p.status === 'growing' && p.productionType === 'seedling' && (
+                                 <button 
+                                  onClick={() => { setSelectedProduction(p); setTransplantModalOpen(true); }}
+                                  className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-emerald-50 hover:text-emerald-600 transition-colors"
+                                >
+                                  <ArrowRight size={16} />
+                                  Transplantar Mudas
+                                </button>
+                              )}
+                              {p.status === 'growing' && p.productionType === 'bed' && (p.plantingSource === 'internal_seedlings' || p.transplantDate || p.logs?.some(l => l.description && (l.description.toLowerCase().includes('transplant') || l.description.toLowerCase().includes('muda')))) && (
+                                 <button 
+                                  onClick={() => handleRevertTransplant(p)}
+                                  className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-orange-50 hover:text-orange-600 transition-colors"
+                                >
+                                  <ArrowLeft size={16} />
+                                  Desfazer Transplante
+                                </button>
+                              )}
+                              {((p.status === 'harvested' || p.status === 'growing') && (p.remainingQuantity ?? 0) > 0) && (
+                                 <button 
+                                  onClick={() => { setSelectedProduction(p); setProcessModalOpen(true); }}
+                                  className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-amber-50 hover:text-amber-600 transition-colors"
+                                >
+                                  <Package size={16} />
+                                  Processar Cultura
+                                </button>
+                              )}
+                              {p.logs?.some(l => l.description && (l.description.includes('Colheita Final') || l.description.includes('Colheita Parcial'))) && (
+                                <button 
+                                  onClick={() => prepareRevertHarvest(p)}
+                                  className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-amber-50 hover:text-amber-600 transition-colors"
+                                >
+                                  <RotateCcw size={16} />
+                                  Desfazer Última Colheita
+                                </button>
+                              )}
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                    <span>{p.status === 'growing' ? (p.totalCost > 0 ? `Custo: R$ ${p.totalCost.toFixed(2)}` : 'S/ Custo') : (p.unitCost > 0 ? `Custo: R$ ${p.unitCost.toFixed(2)}` : 'S/ Custo')}</span>
-                  </div>
-                </motion.div>
-              );
-            })}
-          </div>
+
+                    {/* Footer Stats summary */}
+                    <div className="px-6 py-4 bg-white border-t border-slate-100 flex items-center justify-between text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                      <div className="flex items-center gap-1.5">
+                        <Calendar size={12} />
+                        <span>{p.plantingDate?.toDate ? format(p.plantingDate.toDate(), "dd.MM.yy") : format(new Date(p.plantingDate), "dd.MM.yy")}</span>
+                      </div>
+                      <span>{p.status === 'growing' ? (p.totalCost > 0 ? `Custo: R$ ${p.totalCost.toFixed(2)}` : 'S/ Custo') : (p.unitCost > 0 ? `Custo: R$ ${p.unitCost.toFixed(2)}` : 'S/ Custo')}</span>
+                    </div>
+                  </motion.div>
+                );
+              })}
+            </div>
+          )}
 
           {filteredProductions.length === 0 && (
             <div className="text-center py-16 bg-white rounded-3xl border border-slate-200 shadow-sm p-6 mb-8">
@@ -1609,38 +1890,38 @@ export default function ProductionComponent() {
 
           {/* Histórico de Semeadura e Mudas (Exclusivo da aba de Mudas) */}
           {activeTab === 'seedling' && (
-            <div className="mt-12 bg-white rounded-[2rem] border border-slate-200 p-6 md:p-8 shadow-sm space-y-6">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-5">
+            <div className="mt-8 bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-4">
+              <div className="flex flex-row items-center justify-between gap-4 border-b border-slate-100 pb-3">
                 <div>
-                  <h3 className="text-xl font-black text-slate-900 flex items-center gap-2">
-                    <ClipboardList size={22} className="text-emerald-600" />
+                  <h3 className="text-base font-black text-slate-900 flex items-center gap-1.5 leading-none">
+                    <ClipboardList size={18} className="text-emerald-600" />
                     Histórico de Semeadura e Mudas
                   </h3>
-                   <p className="text-slate-500 text-xs mt-1">Lotes de sementes semeadas e mudas que já foram transplantadas ou finalizadas.</p>
+                   <p className="text-slate-500 text-[10px] mt-0.5">Lotes de sementes semeadas e mudas transplantadas ou concluídas.</p>
                 </div>
-                <span className="self-start sm:self-center px-4 py-1.5 bg-slate-50 border border-slate-200 text-slate-700 rounded-full text-xs font-bold">
+                <span className="px-2.5 py-1 bg-slate-50 border border-slate-200 text-slate-600 rounded-lg text-xs font-bold shrink-0">
                   {sortedHistoricalSeedlings.length} {sortedHistoricalSeedlings.length === 1 ? 'registro' : 'registros'}
                 </span>
               </div>
 
               {sortedHistoricalSeedlings.length === 0 ? (
-                <div className="text-center py-12 text-slate-400 italic bg-slate-50/50 rounded-2xl border border-dashed border-slate-200">
+                <div className="text-center py-10 text-slate-400 italic bg-slate-50/50 rounded-xl border border-dashed border-slate-200 text-xs">
                   Nenhum histórico de transplante ou semeaduras concluídas no momento.
                 </div>
               ) : (
-                <div className="overflow-x-auto rounded-3xl border border-slate-100">
+                <div className="overflow-x-auto rounded-xl border border-slate-100">
                   <table className="w-full text-left border-collapse">
                     <thead>
-                      <tr className="bg-slate-50/60 border-b border-slate-100 text-slate-400 text-[10px] font-black uppercase tracking-wider">
-                        <th className="py-4 px-6">Cultura / Lote</th>
-                        <th className="py-4 px-6">Semeado em</th>
-                        <th className="py-4 px-6">Status / Transplante</th>
-                        <th className="py-4 px-6">Custo Un. Est.</th>
-                        <th className="py-4 px-6">Canteiro de Destino</th>
-                        <th className="py-4 px-6 text-right">Ação</th>
+                      <tr className="bg-slate-50/60 border-b border-slate-100 text-slate-400 text-[9px] font-black uppercase tracking-wider">
+                        <th className="py-2.5 px-4">Cultura / Lote</th>
+                        <th className="py-2.5 px-4">Semeado em</th>
+                        <th className="py-2.5 px-4">Status / Transplante</th>
+                        <th className="py-2.5 px-4">Custo Un. Est.</th>
+                        <th className="py-2.5 px-4">Canteiro Destino</th>
+                        <th className="py-2.5 px-4 text-right">Ação</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-100 text-xs md:text-sm">
+                    <tbody className="divide-y divide-slate-100 text-xs">
                       {sortedHistoricalSeedlings.map((p) => {
                         const sDate = p.plantingDate?.toDate ? p.plantingDate.toDate() : (p.plantingDate ? new Date(p.plantingDate) : null);
                         const tDate = p.transplantDate?.toDate ? p.transplantDate.toDate() : (p.transplantDate ? new Date(p.transplantDate) : null);
@@ -1664,54 +1945,53 @@ export default function ProductionComponent() {
 
                         return (
                           <tr key={p.id} className="hover:bg-slate-50/50 transition-colors group">
-                            <td className="py-4 px-6 font-bold text-slate-900">
+                            <td className="py-1.5 px-4 font-bold text-slate-900">
                               <div className="flex items-center gap-2">
-                                <Sprout size={16} className="text-emerald-500 shrink-0" />
+                                <Sprout size={14} className="text-emerald-500 shrink-0" />
                                 <div>
-                                  <p className="font-bold text-slate-900">{p.crop}</p>
-                                  <p className="text-[10px] text-slate-400 font-medium">Origem: {originalNursery}</p>
+                                  <p className="font-bold text-slate-900 leading-tight text-xs">{p.crop}</p>
+                                  <p className="text-[9px] text-slate-400 font-medium">Origem: {originalNursery}</p>
                                 </div>
                               </div>
                             </td>
-                            <td className="py-4 px-6 text-slate-500 font-medium whitespace-nowrap">
+                            <td className="py-1.5 px-4 text-slate-500 font-medium whitespace-nowrap leading-tight text-xs">
                               {sDate ? format(sDate, "dd/MM/yyyy") : 'N/A'}
                             </td>
-                            <td className="py-4 px-6 whitespace-nowrap">
+                            <td className="py-1.5 px-4 whitespace-nowrap">
                               {p.productionType === 'bed' ? (
                                 <div className="space-y-0.5">
-                                  <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-lg px-2 py-0.5 text-[10px] font-black uppercase animate-fade-in">
-                                    <ArrowRight size={10} />
+                                  <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded px-1.5 py-0.2 text-[9px] font-black uppercase leading-none">
+                                    <ArrowRight size={8} />
                                     Transplantado
                                   </span>
                                   {tDate && (
-                                    <p className="text-[10px] text-slate-400 font-bold">
+                                    <p className="text-[9px] text-slate-400 font-bold leading-none mt-0.5">
                                       {format(tDate, "dd/MM/yyyy")} ({transplantedQty} {p.unit})
                                     </p>
                                   )}
                                 </div>
                               ) : p.status === 'harvested' ? (
-                                <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 border border-blue-100 rounded-lg px-2 py-0.5 text-[10px] font-black uppercase">
+                                <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 border border-blue-100 rounded px-1.5 py-0.2 text-[9px] font-black uppercase leading-none">
                                   Concluído (Colhido)
                                 </span>
                               ) : (
-                                <span className="inline-flex items-center gap-1 bg-rose-50 text-rose-700 border border-rose-100 rounded-lg px-2 py-0.5 text-[10px] font-black uppercase">
+                                <span className="inline-flex items-center gap-1 bg-rose-50 text-rose-700 border border-rose-100 rounded px-1.5 py-0.2 text-[9px] font-black uppercase leading-none">
                                   Perda Registrada
                                 </span>
                               )}
                             </td>
-                             <td className="py-4 px-6 font-mono font-bold text-slate-700">
+                             <td className="py-1.5 px-4 font-mono font-bold text-slate-600 text-xs leading-tight">
                               {seedlingUnitCost > 0 ? `R$ ${seedlingUnitCost.toFixed(2)}` : 'S/ Custo'}
                             </td>
-                            <td className="py-4 px-6 font-bold text-indigo-600">
+                            <td className="py-1.5 px-4 font-bold text-indigo-600 text-xs leading-tight">
                               {p.productionType === 'bed' ? p.bed : '-'}
                             </td>
-                            <td className="py-4 px-6 text-right whitespace-nowrap">
-                              <div className="flex items-center justify-end gap-1.5 opacity-80 group-hover:opacity-100 transition-opacity">
+                            <td className="py-1.5 px-4 text-right whitespace-nowrap">
+                              <div className="flex items-center justify-end gap-1 opacity-80 group-hover:opacity-100 transition-opacity">
                                 <button
                                   type="button"
                                   onClick={() => setFocusedProduction(p)}
-                                  className="px-3 py-1.5 bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 text-slate-600 font-bold rounded-xl text-xs transition-colors"
-                                  title="Expandir Detalhes"
+                                  className="px-2 py-1 bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 text-slate-600 font-bold rounded-lg text-[10px] transition-colors border border-slate-200"
                                 >
                                   Ver Detalhes
                                 </button>
@@ -1719,10 +1999,9 @@ export default function ProductionComponent() {
                                   <button
                                     type="button"
                                     onClick={() => handleRevertTransplant(p)}
-                                    className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold rounded-xl text-xs transition-colors flex items-center gap-1"
-                                    title="Desfazer transplante e voltar para mudas"
+                                    className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold rounded-lg text-[10px] transition-colors flex items-center gap-0.5 border border-rose-100"
                                   >
-                                    <ArrowLeft size={10} />
+                                    <ArrowLeft size={8} />
                                     Desfazer
                                   </button>
                                 )}
@@ -2119,23 +2398,36 @@ export default function ProductionComponent() {
                           Cadastrar Insumo
                         </button>
                       </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-32 overflow-y-auto p-2 border border-slate-100 rounded-xl">
-                        {inventory.filter(item => item.type === 'input' || !item.type).map(item => (
-                          <button
-                            key={item.id}
-                            type="button"
-                            onClick={() => togglePlantingInput(item)}
-                            className={cn(
-                              "flex flex-col p-2 rounded-xl border transition-all text-left",
-                              selectedPlantingInputs.find(p => p.itemId === item.id)
-                                ? "bg-emerald-50 border-emerald-200 ring-1 ring-emerald-200"
-                                : "bg-slate-50 border-transparent hover:border-slate-200"
-                            )}
-                          >
-                            <span className="text-xs font-bold text-slate-700 truncate">{item.name}</span>
-                            <span className="text-[10px] text-slate-400">{item.quantity} {item.unit} disp.</span>
-                          </button>
-                        ))}
+                      <div className="flex flex-col gap-1.5 max-h-44 overflow-y-auto p-2 border border-slate-100 rounded-xl bg-slate-50/20 scrollbar-thin">
+                        {inventory.filter(item => item.type === 'input' || !item.type).map(item => {
+                          const isSelected = selectedPlantingInputs.some(p => p.itemId === item.id);
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              onClick={() => togglePlantingInput(item)}
+                              className={cn(
+                                "flex items-center justify-between p-2.5 rounded-xl border transition-all text-left",
+                                isSelected
+                                  ? "bg-emerald-50 border-emerald-250 text-emerald-950 shadow-sm font-bold"
+                                  : "bg-white border-slate-150 text-slate-700 hover:bg-slate-50"
+                              )}
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <div className={cn(
+                                  "w-4 h-4 rounded flex items-center justify-center border shrink-0 text-white font-black text-[10px] leading-none",
+                                  isSelected ? "bg-emerald-600 border-emerald-600" : "bg-white border-slate-300"
+                                )}>
+                                  {isSelected && "✓"}
+                                </div>
+                                <span className="text-xs font-bold truncate">{item.name}</span>
+                              </div>
+                              <span className="text-[10px] text-slate-500 font-bold bg-slate-100/80 px-2 py-0.5 rounded-md shrink-0">
+                                {item.quantity} {item.unit} disp.
+                              </span>
+                            </button>
+                          );
+                        })}
                       </div>
 
                       {selectedPlantingInputs.length > 0 && (
@@ -2252,23 +2544,36 @@ export default function ProductionComponent() {
                         Cadastrar Insumo
                       </button>
                     </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-40 overflow-y-auto p-2 border border-slate-100 rounded-xl">
-                      {inventory.map(item => (
-                        <button
-                          key={item.id}
-                          type="button"
-                          onClick={() => toggleLogProduct(item)}
-                          className={cn(
-                            "flex flex-col p-2 rounded-xl border transition-all text-left",
-                            selectedLogProducts.find(p => p.itemId === item.id)
-                              ? "bg-emerald-50 border-emerald-200 ring-1 ring-emerald-200"
-                              : "bg-slate-50 border-transparent hover:border-slate-200"
-                          )}
-                        >
-                          <span className="text-xs font-bold text-slate-700 truncate">{item.name}</span>
-                          <span className="text-[10px] text-slate-400">{item.quantity} {item.unit} disp.</span>
-                        </button>
-                      ))}
+                    <div className="flex flex-col gap-1.5 max-h-44 overflow-y-auto p-2 border border-slate-100 rounded-xl bg-slate-50/20 scrollbar-thin">
+                      {inventory.map(item => {
+                        const isSelected = selectedLogProducts.some(p => p.itemId === item.id);
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => toggleLogProduct(item)}
+                            className={cn(
+                              "flex items-center justify-between p-2.5 rounded-xl border transition-all text-left",
+                              isSelected
+                                ? "bg-emerald-50 border-emerald-250 text-emerald-950 shadow-sm font-bold"
+                                : "bg-white border-slate-150 text-slate-700 hover:bg-slate-50"
+                            )}
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <div className={cn(
+                                "w-4 h-4 rounded flex items-center justify-center border shrink-0 text-white font-black text-[10px] leading-none",
+                                isSelected ? "bg-emerald-600 border-emerald-600" : "bg-white border-slate-300"
+                              )}>
+                                {isSelected && "✓"}
+                              </div>
+                              <span className="text-xs font-bold truncate">{item.name}</span>
+                            </div>
+                            <span className="text-[10px] text-slate-500 font-bold bg-slate-100/80 px-2 py-0.5 rounded-md shrink-0">
+                              {item.quantity} {item.unit} disp.
+                            </span>
+                          </button>
+                        );
+                      })}
                     </div>
 
                     {selectedLogProducts.length > 0 && (
@@ -2439,23 +2744,36 @@ export default function ProductionComponent() {
                         Cadastrar Insumo
                       </button>
                     </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-32 overflow-y-auto p-2 border border-slate-100 rounded-xl">
-                      {inventory.map(item => (
-                        <button
-                          key={item.id}
-                          type="button"
-                          onClick={() => toggleProcessInput(item)}
-                          className={cn(
-                            "flex flex-col p-2 rounded-xl border transition-all text-left",
-                            selectedProcessInputs.find(p => p.itemId === item.id)
-                              ? "bg-amber-50 border-amber-200 ring-1 ring-amber-200"
-                              : "bg-slate-50 border-transparent hover:border-slate-200"
-                          )}
-                        >
-                          <span className="text-xs font-bold text-slate-700 truncate">{item.name}</span>
-                          <span className="text-[10px] text-slate-400">{item.quantity} {item.unit} disp.</span>
-                        </button>
-                      ))}
+                    <div className="flex flex-col gap-1.5 max-h-44 overflow-y-auto p-2 border border-slate-100 rounded-xl bg-slate-50/20 scrollbar-thin">
+                      {inventory.map(item => {
+                        const isSelected = selectedProcessInputs.some(p => p.itemId === item.id);
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => toggleProcessInput(item)}
+                            className={cn(
+                              "flex items-center justify-between p-2.5 rounded-xl border transition-all text-left",
+                              isSelected
+                                ? "bg-amber-50 border-amber-250 text-amber-950 shadow-sm font-bold"
+                                : "bg-white border-slate-150 text-slate-700 hover:bg-slate-50"
+                            )}
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <div className={cn(
+                                "w-4 h-4 rounded flex items-center justify-center border shrink-0 text-white font-black text-[10px] leading-none",
+                                isSelected ? "bg-amber-600 border-amber-600" : "bg-white border-slate-300"
+                              )}>
+                                {isSelected && "✓"}
+                              </div>
+                              <span className="text-xs font-bold truncate">{item.name}</span>
+                            </div>
+                            <span className="text-[10px] text-slate-500 font-bold bg-slate-150 px-2 py-0.5 rounded-md shrink-0">
+                              {item.quantity} {item.unit} disp.
+                            </span>
+                          </button>
+                        );
+                      })}
                     </div>
 
                     {selectedProcessInputs.length > 0 && (

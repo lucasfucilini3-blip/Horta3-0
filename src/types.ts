@@ -104,6 +104,9 @@ export interface Sale {
   saleNumber: string;
   customerName: string;
   customerPhone?: string;
+  deliveryAddress?: string;
+  observations?: string;
+  isDelivery?: boolean;
   items: SaleItem[];
   total: number;
   status: SaleStatus;

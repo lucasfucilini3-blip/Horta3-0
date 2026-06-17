@@ -27,6 +27,80 @@ const STATUS_CONFIG: any = {
 
 const PAYMENT_OPTIONS = ['Pix', 'Dinheiro', 'Cartão de Crédito', 'Cartão de Débito', 'Transferência Bancária'];
 
+const formatUnit = (unit: string, qty: number = 1) => {
+  const u = (unit || '').toLowerCase().trim();
+  if (
+    u === 'pé' || 
+    u === 'pe' || 
+    u === 'pés' || 
+    u === 'pes' || 
+    u === 'pés de alface' || 
+    u === 'pé de alface' ||
+    u === 'pacote' ||
+    u === 'pacotes' ||
+    u.includes('pe de') ||
+    u.includes('pe d') ||
+    u.includes('pé de') ||
+    u.includes('pés de')
+  ) {
+    return 'pct';
+  }
+  return unit;
+};
+
+const isMuda = (item: any) => {
+  const cat = (item.category || '').toLowerCase().trim();
+  return cat === 'muda' || cat === 'mudas';
+};
+
+const isPeUnitOrName = (item: any) => {
+  const u = (item.unit || '').toLowerCase().trim();
+  const n = (item.name || '').toLowerCase().trim();
+  const cat = (item.category || '').toLowerCase().trim();
+
+  // If explicitly "processados" or similar, it's a sales/processed item, NOT raw garden item
+  if (
+    cat === 'processados' ||
+    cat === 'processadas' ||
+    cat === 'processado' ||
+    cat === 'procecados' ||
+    cat === 'procecado' ||
+    cat === 'procecada' ||
+    cat === 'procecidas'
+  ) {
+    return false;
+  }
+
+  // If explicitly "produção" or similar, it's a raw garden item colhido
+  if (
+    cat === 'produção' ||
+    cat === 'producao' ||
+    cat === 'produçao' ||
+    cat === 'colheita' ||
+    cat === 'produce' ||
+    cat.startsWith('produ')
+  ) {
+    return true;
+  }
+
+  // Otherwise fallback to unit/name check
+  return (
+    u === 'pé' ||
+    u === 'pe' ||
+    u === 'pés' ||
+    u === 'pes' ||
+    u.startsWith('pé ') ||
+    u.startsWith('pe ') ||
+    u.startsWith('pés ') ||
+    u.startsWith('pes ') ||
+    u.includes(' de alface') || 
+    n.startsWith('pé ') ||
+    n.startsWith('pe ') ||
+    n.includes(' pé ') ||
+    n.includes(' pe ')
+  );
+};
+
 export default function Sales() {
   const { profile } = useAuth();
   const [sales, setSales] = useState<Sale[]>([]);
@@ -48,7 +122,20 @@ export default function Sales() {
   const [saving, setSaving] = useState(false);
 
   // New Fair (Modo Feira) States
-  const [activeTab, setActiveTab] = useState<'individual' | 'feira'>('individual');
+  const [activeTab, setActiveTab] = useState<'individual' | 'feira' | 'delivery'>('individual');
+
+  // Venda Delivery States
+  const [deliveryClientName, setDeliveryClientName] = useState('');
+  const [deliveryClientPhone, setDeliveryClientPhone] = useState('');
+  const [deliveryAddress, setDeliveryAddress] = useState('');
+  const [deliveryDateInput, setDeliveryDateInput] = useState('');
+  const [deliveryObservations, setDeliveryObservations] = useState('');
+  const [deliverySelectedItems, setDeliverySelectedItems] = useState<SaleItem[]>([]);
+  const [deliveryPaymentMethod, setDeliveryPaymentMethod] = useState<string>('Pagar na Entrega');
+  const [productSearchTerm, setProductSearchTerm] = useState('');
+  const [customerSearchTerm, setCustomerSearchTerm] = useState('');
+  const [showCustomerSuggestions, setShowCustomerSuggestions] = useState(false);
+
   const [fairs, setFairs] = useState<any[]>([]);
   const [activeFair, setActiveFair] = useState<any | null>(null);
   const [loadingFair, setLoadingFair] = useState(true);
@@ -217,6 +304,96 @@ export default function Sales() {
     } catch (error: any) {
       setError('Erro ao salvar venda: ' + (error.message || 'Erro desconhecido'));
       handleFirestoreError(error, OperationType.WRITE, 'sales');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleAddDeliveryItem = (id: string, type: 'inventory' | 'production') => {
+    const item = type === 'inventory' 
+      ? inventory.find(i => i.id === id)
+      : harvestedProductions.find(p => p.id === id);
+    
+    if (!item) return;
+
+    const name = type === 'inventory' ? (item as InventoryItem).name : (item as Production).crop;
+    const price = type === 'inventory' ? ((item as InventoryItem).price || 0) : 0;
+    const existing = deliverySelectedItems.find(si => si.itemId === id);
+    
+    if (existing) {
+      setDeliverySelectedItems(deliverySelectedItems.map(si => 
+        si.itemId === id ? { ...si, quantity: si.quantity + 1 } : si
+      ));
+    } else {
+      setDeliverySelectedItems([...deliverySelectedItems, { itemId: id, name, quantity: 1, price }]);
+    }
+  };
+
+  const handleRemoveDeliveryItem = (itemId: string) => {
+    setDeliverySelectedItems(deliverySelectedItems.filter(si => si.itemId !== itemId));
+  };
+
+  const handleUpdateDeliveryItem = (itemId: string, field: keyof SaleItem, value: any) => {
+    setDeliverySelectedItems(deliverySelectedItems.map(si => 
+      si.itemId === itemId ? { ...si, [field]: value } : si
+    ));
+  };
+
+  const handleSubmitDelivery = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    if (!deliveryClientName.trim()) {
+      setError("Por favor, informe o nome do cliente.");
+      return;
+    }
+    if (deliverySelectedItems.length === 0) {
+      setError("Selecione pelo menos 1 (um) produto.");
+      return;
+    }
+    setSaving(true);
+
+    const total = deliverySelectedItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+    const saleId = `sale_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const now = new Date();
+    const dateStr = format(now, 'yyyyMMdd');
+    const randomStr = Math.random().toString(36).substring(2, 6).toUpperCase();
+    const generatedSaleNumber = `D-${dateStr}-${randomStr}`;
+
+    const parsedDeliveryDate = deliveryDateInput ? new Date(deliveryDateInput + 'T12:00:00') : new Date();
+
+    const saleData: any = {
+      saleNumber: generatedSaleNumber,
+      customerName: deliveryClientName.trim(),
+      customerPhone: deliveryClientPhone.trim() || '',
+      deliveryAddress: deliveryAddress.trim() || '',
+      observations: deliveryObservations.trim() || '',
+      items: deliverySelectedItems,
+      total,
+      status: 'pending_delivery' as SaleStatus,
+      deliveryDate: parsedDeliveryDate,
+      isDelivery: true,
+      paymentMethods: [{ method: deliveryPaymentMethod, amount: total }],
+      createdAt: serverTimestamp(),
+    };
+
+    try {
+      await setDoc(doc(db, 'sales', saleId), saleData);
+      
+      // Reset form variables
+      setDeliveryClientName('');
+      setDeliveryClientPhone('');
+      setDeliveryAddress('');
+      setDeliveryDateInput('');
+      setDeliveryObservations('');
+      setDeliverySelectedItems([]);
+      setDeliveryPaymentMethod('Pagar na Entrega');
+      setCustomerSearchTerm('');
+      
+      alert(`Venda Delivery cadastrada com sucesso! Número do pedido: ${generatedSaleNumber}`);
+      setActiveTab('individual');
+    } catch (err: any) {
+      setError('Erro ao salvar venda delivery: ' + (err.message || 'Erro desconhecido'));
+      handleFirestoreError(err, OperationType.WRITE, 'sales');
     } finally {
       setSaving(false);
     }
@@ -415,7 +592,7 @@ export default function Sales() {
   useEffect(() => {
     if (activeTab === 'feira' && !activeFair) {
       const initialLoads: Record<string, number> = {};
-      inventory.filter(item => item.type === 'dispatch').forEach(item => {
+      inventory.filter(item => item.type === 'dispatch' && !isPeUnitOrName(item) && !isMuda(item)).forEach(item => {
         initialLoads[item.id] = 0;
       });
       setSelectedLoadQuantities(initialLoads);
@@ -433,7 +610,7 @@ export default function Sales() {
       const itemsToLoad = Object.entries(selectedLoadQuantities)
         .map(([id, qty]) => {
           const invItem = inventory.find(i => i.id === id);
-          if (!invItem || qty <= 0) return null;
+          if (!invItem || Number(qty) <= 0) return null;
           return {
             itemId: id,
             name: invItem.name,
@@ -703,30 +880,48 @@ export default function Sales() {
       </header>
 
       {/* Tabs Seletoras */}
-      <div className="flex bg-slate-100 p-1 rounded-2xl w-full max-w-lg shadow-sm border border-slate-200">
+      <div className="flex bg-slate-100 p-1 rounded-2xl w-full max-w-2xl shadow-sm border border-slate-200">
         <button
           onClick={() => setActiveTab('individual')}
           className={cn(
-            "flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-black transition-all",
+            "flex-1 flex items-center justify-center gap-1.5 md:gap-2 py-3 rounded-xl transition-all cursor-pointer",
             activeTab === 'individual' 
               ? "bg-white text-emerald-700 shadow-md" 
               : "text-slate-500 hover:text-slate-800"
           )}
         >
-          <Calendar size={16} />
-          Pedidos Individuais
+          <Calendar size={15} />
+          <span className="text-[11px] sm:text-xs md:text-sm font-black">
+            <span className="hidden md:inline">Pedidos </span>Individuais
+          </span>
         </button>
         <button
           onClick={() => setActiveTab('feira')}
           className={cn(
-            "flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-black transition-all",
+            "flex-1 flex items-center justify-center gap-1.5 md:gap-2 py-3 rounded-xl transition-all cursor-pointer",
             activeTab === 'feira' 
               ? "bg-white text-emerald-700 shadow-md" 
               : "text-slate-500 hover:text-slate-800"
           )}
         >
-          <Store size={16} />
-          Modo Feira (Venda Ágil)
+          <Store size={15} />
+          <span className="text-[11px] sm:text-xs md:text-sm font-black">
+            <span className="hidden md:inline">Modo </span>Feira
+          </span>
+        </button>
+        <button
+          onClick={() => setActiveTab('delivery')}
+          className={cn(
+            "flex-1 flex items-center justify-center gap-1.5 md:gap-2 py-3 rounded-xl transition-all cursor-pointer",
+            activeTab === 'delivery' 
+              ? "bg-white text-emerald-700 shadow-md" 
+              : "text-slate-500 hover:text-slate-800"
+          )}
+        >
+          <Truck size={15} />
+          <span className="text-[11px] sm:text-xs md:text-sm font-black">
+            <span className="hidden md:inline">Venda </span>Delivery
+          </span>
         </button>
       </div>
 
@@ -787,9 +982,14 @@ export default function Sales() {
                         })()}
                       </div>
                       <div className="min-w-0">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center flex-wrap gap-2">
                           <h4 className="text-base md:text-lg font-bold text-slate-900 truncate">{sale.customerName}</h4>
                           <span className="text-[10px] font-mono bg-slate-100 px-1.5 py-0.5 rounded text-slate-500">{sale.saleNumber || 'S/N'}</span>
+                          {sale.isDelivery && (
+                            <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-700 border border-amber-150 rounded-lg px-2 py-0.5 text-[9px] md:text-[10px] font-black uppercase tracking-wider">
+                              <Truck size={10} /> Delivery
+                            </span>
+                          )}
                         </div>
                         <div className="flex flex-col gap-0.5 md:gap-1">
                           <p className="text-[10px] md:text-xs text-slate-500">
@@ -801,13 +1001,13 @@ export default function Sales() {
                           {sale.deliveryDate && (
                             <p className="text-[10px] md:text-xs font-bold text-emerald-600 flex items-center gap-1">
                               <Calendar size={10} className="md:w-3 md:h-3" />
-                              Entrega: {format(sale.deliveryDate.toDate(), "dd 'de' MMMM", { locale: ptBR })}
+                              Entrega: {sale.deliveryDate?.toDate ? format(sale.deliveryDate.toDate(), "dd 'de' MMMM", { locale: ptBR }) : format(new Date(sale.deliveryDate), "dd 'de' MMMM", { locale: ptBR })}
                             </p>
                           )}
                         </div>
                       </div>
                     </div>
-
+ 
                     <div className="flex-1 lg:px-10">
                       <div className="flex flex-col gap-2 md:gap-3">
                         <div className="flex flex-wrap gap-1.5 md:gap-2">
@@ -825,6 +1025,26 @@ export default function Sales() {
                                 {pm.method}: R$ {pm.amount.toFixed(2)}
                               </span>
                             ))}
+                          </div>
+                        )}
+                        {sale.isDelivery && (
+                          <div className="border-t border-slate-100/70 pt-2 lg:border-t-0 lg:pt-0 space-y-1.5 text-[11px] text-slate-500 font-medium">
+                            {sale.customerPhone && (
+                              <p className="flex items-center gap-1">
+                                <span className="font-extrabold text-slate-700">Telefone:</span> {sale.customerPhone}
+                              </p>
+                            )}
+                            {sale.deliveryAddress && (
+                              <p className="flex items-start gap-1.5 leading-relaxed">
+                                <span className="font-extrabold text-slate-700">Endereço:</span> {sale.deliveryAddress}
+                              </p>
+                            )}
+                            {sale.observations && (
+                              <div className="flex items-start gap-1 p-2 bg-amber-50/60 text-amber-800 border border-amber-100/60 rounded-xl mt-1 text-[10px] leading-relaxed max-w-sm font-semibold">
+                                <span className="font-black not-italic text-amber-900 uppercase text-[9px] tracking-wider block mt-0.5 mr-1 shrink-0">Obs:</span>
+                                <span>{sale.observations}</span>
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>
@@ -893,6 +1113,362 @@ export default function Sales() {
             )}
           </div>
         </>
+      )}
+
+      {activeTab === 'delivery' && (
+        <div className="space-y-6">
+          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+            <h3 className="text-xl md:text-2xl font-black text-slate-900 flex items-center gap-2">
+              <Truck className="text-emerald-600" size={24} />
+              Preenchimento Rápido - Venda Delivery
+            </h3>
+            <p className="text-slate-500 text-sm mt-1">Lançamento simplificado de entregas agendadas com múltiplos produtos e controle de endereço.</p>
+          </div>
+
+          {error && (
+            <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl text-rose-600 text-xs font-bold leading-relaxed flex items-center gap-2">
+              <XCircle className="text-rose-500 shrink-0" size={18} />
+              <span>{error}</span>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* Dados do Cliente e Entrega */}
+            <form onSubmit={handleSubmitDelivery} className="lg:col-span-5 bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-sm space-y-5">
+              <h4 className="text-base font-black text-slate-800 border-b border-slate-100 pb-2 mb-4">
+                1. Informações de Entrega
+              </h4>
+
+              {/* Data de Entrega */}
+              <div className="space-y-2">
+                <label className="block text-xs font-black uppercase text-slate-500 tracking-wider">Data de Entrega *</label>
+                <div className="flex gap-2">
+                  <input 
+                    type="date"
+                    value={deliveryDateInput}
+                    onChange={(e) => setDeliveryDateInput(e.target.value)}
+                    required
+                    className="flex-1 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-bold text-slate-700"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const today = format(new Date(), 'yyyy-MM-dd');
+                      setDeliveryDateInput(today);
+                    }}
+                    className="px-3 py-2 text-xs font-bold bg-white border border-slate-200 hover:border-emerald-300 text-slate-600 rounded-xl hover:text-emerald-600 transition-all shadow-sm"
+                  >
+                    Hoje
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const tomorrow = new Date();
+                      tomorrow.setDate(tomorrow.getDate() + 1);
+                      setDeliveryDateInput(format(tomorrow, 'yyyy-MM-dd'));
+                    }}
+                    className="px-3 py-2 text-xs font-bold bg-white border border-slate-200 hover:border-emerald-300 text-slate-600 rounded-xl hover:text-emerald-600 transition-all shadow-sm"
+                  >
+                    Amanhã
+                  </button>
+                </div>
+              </div>
+
+              {/* Nome do Cliente */}
+              <div className="space-y-2 relative">
+                <label className="block text-xs font-black uppercase text-slate-500 tracking-wider">Nome do Cliente *</label>
+                <div className="relative">
+                  <input 
+                    type="text"
+                    required
+                    placeholder="Ex: João Silva ou Busque..."
+                    value={deliveryClientName}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setDeliveryClientName(val);
+                      setCustomerSearchTerm(val);
+                      setShowCustomerSuggestions(true);
+                    }}
+                    onFocus={() => setShowCustomerSuggestions(true)}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-bold text-slate-800"
+                  />
+                  {showCustomerSuggestions && customers.length > 0 && (
+                    <div className="absolute left-0 right-0 top-full mt-1.5 bg-white border border-slate-200 rounded-xl shadow-xl z-50 max-h-48 overflow-y-auto divide-y divide-slate-50">
+                      {customers
+                        .filter(c => 
+                          (c.companyName?.toLowerCase() || '').includes(customerSearchTerm.toLowerCase()) || 
+                          (c.contactName?.toLowerCase() || '').includes(customerSearchTerm.toLowerCase())
+                        )
+                        .map(c => (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => {
+                              setDeliveryClientName(c.companyName);
+                              if (c.phone) setDeliveryClientPhone(c.phone);
+                              setShowCustomerSuggestions(false);
+                            }}
+                            className="w-full text-left px-4 py-2.5 hover:bg-slate-50 hover:text-emerald-700 transition-colors text-xs font-medium text-slate-705"
+                          >
+                            <span className="font-bold text-slate-900 block">{c.companyName}</span>
+                            {c.contactName && <span className="text-[10px] text-slate-400 font-medium">Contato: {c.contactName}</span>}
+                            {c.phone && <span className="text-[10px] text-slate-450 ml-2">({c.phone})</span>}
+                          </button>
+                        ))}
+                      <div className="p-2 bg-slate-50 flex justify-between items-center text-[10px] text-slate-400">
+                        <span>Clientes Cadastrados</span>
+                        <button 
+                          type="button" 
+                          onClick={() => setShowCustomerSuggestions(false)}
+                          className="font-black text-rose-500 uppercase tracking-widest hover:underline"
+                        >
+                          Fechar
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Telefone */}
+              <div className="space-y-2">
+                <label className="block text-xs font-black uppercase text-slate-500 tracking-wider">Telefone</label>
+                <input 
+                  type="text"
+                  placeholder="Ex: (11) 99999-9999"
+                  value={deliveryClientPhone}
+                  onChange={(e) => setDeliveryClientPhone(e.target.value)}
+                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-semibold"
+                />
+              </div>
+
+              {/* Endereço */}
+              <div className="space-y-2">
+                <label className="block text-xs font-black uppercase text-slate-500 tracking-wider">Endereço de Entrega</label>
+                <input 
+                  type="text"
+                  placeholder="Ex: Rua das Flores, 123 - Centro"
+                  value={deliveryAddress}
+                  onChange={(e) => setDeliveryAddress(e.target.value)}
+                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-semibold"
+                />
+              </div>
+
+              {/* Forma de Pagamento */}
+              <div className="space-y-2">
+                <label className="block text-xs font-black uppercase text-slate-500 tracking-wider">Forma de Pagamento Predefinida</label>
+                <select
+                  value={deliveryPaymentMethod}
+                  onChange={(e) => setDeliveryPaymentMethod(e.target.value)}
+                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-bold text-slate-700"
+                >
+                  <option value="Pagar na Entrega">Pagar na Entrega (A definir)</option>
+                  <option value="Pix">Pix</option>
+                  <option value="Dinheiro">Dinheiro</option>
+                  <option value="Cartão de Crédito">Cartão de Crédito</option>
+                  <option value="Cartão de Débito">Cartão de Débito</option>
+                  <option value="Transferência Bancária">Transferência Bancária</option>
+                </select>
+              </div>
+
+              {/* Observações */}
+              <div className="space-y-2">
+                <label className="block text-xs font-black uppercase text-slate-500 tracking-wider">Observações do Pedido</label>
+                <textarea 
+                  rows={2}
+                  placeholder="Ex: Deixar na portaria, ligar ao chegar, troco para 100 reais, etc..."
+                  value={deliveryObservations}
+                  onChange={(e) => setDeliveryObservations(e.target.value)}
+                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm resize-none"
+                />
+              </div>
+
+              {/* Finalizar Button */}
+              <button
+                type="submit"
+                disabled={saving}
+                className="w-full py-4 px-6 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-black text-sm uppercase tracking-wider rounded-2xl shadow-xl shadow-emerald-100 transition-all flex items-center justify-center gap-2 mt-2 cursor-pointer active:scale-[0.98]"
+              >
+                {saving ? (
+                  <>
+                    <RefreshCw className="animate-spin text-white" size={18} />
+                    Salvando Pedido...
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle size={18} />
+                    Finalizar e Salvar Delivery
+                  </>
+                )}
+              </button>
+            </form>
+
+            {/* Seleção de Produtos */}
+            <div className="lg:col-span-7 space-y-6">
+              {/* Painel de seleção de produtos */}
+              <div className="bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-sm space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                  <h4 className="text-base font-black text-slate-800">
+                    2. Escolha os Produtos
+                  </h4>
+                  <span className="text-[10px] bg-slate-100 text-slate-600 px-2.5 py-0.5 rounded-full font-bold">
+                    Estoque de Expedição (Horta)
+                  </span>
+                </div>
+
+                {/* Filtro de busca de produtos */}
+                <div className="relative">
+                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                  <input 
+                    type="text" 
+                    placeholder="Buscar produto por nome..." 
+                    value={productSearchTerm}
+                    onChange={(e) => setProductSearchTerm(e.target.value)}
+                    className="w-full pl-11 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
+                  />
+                </div>
+
+                {/* Lista de produtos clicáveis em formato de lista */}
+                <div className="flex flex-col gap-2 max-h-64 overflow-y-auto p-1.5 border border-slate-100 rounded-2xl bg-slate-50/50 scrollbar-thin">
+                  {inventory
+                    .filter(item => item.type === 'dispatch' && !isPeUnitOrName(item) && !isMuda(item) && item.name.toLowerCase().includes(productSearchTerm.toLowerCase()))
+                    .map(item => (
+                      <div
+                        key={item.id}
+                        className="flex items-center justify-between p-2.5 sm:p-3 rounded-xl bg-white hover:bg-emerald-50/20 border border-slate-100/90 shadow-sm gap-3 transition-colors"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <span className="text-xs sm:text-sm font-black text-slate-800 block truncate">{item.name}</span>
+                          <div className="flex flex-wrap items-center gap-x-2 text-[10px] text-slate-500 mt-0.5">
+                            <span className="font-semibold">Estoque: <b className="text-slate-700">{item.quantity} {formatUnit(item.unit, item.quantity)}</b></span>
+                            <span className="text-slate-300">•</span>
+                            {item.price !== undefined ? (
+                              <span className="font-extrabold text-emerald-600">R$ {item.price.toFixed(2)}/{formatUnit(item.unit)}</span>
+                            ) : (
+                              <span className="text-slate-400 font-medium">Sem preço</span>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleAddDeliveryItem(item.id, 'inventory')}
+                          className="shrink-0 px-3 py-1.5 sm:py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-extrabold text-xs rounded-xl transition-all flex items-center gap-1 cursor-pointer active:scale-95 border border-emerald-100/50"
+                        >
+                          <Plus size={13} className="stroke-[3]" />
+                          <span className="hidden sm:inline">Adicionar</span>
+                          <span className="sm:hidden">Add</span>
+                        </button>
+                      </div>
+                    ))}
+                  {inventory.filter(item => item.type === 'dispatch' && !isPeUnitOrName(item) && !isMuda(item) && item.name.toLowerCase().includes(productSearchTerm.toLowerCase())).length === 0 && (
+                    <div className="col-span-full py-8 text-center text-slate-400 text-xs font-medium">
+                      Nenhum produto cadastrado com este nome na Horta (Expedição).
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Resumo e lista de itens adicionados */}
+              <div className="bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-sm space-y-4">
+                <div className="border-b border-slate-100 pb-2">
+                  <h4 className="text-base font-black text-slate-800">
+                    3. Itens Selecionados no Pedido
+                  </h4>
+                </div>
+
+                {deliverySelectedItems.length === 0 ? (
+                  <div className="py-12 border-2 border-dashed border-slate-100 rounded-2xl text-center text-slate-400 text-xs font-medium flex flex-col items-center justify-center gap-2">
+                    <ShoppingCart size={28} className="text-slate-300" />
+                    <span>Nenhum item adicionado ainda. Clique nos produtos acima para montar o pedido!</span>
+                  </div>
+                ) : (
+                  <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
+                    {deliverySelectedItems.map((item) => {
+                      const baseItem = inventory.find(i => i.id === item.itemId);
+                      const unit = formatUnit(baseItem?.unit || 'un', item.quantity);
+                      return (
+                        <div key={item.itemId} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-emerald-50/20 border border-emerald-100/70 rounded-2xl transition-all">
+                          <div className="min-w-0 flex-1">
+                            <span className="font-bold text-slate-800 text-sm block truncate">{item.name}</span>
+                            <span className="text-[10px] text-slate-400">R$ {item.price.toFixed(2)} por {unit}</span>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-2.5 justify-between sm:justify-end w-full sm:w-auto border-t border-slate-100 sm:border-0 pt-3 sm:pt-0 mt-1 sm:mt-0">
+                            {/* Controle de Quantidade */}
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateDeliveryItem(item.itemId, 'quantity', Math.max(1, item.quantity - 1))}
+                                className="w-7 h-7 bg-white border border-slate-200 rounded-lg flex items-center justify-center font-bold text-slate-600 hover:bg-slate-50 transition-colors text-xs cursor-pointer"
+                              >
+                                -
+                              </button>
+                              <input 
+                                type="number" 
+                                min="1"
+                                value={item.quantity}
+                                onChange={(e) => handleUpdateDeliveryItem(item.itemId, 'quantity', Math.max(1, Number(e.target.value)))}
+                                className="w-10 py-1 bg-white border border-slate-200 rounded-lg text-center font-black text-xs text-slate-850"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateDeliveryItem(item.itemId, 'quantity', item.quantity + 1)}
+                                className="w-7 h-7 bg-white border border-slate-200 rounded-lg flex items-center justify-center font-bold text-slate-600 hover:bg-slate-50 transition-colors text-xs cursor-pointer"
+                              >
+                                +
+                              </button>
+                            </div>
+
+                            {/* Preço Unitário Editable */}
+                            <div className="flex items-center gap-1">
+                              <span className="text-[10px] font-bold text-slate-400">R$</span>
+                              <input 
+                                type="number" 
+                                step="0.01"
+                                min="0"
+                                value={item.price}
+                                onChange={(e) => handleUpdateDeliveryItem(item.itemId, 'price', Math.max(0, Number(e.target.value)))}
+                                className="w-14 px-1.5 py-1 bg-white border border-slate-200 rounded-lg font-bold text-xs text-slate-800 text-right"
+                              />
+                            </div>
+
+                            {/* Subtotal e Botão Excluir */}
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-black text-slate-700 min-w-[65px] text-right">
+                                R$ {(item.price * item.quantity).toFixed(2)}
+                              </span>
+                              <button 
+                                type="button"
+                                onClick={() => handleRemoveDeliveryItem(item.itemId)}
+                                className="p-1.5 text-rose-500 hover:bg-rose-50 hover:text-rose-600 rounded-xl transition-all cursor-pointer"
+                                title="Remover item"
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {/* Resumo Totalizador */}
+                    <div className="bg-slate-100 p-4 rounded-2xl border border-slate-200 flex items-center justify-between mt-4">
+                      <div>
+                        <p className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Total Geral do Pedido</p>
+                        <p className="text-xs text-slate-500">Forma de recebimento sugerida: <b>{deliveryPaymentMethod}</b></p>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-2xl font-black text-slate-900">
+                          R$ {deliverySelectedItems.reduce((acc, item) => acc + (item.price * item.quantity), 0).toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {activeTab === 'feira' && (
@@ -985,7 +1561,7 @@ export default function Sales() {
                         <div className="bg-slate-100 px-3 py-1.5 rounded-xl text-right shrink-0">
                           <span className="text-[10px] uppercase font-bold text-slate-400 block">Restante</span>
                           <span className="text-lg font-black text-slate-700">
-                            {item.remainingQty} <span className="text-xs font-normal text-slate-400">{item.unit}</span>
+                            {item.remainingQty} <span className="text-xs font-normal text-slate-400">{formatUnit(item.unit, item.remainingQty)}</span>
                           </span>
                         </div>
                       </div>
@@ -993,7 +1569,7 @@ export default function Sales() {
                       {/* Progresso visual */}
                       <div>
                         <div className="flex justify-between text-xs font-bold text-slate-500 mb-1 font-sans">
-                          <span>Vendidos: {item.soldQty} de {item.initialQty} {item.unit}</span>
+                          <span>Vendidos: {item.soldQty} de {item.initialQty} {formatUnit(item.unit, item.initialQty)}</span>
                           <span>{soldPct}%</span>
                         </div>
                         <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden border border-slate-150">
@@ -1062,7 +1638,7 @@ export default function Sales() {
                               onChange={(e) => handleFairItemInputChange(item.itemId, 'remainingQty', Number(e.target.value))}
                               className="bg-slate-50 border border-slate-200 font-bold px-3 py-2 text-center text-sm text-slate-800 rounded-xl focus:ring-1 focus:ring-emerald-500 focus:outline-none w-full"
                             />
-                            <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400">{item.unit}</span>
+                            <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400">{formatUnit(item.unit, item.remainingQty)}</span>
                           </div>
                         </div>
                         <div>
@@ -1076,7 +1652,7 @@ export default function Sales() {
                               onChange={(e) => handleFairItemInputChange(item.itemId, 'lostQty', Number(e.target.value))}
                               className="bg-slate-50 border border-slate-200 font-bold px-3 py-2 text-center text-sm text-slate-800 rounded-xl focus:ring-1 focus:ring-emerald-500 focus:outline-none w-full"
                             />
-                            <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400">{item.unit}</span>
+                            <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400">{formatUnit(item.unit, item.lostQty || 0)}</span>
                           </div>
                         </div>
                       </div>
@@ -1114,14 +1690,14 @@ export default function Sales() {
                 <div className="space-y-3">
                   <label className="text-sm font-bold text-slate-700 ml-1 block">Estoque de Expedição (Escolha o que levar no caminhão)</label>
                   
-                  {inventory.filter(item => item.type === 'dispatch').length === 0 ? (
+                  {inventory.filter(item => item.type === 'dispatch' && !isPeUnitOrName(item) && !isMuda(item)).length === 0 ? (
                     <div className="bg-slate-50 p-8 text-center border border-slate-200 rounded-2xl text-slate-400">
                       <p className="font-bold">Nenhum produto cadastrado no Estoque de Expedição.</p>
                       <p className="text-xs mt-1">Vá até o menu de Estoque e adicione produtos do tipo "Expedição" primeiro.</p>
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-96 overflow-y-auto p-1">
-                      {inventory.filter(item => item.type === 'dispatch').map(item => {
+                      {inventory.filter(item => item.type === 'dispatch' && !isPeUnitOrName(item) && !isMuda(item)).map(item => {
                         const currentVal = selectedLoadQuantities[item.id] || 0;
                         return (
                           <div 
@@ -1136,7 +1712,7 @@ export default function Sales() {
                             <div>
                               <span className="font-bold text-slate-800 text-sm block truncate" title={item.name}>{item.name}</span>
                               <span className="text-[10px] text-slate-400 block font-semibold">Preço ref: R$ {(item.price || 0).toFixed(2)}</span>
-                              <span className="text-[10px] text-slate-400 block">Estoque atual: {item.quantity} {item.unit}</span>
+                              <span className="text-[10px] text-slate-400 block">Estoque atual: {item.quantity} {formatUnit(item.unit, item.quantity)}</span>
                             </div>
                             <div className="flex items-center justify-between gap-1.5">
                               <div className="flex items-center gap-1 bg-white p-1 rounded-lg border border-slate-200">
@@ -1173,7 +1749,7 @@ export default function Sales() {
                                   +
                                 </button>
                               </div>
-                              <span className="text-xs text-slate-450 font-black truncate shrink-0">{item.unit}</span>
+                              <span className="text-xs text-slate-450 font-black truncate shrink-0">{formatUnit(item.unit, currentVal || 1)}</span>
                             </div>
                           </div>
                         );
@@ -1321,7 +1897,7 @@ export default function Sales() {
                   <div className="space-y-4">
                     <label className="text-sm font-bold text-slate-700 ml-1">Produtos da Horta (Estoque de Expedição)</label>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto p-2 border border-slate-100 rounded-xl">
-                      {inventory.filter(item => item.type === 'dispatch').map(item => (
+                      {inventory.filter(item => item.type === 'dispatch' && !isPeUnitOrName(item) && !isMuda(item)).map(item => (
                         <button
                           key={item.id}
                           type="button"
@@ -1330,7 +1906,7 @@ export default function Sales() {
                         >
                           <div className="flex flex-col">
                             <span className="text-sm font-semibold text-slate-700">{item.name}</span>
-                            <span className="text-[10px] text-slate-400">Qtd: {item.quantity} {item.unit}</span>
+                            <span className="text-[10px] text-slate-400">Qtd: {item.quantity} {formatUnit(item.unit, item.quantity)}</span>
                           </div>
                           <Plus size={16} className="text-emerald-600" />
                         </button>

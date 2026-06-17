@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { collection, query, onSnapshot, addDoc, updateDoc, doc, deleteDoc as firestoreDeleteDoc, serverTimestamp, orderBy, where, increment } from 'firebase/firestore';
 import { db } from '../firebase';
 import { InventoryItem, InventoryCategory, Category } from '../types';
-import { Plus, Search, Filter, MoreVertical, Edit2, Trash2, AlertTriangle, Package, X as CloseIcon, ArrowDownCircle, Settings2, Tag, ShoppingCart, Scroll, ArrowUpRight, ArrowDownRight, FileText, Download, Calendar } from 'lucide-react';
+import { Plus, Search, Filter, MoreVertical, Edit2, Trash2, AlertTriangle, Package, X as CloseIcon, ArrowDownCircle, Settings2, Tag, ShoppingCart, Scroll, ArrowUpRight, ArrowDownRight, FileText, Download, Calendar, Sprout } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth, handleFirestoreError, OperationType } from '../App';
 import { clsx, type ClassValue } from 'clsx';
@@ -561,22 +561,84 @@ export default function Inventory() {
     }
   };
 
+  const isMuda = (item: any) => {
+    const cat = (item.category || '').toLowerCase().trim();
+    return cat === 'muda' || cat === 'mudas';
+  };
+
+  const isPeUnitOrName = (item: any) => {
+    const u = (item.unit || '').toLowerCase().trim();
+    const n = (item.name || '').toLowerCase().trim();
+    const cat = (item.category || '').toLowerCase().trim();
+
+    // If explicitly "processados" or similar, it's a sales/processed item, NOT raw garden item
+    if (
+      cat === 'processados' ||
+      cat === 'processadas' ||
+      cat === 'processado' ||
+      cat === 'procecados' ||
+      cat === 'procecado' ||
+      cat === 'procecada' ||
+      cat === 'procecidas'
+    ) {
+      return false;
+    }
+
+    // If explicitly "produção" or similar, it's a raw garden item colhido
+    if (
+      cat === 'produção' ||
+      cat === 'producao' ||
+      cat === 'produçao' ||
+      cat === 'colheita' ||
+      cat === 'produce' ||
+      cat.startsWith('produ')
+    ) {
+      return true;
+    }
+
+    // Otherwise fallback to unit/name check
+    return (
+      u === 'pé' ||
+      u === 'pe' ||
+      u === 'pés' ||
+      u === 'pes' ||
+      u.startsWith('pé ') ||
+      u.startsWith('pe ') ||
+      u.startsWith('pés ') ||
+      u.startsWith('pes ') ||
+      u.includes(' de alface') || 
+      n.startsWith('pé ') ||
+      n.startsWith('pe ') ||
+      n.includes(' pé ') ||
+      n.includes(' pe ')
+    );
+  };
+
   const filteredItems = items.filter(item => {
     const matchesSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesCategory = filterCategory === 'all' || item.category === filterCategory;
     return matchesSearch && matchesCategory;
   });
 
-  const inputItems = filteredItems.filter(item => item.type === 'input' || !item.type); // Fallback for old items
-  const dispatchItems = filteredItems.filter(item => item.type === 'dispatch');
+  const inputItems = filteredItems.filter(item => item.type === 'input' || !item.type || isMuda(item)); // Fallback for old items
+  const dispatchItems = filteredItems.filter(item => item.type === 'dispatch' && !isMuda(item));
+  const salesItems = dispatchItems.filter(item => !isPeUnitOrName(item));
+  const processingItems = dispatchItems.filter(item => isPeUnitOrName(item));
 
-  const InventoryTable = ({ items, title, icon: Icon }: { items: InventoryItem[], title: string, icon: any }) => (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-      <div className="px-4 md:px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center gap-2">
-        <Icon size={20} className="text-emerald-600" />
-        <h3 className="font-bold text-slate-800 text-sm md:text-base">{title}</h3>
-        <span className="ml-auto px-2 py-1 bg-slate-200 text-slate-600 rounded-lg text-[10px] font-bold uppercase whitespace-nowrap">
-          {items.length} Itens
+  const InventoryTable = ({ items, title, description, icon: Icon }: { items: InventoryItem[], title: string, description?: string, icon: any }) => (
+    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden animate-in fade-in duration-350">
+      <div className="px-4 md:px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex flex-col md:flex-row md:items-center gap-2">
+        <div className="flex items-center gap-2">
+          <div className="p-1.5 bg-emerald-50 rounded-lg text-emerald-650 shrink-0">
+            <Icon size={18} />
+          </div>
+          <div className="flex flex-col">
+            <h3 className="font-extrabold text-slate-800 text-sm md:text-base leading-snug">{title}</h3>
+            {description && <p className="text-[10px] md:text-xs text-slate-450 font-normal mt-0.5 leading-tight">{description}</p>}
+          </div>
+        </div>
+        <span className="md:ml-auto self-start md:self-auto px-2 py-0.5 bg-slate-200/60 border border-slate-300/30 text-slate-600 rounded-lg text-[10px] font-bold uppercase whitespace-nowrap mt-1 md:mt-0">
+          {items.length} {items.length === 1 ? 'item' : 'itens'}
         </span>
       </div>
       <div className="overflow-x-auto scrollbar-hide">
@@ -931,13 +993,22 @@ export default function Inventory() {
             <InventoryTable 
               items={inputItems} 
               title="Estoque de Entrada (Insumos)" 
+              description="Insumos utilizados na produção (Adubo, sementes, bandejas, defensivos, embalagens vazias)"
               icon={Package} 
             />
             
             <InventoryTable 
-              items={dispatchItems} 
-              title="Estoque de Expedição (Produtos)" 
+              items={salesItems} 
+              title="Estoque de Venda (Produtos Processados / Pacotes)" 
+              description="Produtos lavados, processados e embalados (ex: Pacotes / pct) prontos para feiras ou faturamento"
               icon={ShoppingCart} 
+            />
+
+            <InventoryTable 
+              items={processingItems} 
+              title="Estoque da Horta (Colhidos / Aguardando Processamento)" 
+              description="Hortaliças frescas recém-colhidas (ex: Pés de alface) que aguardam limpeza, seleção e pesagem/embalimento"
+              icon={Sprout} 
             />
           </div>
         </>

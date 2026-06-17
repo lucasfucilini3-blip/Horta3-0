@@ -841,13 +841,17 @@ export async function dbImportData(jsonData: any, currentUserProfile: any) {
         // Helper to convert mock timestamps or objects with seconds/nanoseconds back to real Cloud Timestamps
         const convertMockTimestamps = (val: any): any => {
           if (!val) return val;
+          if (
+            val instanceof MockTimestamp ||
+            (val.constructor && val.constructor.name === 'MockTimestamp') ||
+            val._isTimestamp === true ||
+            (typeof val === 'object' && typeof val.seconds === 'number' && typeof val.nanoseconds === 'number' && (Object.keys(val).length <= 3 || val.constructor?.name === 'Object'))
+          ) {
+            const secs = typeof val.seconds === 'number' ? val.seconds : 0;
+            const nanos = typeof val.nanoseconds === 'number' ? val.nanoseconds : 0;
+            return RealTimestamp.fromMillis(secs * 1000 + Math.floor(nanos / 1000000));
+          }
           if (typeof val === 'object') {
-            if (val._isTimestamp) {
-              return RealTimestamp.fromMillis(val.seconds * 1000 + Math.floor(val.nanoseconds / 1000000));
-            }
-            if (typeof val.seconds === 'number' && typeof val.nanoseconds === 'number') {
-              return RealTimestamp.fromMillis(val.seconds * 1000 + Math.floor(val.nanoseconds / 1000000));
-            }
             if (Array.isArray(val)) {
               return val.map(convertMockTimestamps);
             }
@@ -925,14 +929,34 @@ export async function migrateLocalDataToFirebaseFirestore(uid: string) {
         if (!item || !item.id) continue;
         
         const docRef = realDoc(realDb, colName, item.id);
-        const payload = { ...item };
         
-        // Convert mock timestamps to real timestamps
-        for (const prop of Object.keys(payload)) {
-          if (payload[prop] && payload[prop]._isTimestamp) {
-            payload[prop] = RealTimestamp.fromMillis(payload[prop].seconds * 1000 + Math.floor(payload[prop].nanoseconds / 1000000));
+        // Recursive helper to convert mock timestamps to real Firestore timestamps
+        const convertMockTimestamps = (val: any): any => {
+          if (!val) return val;
+          if (
+            val instanceof MockTimestamp ||
+            (val.constructor && val.constructor.name === 'MockTimestamp') ||
+            val._isTimestamp === true ||
+            (typeof val === 'object' && typeof val.seconds === 'number' && typeof val.nanoseconds === 'number' && (Object.keys(val).length <= 3 || val.constructor?.name === 'Object'))
+          ) {
+            const secs = typeof val.seconds === 'number' ? val.seconds : 0;
+            const nanos = typeof val.nanoseconds === 'number' ? val.nanoseconds : 0;
+            return RealTimestamp.fromMillis(secs * 1000 + Math.floor(nanos / 1000000));
           }
-        }
+          if (typeof val === 'object') {
+            if (Array.isArray(val)) {
+              return val.map(convertMockTimestamps);
+            }
+            const res: any = {};
+            for (const k of Object.keys(val)) {
+              res[k] = convertMockTimestamps(val[k]);
+            }
+            return res;
+          }
+          return val;
+        };
+
+        const payload = convertMockTimestamps({ ...item });
         
         await realSetDoc(docRef, payload, { merge: true });
       }
@@ -995,13 +1019,17 @@ export async function uploadLocalDataToFirebaseCloud() {
       // Recursive helper to convert mock timestamps to real Firestore timestamps
       const convertMockTimestamps = (val: any): any => {
         if (!val) return val;
+        if (
+          val instanceof MockTimestamp ||
+          (val.constructor && val.constructor.name === 'MockTimestamp') ||
+          val._isTimestamp === true ||
+          (typeof val === 'object' && typeof val.seconds === 'number' && typeof val.nanoseconds === 'number' && (Object.keys(val).length <= 3 || val.constructor?.name === 'Object'))
+        ) {
+          const secs = typeof val.seconds === 'number' ? val.seconds : 0;
+          const nanos = typeof val.nanoseconds === 'number' ? val.nanoseconds : 0;
+          return RealTimestamp.fromMillis(secs * 1000 + Math.floor(nanos / 1000000));
+        }
         if (typeof val === 'object') {
-          if (val._isTimestamp) {
-            return RealTimestamp.fromMillis(val.seconds * 1000 + Math.floor(val.nanoseconds / 1000000));
-          }
-          if (typeof val.seconds === 'number' && typeof val.nanoseconds === 'number') {
-            return RealTimestamp.fromMillis(val.seconds * 1000 + Math.floor(val.nanoseconds / 1000000));
-          }
           if (Array.isArray(val)) {
             return val.map(convertMockTimestamps);
           }

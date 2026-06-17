@@ -22,6 +22,57 @@ export default function Reports() {
   const [filterBed, setFilterBed] = useState('all');
   const [useLogScale, setUseLogScale] = useState(false);
 
+  // Filters for Pending Deliveries report
+  const [deliveryFilterPreset, setDeliveryFilterPreset] = useState<'all' | 'today' | 'tomorrow' | 'next7' | 'custom'>('all');
+  const [deliveryDateStart, setDeliveryDateStart] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [deliveryDateEnd, setDeliveryDateEnd] = useState(format(subDays(new Date(), -7), 'yyyy-MM-dd'));
+
+  // Filter pending delivery sales based on selected date or preset
+  const filteredPendingDeliveries = sales.filter((s) => {
+    const isPending = s.status === 'ordered' || s.status === 'pending_delivery' || s.status === 'pending';
+    if (!isPending) return false;
+
+    if (deliveryFilterPreset === 'all') {
+      return true;
+    }
+
+    const dDate = s.deliveryDate?.toDate ? s.deliveryDate.toDate() : (s.deliveryDate ? new Date(s.deliveryDate) : null);
+    if (!dDate) return false;
+
+    const todayDate = new Date();
+
+    if (deliveryFilterPreset === 'today') {
+      const start = startOfDay(todayDate);
+      const end = endOfDay(todayDate);
+      return dDate >= start && dDate <= end;
+    }
+    if (deliveryFilterPreset === 'tomorrow') {
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const start = startOfDay(tomorrow);
+      const end = endOfDay(tomorrow);
+      return dDate >= start && dDate <= end;
+    }
+    if (deliveryFilterPreset === 'next7') {
+      const start = startOfDay(todayDate);
+      const endLimit = new Date();
+      endLimit.setDate(endLimit.getDate() + 7);
+      const end = endOfDay(endLimit);
+      return dDate >= start && dDate <= end;
+    }
+    if (deliveryFilterPreset === 'custom') {
+      if (deliveryDateStart) {
+        const start = startOfDay(new Date(deliveryDateStart + 'T00:00:00'));
+        if (dDate < start) return false;
+      }
+      if (deliveryDateEnd) {
+        const end = endOfDay(new Date(deliveryDateEnd + 'T23:59:59'));
+        if (dDate > end) return false;
+      }
+    }
+    return true;
+  });
+
   // Aggressive normalization helper
   const normalize = (str: string) => {
     if (!str) return '';
@@ -387,7 +438,9 @@ export default function Reports() {
     .slice(0, 5);
 
   return (
-    <div className="space-y-8 pb-12 print:p-0">
+    <>
+      {/* Visualização de Tela (Oculta na impressão para layout limpo) */}
+      <div className="space-y-8 pb-12 print:hidden bg-transparent">
       <header className="flex items-center justify-between print:hidden">
         <div>
           <h2 className="text-3xl font-bold text-slate-900">Relatórios e Custos</h2>
@@ -1236,48 +1289,154 @@ export default function Reports() {
       )}
 
       {activeReport === 'pending_deliveries' && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-          <div className="p-8 border-b border-slate-100">
-            <h3 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-              <ShoppingBag className="text-amber-600" size={24} />
-              Entregas Pendentes
-            </h3>
-            <p className="text-sm text-slate-500 mt-1">Pedidos que aguardam entrega ou processamento.</p>
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden space-y-4">
+          <div className="p-4 md:p-5 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-50/50">
+            <div>
+              <h3 className="text-base font-black text-slate-900 flex items-center gap-1.5 leading-none">
+                <ShoppingBag className="text-amber-600" size={18} />
+                Entregas Delivery Pendentes
+              </h3>
+              <p className="text-[11px] text-slate-500 mt-1">Pedidos aguardando separação e entrega ao cliente.</p>
+            </div>
+            
+            <button
+              onClick={() => window.print()}
+              className="flex items-center justify-center gap-1.5 bg-slate-950 hover:bg-slate-800 text-white px-4 py-2 rounded-xl text-[11px] font-bold transition-all shadow-sm"
+              title="Gera um relatório PDF limpo pronto para impressão"
+            >
+              <Printer size={13} />
+              Imprimir Relatório (PDF)
+            </button>
           </div>
-          <div className="overflow-x-auto">
+
+          <div className="px-4 md:px-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border border-slate-100 bg-white rounded-xl p-3">
+              <div className="flex flex-wrap items-center gap-1 md:gap-1.5">
+                <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider mr-1">Filtrar Remessa:</span>
+                {[
+                  { id: 'all', label: 'Todas' },
+                  { id: 'today', label: 'Hoje' },
+                  { id: 'tomorrow', label: 'Amanhã' },
+                  { id: 'next7', label: '7 dias' },
+                  { id: 'custom', label: 'Personalizado' },
+                ].map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => setDeliveryFilterPreset(p.id as any)}
+                    className={cn(
+                      "px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all border",
+                      deliveryFilterPreset === p.id
+                        ? "bg-amber-100 border-amber-300 text-amber-800 shadow-sm"
+                        : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
+                    )}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+
+              {deliveryFilterPreset === 'custom' && (
+                <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-lg border border-slate-200 shrink-0 self-start sm:self-auto">
+                  <input
+                    type="date"
+                    value={deliveryDateStart}
+                    onChange={(e) => setDeliveryDateStart(e.target.value)}
+                    className="bg-transparent text-[10px] font-bold text-slate-700 focus:outline-none border-0 p-0 pl-1 w-24"
+                    title="Início"
+                  />
+                  <span className="text-slate-300 text-[10px] px-0.5">-</span>
+                  <input
+                    type="date"
+                    value={deliveryDateEnd}
+                    onChange={(e) => setDeliveryDateEnd(e.target.value)}
+                    className="bg-transparent text-[10px] font-bold text-slate-700 focus:outline-none border-0 p-0 pl-1 w-24"
+                    title="Fim"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 px-4 md:px-5">
+            <div className="border border-slate-100 bg-slate-50/50 p-2 rounded-xl">
+              <p className="text-[8px] font-black uppercase text-slate-400 tracking-wider">Pedidos Filtrados</p>
+              <h4 className="text-base font-black text-slate-800 leading-none mt-1">{filteredPendingDeliveries.length}</h4>
+            </div>
+            <div className="border border-slate-100 bg-slate-50/50 p-2 rounded-xl">
+              <p className="text-[8px] font-black uppercase text-slate-400 tracking-wider">Faturamento Pendente</p>
+              <h4 className="text-base font-black text-emerald-600 leading-none mt-1">
+                R$ {filteredPendingDeliveries.reduce((acc, s) => acc + s.total, 0).toFixed(2)}
+              </h4>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto pb-4">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="bg-slate-50/50">
-                  <th className="px-8 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest">Cliente</th>
-                  <th className="px-8 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest">Data Pedido</th>
-                  <th className="px-8 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest">Itens</th>
-                  <th className="px-8 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest text-right">Total</th>
+                <tr className="bg-slate-50/60 border-b border-slate-100 text-[10px] font-black uppercase tracking-wider text-slate-400">
+                  <th className="py-2 px-3 text-[9px]">Cliente / Contato</th>
+                  <th className="py-2 px-3 text-[9px]">Previsão Entrega</th>
+                  <th className="py-2 px-3 text-[9px]">Endereço de Entrega</th>
+                  <th className="py-2 px-3 text-[9px]">Itens do Pedido</th>
+                  <th className="py-2 px-3 text-[9px] text-right">Total</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
-                {sales
-                  .filter(s => s.status === 'ordered' || s.status === 'pending_delivery' || s.status === 'pending')
-                  .map((s) => (
-                  <tr key={s.id} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="px-8 py-4 font-bold text-slate-900">{s.customerName}</td>
-                    <td className="px-8 py-4 text-sm text-slate-500">
-                      {s.createdAt?.toDate ? format(s.createdAt.toDate(), "dd/MM/yyyy") : '...'}
-                    </td>
-                    <td className="px-8 py-4">
-                      <div className="flex flex-wrap gap-1">
-                        {s.items.map((item, i) => (
-                          <span key={i} className="text-[10px] bg-slate-100 px-2 py-0.5 rounded-md font-medium">
-                            {item.quantity}x {item.name}
-                          </span>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="px-8 py-4 text-right font-bold text-slate-900">R$ {s.total.toFixed(2)}</td>
-                  </tr>
-                ))}
-                {sales.filter(s => s.status === 'ordered' || s.status === 'pending_delivery' || s.status === 'pending').length === 0 && (
+              <tbody className="divide-y divide-slate-100 text-xs">
+                {filteredPendingDeliveries.map((s, idx) => {
+                  const dDate = s.deliveryDate?.toDate ? s.deliveryDate.toDate() : (s.deliveryDate ? new Date(s.deliveryDate) : null);
+                  return (
+                    <tr key={s.id} className="hover:bg-slate-50/30 transition-colors">
+                      <td className="py-1.5 px-3">
+                        <div className="space-y-0.5">
+                          <p className="font-bold text-slate-900 text-xs flex items-center gap-1">
+                            <span className="text-[8px] px-1 py-0.2 bg-slate-100 border border-slate-200 rounded text-slate-500 font-mono font-bold leading-none">
+                              {s.saleNumber || `#${idx + 1}`}
+                            </span>
+                            {s.customerName}
+                          </p>
+                          {s.customerPhone && (
+                            <p className="text-[9px] text-slate-400 font-bold leading-none">{s.customerPhone}</p>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-1.5 px-3 font-medium text-slate-500 whitespace-nowrap">
+                        {dDate ? (
+                          <div className="flex items-center gap-1 font-bold text-slate-700 text-[10px] bg-slate-50 border border-slate-100 px-1.5 py-0.5 rounded w-max">
+                            <Calendar size={10} className="text-amber-500 shrink-0" />
+                            {format(dDate, "dd/MM/yyyy")}
+                          </div>
+                        ) : (
+                          <span className="text-[10px] text-slate-400 italic">Não agendado</span>
+                        )}
+                      </td>
+                      <td className="py-1.5 px-3 max-w-xs truncate text-slate-600 font-medium text-[11px]" title={s.deliveryAddress}>
+                        {s.deliveryAddress || <span className="text-slate-400 italic text-[10px]">Retirada Local</span>}
+                      </td>
+                      <td className="py-1.5 px-3">
+                        <div className="flex flex-wrap gap-1 max-w-md">
+                          {s.items.map((item, i) => (
+                            <span key={i} className="text-[9px] bg-emerald-50/60 border border-emerald-100/50 text-emerald-800 px-1.5 py-0.2 rounded font-mono font-bold leading-none">
+                              {item.quantity}x {item.name}
+                            </span>
+                          ))}
+                        </div>
+                        {s.observations && (
+                          <p className="text-[9.5px] text-amber-700 bg-amber-50 border border-amber-100/60 rounded px-1.5 py-0.5 mt-1 font-semibold italic max-w-sm truncate" title={s.observations}>
+                            Obs: {s.observations}
+                          </p>
+                        )}
+                      </td>
+                      <td className="py-1.5 px-3 text-right font-black text-slate-900 text-xs whitespace-nowrap">
+                        R$ {s.total.toFixed(2)}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {filteredPendingDeliveries.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="px-8 py-12 text-center text-slate-400 italic">Nenhuma entrega pendente.</td>
+                    <td colSpan={5} className="py-12 text-center text-slate-400 italic font-medium">
+                      Nenhuma entrega pendente encontrada para este intervalo selecionado.
+                    </td>
                   </tr>
                 )}
               </tbody>
@@ -1336,6 +1495,115 @@ export default function Reports() {
           </div>
         </div>
       )}
-    </div>
+      </div>
+
+      {/* PRINT-ONLY RELATÓRIO DE ENTREGAS */}
+      <div className="hidden print:block font-sans p-4 space-y-6 bg-white min-h-screen text-slate-900">
+        {/* Header da Folha */}
+        <div className="border-b-4 border-slate-900 pb-4 flex justify-between items-end">
+          <div>
+            <h1 className="text-xl font-black text-slate-900 tracking-tight uppercase">RELATÓRIO DE ENTREGAS (DELIVERY)</h1>
+            <p className="text-xs text-slate-500 mt-1 font-bold">Horta e Produção Orgânica - Lista de Remessas Pendentes</p>
+          </div>
+          <div className="text-right text-[10px] text-slate-500 font-medium">
+            <p><b>Emissão:</b> {format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}</p>
+            <p>
+              <b>Período:</b> {
+                deliveryFilterPreset === 'all' ? 'Todas as Pendentes' :
+                deliveryFilterPreset === 'today' ? 'Hoje' :
+                deliveryFilterPreset === 'tomorrow' ? 'Amanhã' :
+                deliveryFilterPreset === 'next7' ? 'Próximos 7 Dias' :
+                `De ${deliveryDateStart ? format(new Date(deliveryDateStart + 'T12:00:00'), 'dd/MM/yyyy') : 'Início'} até ${deliveryDateEnd ? format(new Date(deliveryDateEnd + 'T12:00:00'), 'dd/MM/yyyy') : 'Fim'}`
+              }
+            </p>
+          </div>
+        </div>
+
+        {/* Resumo da Carga */}
+        <div className="grid grid-cols-2 gap-4">
+          <div className="border border-slate-300 p-2.5 rounded-lg bg-slate-50">
+            <p className="text-[8px] font-black uppercase text-slate-400">Total de Entregas</p>
+            <p className="text-base font-black text-slate-800">{filteredPendingDeliveries.length} pedidos pendentes</p>
+          </div>
+          <div className="border border-slate-300 p-2.5 rounded-lg text-right bg-slate-50">
+            <p className="text-[8px] font-black uppercase text-slate-400">Faturamento da Remessa</p>
+            <p className="text-base font-black text-emerald-700">R$ {filteredPendingDeliveries.reduce((acc, s) => acc + s.total, 0).toFixed(2)}</p>
+          </div>
+        </div>
+
+        {/* Pedidos Iterados */}
+        <div className="space-y-4">
+          {filteredPendingDeliveries.map((s, index) => {
+            const saleDate = s.deliveryDate?.toDate ? s.deliveryDate.toDate() : (s.deliveryDate ? new Date(s.deliveryDate) : null);
+            return (
+              <div key={s.id} className="border border-slate-400 rounded-lg p-3 space-y-2.5 break-inside-avoid bg-white">
+                <div className="flex justify-between items-center border-b border-dashed border-slate-200 pb-1.5">
+                  <div>
+                    <h3 className="text-sm font-black text-slate-900">{s.customerName}</h3>
+                    {s.customerPhone && (
+                      <p className="text-[10px] font-bold text-slate-500">Contato: {s.customerPhone}</p>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[10px] font-black bg-slate-900 text-white px-2 py-0.5 rounded mr-1">
+                      PEDIDO {s.saleNumber || `#${index + 1}`}
+                    </span>
+                    {saleDate && (
+                      <span className="text-[10px] font-bold border border-slate-300 bg-slate-50 px-2 py-0.5 rounded text-slate-700">
+                        Entrega: {format(saleDate, "dd/MM/yyyy")}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-12 gap-1.5 text-xs">
+                  {/* Endereço */}
+                  <div className="col-span-12">
+                    <p className="text-[8px] font-black uppercase text-slate-400 leading-none">Endereço de Entrega:</p>
+                    <p className="font-bold text-slate-800 leading-tight mt-0.5">{s.deliveryAddress || "Retirada Local / Não Cadastrado"}</p>
+                  </div>
+                </div>
+
+                {/* Itens do Pedido */}
+                <div className="bg-slate-50 p-2 rounded border border-slate-200">
+                  <p className="text-[8px] font-black uppercase text-slate-400 mb-1 leading-none">Itens Relacionados:</p>
+                  <div className="grid grid-cols-1 gap-1 text-[11px]">
+                    {s.items.map((item, i) => (
+                      <div key={i} className="flex justify-between border-b border-slate-100 last:border-0 pb-0.5 last:pb-0 font-medium text-slate-700">
+                        <span>{item.quantity}x {item.name}</span>
+                        <span className="font-bold text-slate-800">
+                          R$ {(item.price * item.quantity).toFixed(2)} <span className="text-[9px] text-slate-400 font-normal">(R$ {item.price.toFixed(2)} un)</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Observações */}
+                {s.observations && (
+                  <div className="bg-amber-50 border border-amber-200 p-1.5 rounded text-[10px]">
+                    <span className="text-[8px] font-black text-amber-800 uppercase block leading-none">Observações / Troco:</span>
+                    <p className="text-amber-950 font-bold leading-normal mt-0.5">{s.observations}</p>
+                  </div>
+                )}
+
+                {/* Linha de Recebimento */}
+                <div className="pt-2 flex justify-between items-center text-[9px] text-slate-400 border-t border-dashed border-slate-200">
+                  <span>Forma: {s.paymentMethods && s.paymentMethods.length > 0 ? s.paymentMethods.map(pm => pm.method).join(', ') : 'Pagar na Entrega'}</span>
+                  <span><b>Valor Total: R$ {s.total.toFixed(2)}</b></span>
+                  <span>Recebido por: ________________________ (Assinatura)</span>
+                </div>
+              </div>
+            );
+          })}
+
+          {filteredPendingDeliveries.length === 0 && (
+            <div className="text-center py-12 text-slate-400 italic border border-dashed border-slate-300 rounded-xl">
+              Nenhuma entrega pendente para este intervalo de datas.
+            </div>
+          )}
+        </div>
+      </div>
+    </>
   );
 }

@@ -1545,9 +1545,57 @@ export default function Reports() {
       )}
       </div>
 
-      {/* PRINT-ONLY RELATÓRIO DE ENTREGAS COMPACTO EM TABELA */}
+      {/* PRINT-ONLY RELATÓRIO DE ENTREGAS COMPACTO EM PAISAGEM */}
       <style dangerouslySetInnerHTML={{ __html: `
+        /* Oculta completamente o bloco no modo de visualização em tela */
+        .only-print-landscape {
+          display: none !important;
+        }
+
         @media print {
+          /* Define a folha no tamanho A4 Horizontal (Paisagem) */
+          @page {
+            size: A4 landscape !important;
+            margin: 6mm 8mm 6mm 8mm !important;
+          }
+
+          /* Oculta cabeçalhos, menus laterais e botões da tela durante a impressão */
+          .no-print,
+          .print\\:hidden,
+          aside,
+          header,
+          button,
+          nav {
+            display: none !important;
+          }
+
+          /* Libera as restrições de overflow e height dos containers ancestrais para não cortar folhas no print */
+          html, body, #root, .min-h-screen, main, [class*="overflow-"], [class*="max-h-"], [class*="p-"] {
+            overflow: visible !important;
+            height: auto !important;
+            min-height: 0 !important;
+            max-height: none !important;
+            width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            position: static !important;
+            background: white !important;
+            color: black !important;
+            display: block !important;
+            box-shadow: none !important;
+          }
+
+          /* Exibe o elemento de relatório exclusivo de impressão */
+          .only-print-landscape {
+            display: block !important;
+            visibility: visible !important;
+            background: white !important;
+            color: black !important;
+            width: 100% !important;
+            position: relative !important;
+          }
+
+          /* Evita quebras de linha dentro do mesmo pedido */
           tr.print-item-row {
             break-inside: avoid !important;
             page-break-inside: avoid !important;
@@ -1555,15 +1603,15 @@ export default function Reports() {
         }
       `}} />
 
-      <div className="hidden print:block font-sans p-2 bg-white text-slate-900 w-full">
-        {/* Header da Folha */}
-        <div className="border-b-[3px] border-slate-900 pb-2 flex justify-between items-end">
+      <div className="only-print-landscape font-sans p-2 bg-white text-slate-900 w-full">
+        {/* Header Compacto da Folha em Paisagem */}
+        <div className="border-b-[3px] border-slate-950 pb-2 flex justify-between items-end">
           <div>
-            <h1 className="text-xl font-black text-slate-900 tracking-tight uppercase">Manifesto de Entregas Pendentes</h1>
-            <p className="text-[10px] text-slate-500 font-bold mt-0.5 uppercase">Logística de Despacho e Entrega em Campo</p>
+            <h1 className="text-xl font-black text-slate-900 tracking-tight uppercase leading-none">Manifesto de Entregas Pendentes</h1>
+            <p className="text-[10px] text-slate-500 font-bold mt-1 uppercase">Logística de Despacho e Rotas em Campo</p>
           </div>
           <div className="text-right text-[10px] text-slate-600 font-medium">
-            <p className="font-bold">Gerado: <span className="font-mono">{format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}</span></p>
+            <p className="font-bold">Emissão: <span className="font-mono">{format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}</span></p>
             <p className="mt-0.5">
               <b>Período:</b> {
                 deliveryFilterPreset === 'all' ? 'Todas as Pendentes' :
@@ -1576,87 +1624,90 @@ export default function Reports() {
           </div>
         </div>
 
-        {/* Resumos de Carga */}
-        <div className="flex justify-between items-center text-[10px] border border-slate-300 px-3 py-1.5 rounded-lg bg-slate-50 my-2.5">
+        {/* Resumo e Indicadores do Manifesto */}
+        <div className="flex justify-between items-center text-[10px] border border-slate-300 px-4 py-2 rounded-lg bg-slate-50 my-2.5">
           <div>
             <span className="font-bold text-slate-500 uppercase tracking-wider text-[9px]">Total de Remessas:</span>{' '}
-            <span className="font-black text-slate-800 text-xs">{filteredPendingDeliveries.length} pedidos em rota</span>
+            <span className="font-black text-slate-800 text-xs">
+              {filteredPendingDeliveries.length} {filteredPendingDeliveries.length === 1 ? 'pedido em rota' : 'pedidos em rota'}
+            </span>
           </div>
           <div className="text-right">
             <span className="font-bold text-slate-500 uppercase tracking-wider text-[9px]">Valor Total a Receber:</span>{' '}
-            <span className="font-black text-emerald-800 text-xs">R$ {filteredPendingDeliveries.reduce((acc, s) => acc + s.total, 0).toFixed(2)}</span>
+            <span className="font-black text-emerald-800 text-xs font-mono">
+              R$ {filteredPendingDeliveries.reduce((acc, s) => acc + s.total, 0).toFixed(2)}
+            </span>
           </div>
         </div>
 
-        {/* Quadro Geral em Tabela Altamente Compacta e Legível */}
-        <table className="w-full text-left border-collapse border border-slate-400">
+        {/* Tabela de Alto Contraste Paisagem baseada na Visualização da Tela */}
+        <table className="w-full text-left border-collapse border-2 border-slate-900">
           <thead>
-            <tr className="bg-slate-100 text-[10px] font-black uppercase text-slate-700 tracking-wider">
-              <th className="py-1 px-1.5 border border-slate-400 text-center w-[6%] font-sans">Seq / Reg</th>
-              <th className="py-1 px-1.5 border border-slate-400 w-[18%]">Cliente / Contato</th>
-              <th className="py-1 px-1.5 border border-slate-400 w-[24%]">Endereço de Entrega</th>
-              <th className="py-1 px-1.5 border border-slate-400 w-[24%]">Itens do Pedido (Conferência)</th>
-              <th className="py-1 px-1.5 border border-slate-400 w-[13%]">Instruções / Obs</th>
-              <th className="py-1 px-1.5 border border-slate-400 w-[9%] text-right text-xs">Valor</th>
-              <th className="py-1 px-1.5 border border-slate-400 text-center w-[6%]">[ ✓ ]</th>
+            <tr className="bg-slate-100 text-[10px] font-black uppercase text-slate-700 tracking-wider border-b-2 border-slate-900">
+              <th className="py-1.5 px-2 border border-slate-400 text-center w-[6%] font-mono">Nº / Ref</th>
+              <th className="py-1.5 px-2 border border-slate-400 w-[18%]">Cliente / Contato</th>
+              <th className="py-1.5 px-2 border border-slate-400 w-[11%]">Previsão</th>
+              <th className="py-1.5 px-2 border border-slate-400 w-[26%]">Endereço de Entrega</th>
+              <th className="py-1.5 px-2 border border-slate-400 w-[21%]">Itens do Pedido</th>
+              <th className="py-1.5 px-2 border border-slate-400 w-[11%]">Observações / Instruções</th>
+              <th className="py-1.5 px-2 border border-slate-400 text-right w-[7%]">Total</th>
             </tr>
           </thead>
-          <tbody className="text-[10px] divide-y divide-slate-300">
+          <tbody className="text-[10px] divide-y divide-slate-400">
             {filteredPendingDeliveries.map((s, idx) => {
-              const saleDate = parseFirebaseDate(s.deliveryDate);
+              const dDate = parseFirebaseDate(s.deliveryDate);
               const pmStr = s.paymentMethods && s.paymentMethods.length > 0 
                 ? s.paymentMethods.map(pm => pm.method).join(', ') 
                 : 'Pagar na Entrega';
 
               return (
-                <tr key={s.id} className="print-item-row break-inside-avoid text-slate-900 border-b border-slate-300">
-                  {/* Caixa de Verificação e Número de Sequência */}
-                  <td className="py-1.5 px-1.5 border border-slate-300 text-center font-mono font-bold whitespace-nowrap bg-slate-50/50">
-                    <span className="text-slate-400 text-xs mr-1">[  ]</span> #{s.saleNumber || `${idx + 1}`}
+                <tr key={s.id} className="print-item-row text-slate-900 border-b border-slate-400">
+                  {/* Número Seq/Ref do Pedido */}
+                  <td className="py-2 px-2 border border-slate-400 text-center font-mono font-black bg-slate-50">
+                    #{s.saleNumber || `${idx + 1}`}
                   </td>
-                  
-                  {/* Nome do Cliente e Contato */}
-                  <td className="py-1.5 px-1.5 border border-slate-300">
-                    <div className="font-extrabold text-slate-950 text-[11px] leading-tight">{s.customerName}</div>
+
+                  {/* Cliente e Celular */}
+                  <td className="py-2 px-2 border border-slate-400">
+                    <div className="font-black text-slate-955 text-[11px] leading-tight">{s.customerName}</div>
                     {getCustomerPhone(s) && (
                       <div className="text-[9px] text-slate-500 font-bold mt-0.5 font-mono">{getCustomerPhone(s)}</div>
                     )}
                   </td>
-                  
-                  {/* Endereço de Destino bem visível */}
-                  <td className="py-1.5 px-1.5 border border-slate-300 font-extrabold text-[10.5px] leading-tight text-slate-900 uppercase">
-                    {s.deliveryAddress || "Retirada Local / Horta"}
+
+                  {/* Previsão de Entrega */}
+                  <td className="py-2 px-2 border border-slate-400 font-bold text-slate-700 whitespace-nowrap text-center">
+                    {dDate ? safeFormatDate(s.deliveryDate, "dd/MM/yyyy") : <span className="text-slate-400 italic">Não agendado</span>}
                   </td>
-                  
-                  {/* Itens do Pedido bem organizados */}
-                  <td className="py-1.5 px-1.5 border border-slate-300">
-                    <div className="space-y-0.5">
+
+                  {/* Endereço de Entrega */}
+                  <td className="py-2 px-2 border border-slate-400 font-extrabold text-[10px] leading-snug uppercase text-slate-900">
+                    {s.deliveryAddress || <span className="text-slate-500 italic lowercase font-medium">Retirada Local / Horta</span>}
+                  </td>
+
+                  {/* Itens do Pedido */}
+                  <td className="py-2 px-2 border border-slate-400">
+                    <div className="flex flex-wrap gap-1 font-mono text-[9px]">
                       {s.items.map((item, i) => {
-                        const itemQty = typeof item.quantity === 'number' ? item.quantity : Number(item.quantity) || 0;
+                        const qty = typeof item.quantity === 'number' ? item.quantity : Number(item.quantity) || 0;
                         return (
-                          <div key={i} className="flex justify-between font-bold leading-tight">
-                            <span><span className="font-mono text-xs font-black text-slate-900 bg-slate-100 px-1 py-0.2 rounded border border-slate-200 mr-1">{itemQty}x</span> {item.name}</span>
-                          </div>
+                          <span key={i} className="bg-slate-100 border border-slate-300 text-slate-900 px-1 py-0.2 rounded font-bold whitespace-nowrap">
+                            {qty}x {item.name}
+                          </span>
                         );
                       })}
                     </div>
                   </td>
-                  
-                  {/* Instruções de entrega / Observações */}
-                  <td className="py-1.5 px-1.5 border border-slate-300 text-[9px] leading-tight text-slate-700 italic font-semibold">
+
+                  {/* Observações */}
+                  <td className="py-2 px-2 border border-slate-400 text-[9px] leading-tight text-slate-700 italic font-medium">
                     {s.observations?.trim() ? s.observations : "—"}
                   </td>
-                  
-                  {/* Preço de cobrança e forma */}
-                  <td className="py-1.5 px-1.5 border border-slate-300 text-right font-mono whitespace-nowrap">
-                    <div className="font-black text-[11px] text-slate-950">R$ {s.total.toFixed(2)}</div>
-                    <div className="text-[8px] text-slate-500 font-extrabold font-sans uppercase tracking-tight">{pmStr}</div>
-                  </td>
 
-                  {/* Visto / Assinatura Compacta */}
-                  <td className="py-1.5 px-1 border border-slate-300 text-center font-mono text-[9px] text-slate-300 bg-slate-50/25">
-                    <div className="border-b border-dashed border-slate-400 w-full mt-2.5"></div>
-                    <div className="text-[7px] text-slate-400 mt-1 uppercase font-bold tracking-tighter">Assinatura</div>
+                  {/* Total e Forma de Cobrança */}
+                  <td className="py-2 px-2 border border-slate-400 text-right font-mono whitespace-nowrap">
+                    <div className="font-black text-[11px] text-slate-950">R$ {s.total.toFixed(2)}</div>
+                    <div className="text-[7.5px] text-slate-500 font-extrabold font-sans uppercase tracking-tighter mt-0.5">{pmStr}</div>
                   </td>
                 </tr>
               );
@@ -1665,8 +1716,8 @@ export default function Reports() {
         </table>
 
         {filteredPendingDeliveries.length === 0 && (
-          <div className="text-center py-10 text-slate-400 italic font-bold border border-dashed border-slate-300 rounded-lg text-xs">
-            Nenhuma entrega pendente registrada para a remessa atual neste intervalo de datas.
+          <div className="text-center py-8 text-slate-400 italic font-bold border border-dashed border-slate-300 rounded-lg text-xs mt-4">
+            Nenhuma entrega pendente encontrada para este intervalo selecionado.
           </div>
         )}
       </div>

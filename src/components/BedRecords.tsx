@@ -1551,8 +1551,8 @@ export default function BedRecordsComponent() {
                   </tr>
                 </thead>
                 <tbody>
-                  {/* Generate 5 blank rows for sequential writing (optimised for 1 page) */}
-                  {Array.from({ length: 5 }).map((_, i) => (
+                  {/* Generate 12 blank rows for sequential writing (optimised for 1 page) */}
+                  {Array.from({ length: 12 }).map((_, i) => (
                     <tr key={i} className="h-12 border-b border-black">
                       <td className="border border-black p-1 text-center text-zinc-300">___/___/___</td>
                       <td className="border border-black p-1 text-[9px] leading-tight space-y-0.5">

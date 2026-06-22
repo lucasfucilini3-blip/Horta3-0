@@ -28,6 +28,11 @@ export default function Reports() {
   const [deliveryDateStart, setDeliveryDateStart] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [deliveryDateEnd, setDeliveryDateEnd] = useState(format(subDays(new Date(), -7), 'yyyy-MM-dd'));
 
+  // Filters for Product Sales report
+  const [productFilterPreset, setProductFilterPreset] = useState<'all' | 'today' | 'yesterday' | 'last7' | 'last30' | 'custom'>('all');
+  const [productDateStart, setProductDateStart] = useState(format(subDays(new Date(), 30), 'yyyy-MM-dd'));
+  const [productDateEnd, setProductDateEnd] = useState(format(new Date(), 'yyyy-MM-dd'));
+
   // Safe Firebase date parser
   const parseFirebaseDate = (val: any): Date | null => {
     if (!val) return null;
@@ -304,8 +309,70 @@ export default function Reports() {
     }, [])
     .sort((a, b) => b.total - a.total);
 
-  // Sales by Product
+  // Sales by Product (Filtered by date selection)
   const salesByProduct = sales
+    .filter((s) => {
+      // Excludes cancelled sales, includes active sales
+      const isValid = s.status !== 'cancelled';
+      if (!isValid) return false;
+
+      if (productFilterPreset === 'all') return true;
+
+      const sDate = parseFirebaseDate(s.createdAt);
+      if (!sDate) return false;
+
+      const todayDate = new Date();
+
+      if (productFilterPreset === 'today') {
+        const start = startOfDay(todayDate);
+        const end = endOfDay(todayDate);
+        return sDate >= start && sDate <= end;
+      }
+      if (productFilterPreset === 'yesterday') {
+        const yesterday = subDays(todayDate, 1);
+        const start = startOfDay(yesterday);
+        const end = endOfDay(yesterday);
+        return sDate >= start && sDate <= end;
+      }
+      if (productFilterPreset === 'last7') {
+        const start = startOfDay(subDays(todayDate, 7));
+        const end = endOfDay(todayDate);
+        return sDate >= start && sDate <= end;
+      }
+      if (productFilterPreset === 'last30') {
+        const start = startOfDay(subDays(todayDate, 30));
+        const end = endOfDay(todayDate);
+        return sDate >= start && sDate <= end;
+      }
+      if (productFilterPreset === 'custom') {
+        if (productDateStart) {
+          const start = startOfDay(new Date(productDateStart + 'T00:00:00'));
+          if (sDate < start) return false;
+        }
+        if (productDateEnd) {
+          const end = endOfDay(new Date(productDateEnd + 'T23:59:59'));
+          if (sDate > end) return false;
+        }
+      }
+      return true;
+    })
+    .reduce((acc: any[], s) => {
+      s.items.forEach(item => {
+        const normName = normalize(item.name);
+        const existing = acc.find(a => normalize(a.name) === normName);
+        if (existing) {
+          existing.total += item.price * item.quantity;
+          existing.quantity += item.quantity;
+        } else {
+          acc.push({ name: item.name, total: item.price * item.quantity, quantity: item.quantity });
+        }
+      });
+      return acc;
+    }, [])
+    .sort((a, b) => b.total - a.total);
+
+  // Historical Sales by Product for average prices calculation (across all history)
+  const allSalesByProduct = sales
     .filter(s => ['paid', 'confirmed', 'delivered'].includes(s.status))
     .reduce((acc: any[], s) => {
       s.items.forEach(item => {
@@ -322,8 +389,8 @@ export default function Reports() {
     }, [])
     .sort((a, b) => b.total - a.total);
 
-  // Average Prices with aggressive keys
-  const averagePrices = salesByProduct.reduce((acc: any, p) => {
+  // Average Prices with aggressive keys (utilizes all historical sales by default for better predictions)
+  const averagePrices = allSalesByProduct.reduce((acc: any, p) => {
     acc[normalize(p.name)] = p.total / p.quantity;
     return acc;
   }, {});
@@ -1320,31 +1387,113 @@ export default function Reports() {
       )}
 
       {activeReport === 'product' && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-          <div className="p-8 border-b border-slate-100">
-            <h3 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-              <Package className="text-emerald-600" size={24} />
-              Vendas por Produto
-            </h3>
-            <p className="text-sm text-slate-500 mt-1">Ranking de produtos mais vendidos.</p>
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden space-y-4">
+          <div className="p-4 md:p-5 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-50/50">
+            <div>
+              <h3 className="text-base font-black text-slate-900 flex items-center gap-1.5 leading-none">
+                <Package className="text-emerald-600" size={18} />
+                Vendas por Produto
+              </h3>
+              <p className="text-[11px] text-slate-500 mt-1 font-medium">Ranking de produtos mais vendidos.</p>
+            </div>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
+
+          <div className="px-4 md:px-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border border-slate-100 bg-white rounded-xl p-3">
+              <div className="flex flex-wrap items-center gap-1 md:gap-1.5">
+                <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider mr-1">Filtrar Período:</span>
+                {[
+                  { id: 'all', label: 'Todas' },
+                  { id: 'today', label: 'Hoje' },
+                  { id: 'yesterday', label: 'Ontem' },
+                  { id: 'last7', label: '7 dias' },
+                  { id: 'last30', label: '30 dias' },
+                  { id: 'custom', label: 'Personalizado' },
+                ].map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => setProductFilterPreset(p.id as any)}
+                    className={cn(
+                      "px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all border",
+                      productFilterPreset === p.id
+                        ? "bg-emerald-100 border-emerald-300 text-emerald-800 shadow-sm"
+                        : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
+                    )}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+
+              {productFilterPreset === 'custom' && (
+                <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-lg border border-slate-200 shrink-0 self-start sm:self-auto">
+                  <input
+                    type="date"
+                    value={productDateStart}
+                    onChange={(e) => setProductDateStart(e.target.value)}
+                    className="bg-transparent text-[10px] font-bold text-slate-700 focus:outline-none border-0 p-0 pl-1 w-24"
+                    title="Início"
+                  />
+                  <span className="text-slate-300 text-[10px] px-0.5">-</span>
+                  <input
+                    type="date"
+                    value={productDateEnd}
+                    onChange={(e) => setProductDateEnd(e.target.value)}
+                    className="bg-transparent text-[10px] font-bold text-slate-700 focus:outline-none border-0 p-0 pl-1 w-24"
+                    title="Fim"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 px-4 md:px-5">
+            <div className="border border-slate-100 bg-slate-50/50 p-2.5 rounded-xl">
+              <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Total de Itens Vendidos</p>
+              <h4 className="text-lg font-black text-slate-800 mt-0.5 font-mono">
+                {salesByProduct.reduce((acc, p) => acc + p.quantity, 0)}
+              </h4>
+            </div>
+            <div className="border border-slate-100 bg-slate-50/50 p-2.5 rounded-xl">
+              <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Faturamento Total em Vendas</p>
+              <h4 className="text-lg font-black text-emerald-700 mt-0.5 font-mono">
+                R$ {salesByProduct.reduce((acc, p) => acc + p.total, 0).toFixed(2)}
+              </h4>
+            </div>
+            <div className="border border-slate-100 bg-slate-50/50 p-2.5 rounded-xl col-span-2 md:col-span-1">
+              <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Variedade de Produtos</p>
+              <h4 className="text-lg font-black text-blue-700 mt-0.5 font-mono">
+                {salesByProduct.length} {salesByProduct.length === 1 ? 'produto' : 'produtos'}
+              </h4>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto px-4 md:px-5 pb-5">
+            <table className="w-full text-left border-collapse border border-slate-200 rounded-xl overflow-hidden shadow-sm">
               <thead>
-                <tr className="bg-slate-50/50">
-                  <th className="px-8 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest">Produto</th>
-                  <th className="px-8 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest text-center">Quantidade Vendida</th>
-                  <th className="px-8 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest text-right">Total em Vendas</th>
+                <tr className="bg-slate-50 border-b border-slate-200">
+                  <th className="px-6 py-3.5 text-xs font-bold text-slate-400 uppercase tracking-widest w-[10%] text-center">Posição</th>
+                  <th className="px-6 py-3.5 text-xs font-bold text-slate-400 uppercase tracking-widest w-[45%]">Produto</th>
+                  <th className="px-6 py-3.5 text-xs font-bold text-slate-400 uppercase tracking-widest w-[20%] text-center">Quantidade Vendida</th>
+                  <th className="px-6 py-3.5 text-xs font-bold text-slate-400 uppercase tracking-widest w-[25%] text-right">Total em Vendas</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-slate-100 text-sm bg-white">
                 {salesByProduct.map((p, i) => (
                   <tr key={i} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="px-8 py-4 font-bold text-slate-900">{p.name}</td>
-                    <td className="px-8 py-4 text-center text-slate-600">{p.quantity}</td>
-                    <td className="px-8 py-4 text-right font-bold text-emerald-600">R$ {p.total.toFixed(2)}</td>
+                    <td className="px-6 py-3.5 text-center font-mono font-bold text-slate-400">#{i + 1}</td>
+                    <td className="px-6 py-3.5 font-black text-slate-900">{p.name}</td>
+                    <td className="px-6 py-3.5 text-center font-mono font-bold text-slate-700 bg-slate-50/30">{p.quantity}</td>
+                    <td className="px-6 py-3.5 text-right font-black text-emerald-600 font-mono">R$ {p.total.toFixed(2)}</td>
                   </tr>
                 ))}
+                {salesByProduct.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="px-6 py-12 text-center text-slate-400 italic">
+                      Nenhuma venda registrada para este período filtrado.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>

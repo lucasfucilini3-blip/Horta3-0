@@ -121,6 +121,15 @@ export default function Sales() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Specific States for Delivery Editing in Modal
+  const [isDeliveryEditing, setIsDeliveryEditing] = useState(false);
+  const [deliveryAddressEditing, setDeliveryAddressEditing] = useState('');
+  const [deliveryObservationsEditing, setDeliveryObservationsEditing] = useState('');
+  const [deliveryClientPhoneEditing, setDeliveryClientPhoneEditing] = useState('');
+  const [customCustomerNameEditing, setCustomCustomerNameEditing] = useState('');
+  const [showEditCustomerSuggestions, setShowEditCustomerSuggestions] = useState(false);
+  const [editCustomerSearchTerm, setEditCustomerSearchTerm] = useState('');
+
   // New Fair (Modo Feira) States
   const [activeTab, setActiveTab] = useState<'individual' | 'feira' | 'delivery'>('individual');
 
@@ -250,14 +259,30 @@ export default function Sales() {
       const customer = customers.find(c => c.companyName === sale.customerName);
       setSelectedCustomerId(customer?.id || '');
       setSelectedItems(sale.items);
-      setDeliveryDate(sale.deliveryDate?.toDate ? format(sale.deliveryDate.toDate(), 'yyyy-MM-dd') : '');
+      setDeliveryDate(sale.deliveryDate?.toDate ? format(sale.deliveryDate.toDate(), 'yyyy-MM-dd') : (sale.deliveryDate ? format(new Date(sale.deliveryDate), 'yyyy-MM-dd') : ''));
       setSelectedPaymentMethods(sale.paymentMethods || []);
+      
+      // Load delivery states
+      setIsDeliveryEditing(!!sale.isDelivery);
+      setDeliveryAddressEditing(sale.deliveryAddress || '');
+      setDeliveryObservationsEditing(sale.observations || '');
+      setDeliveryClientPhoneEditing(sale.customerPhone || '');
+      setCustomCustomerNameEditing(sale.customerName || '');
+      setEditCustomerSearchTerm(sale.customerName || '');
     } else {
       setEditingSaleId(null);
       setSelectedCustomerId('');
       setSelectedItems([]);
       setDeliveryDate('');
       setSelectedPaymentMethods([]);
+      
+      // Reset delivery states
+      setIsDeliveryEditing(false);
+      setDeliveryAddressEditing('');
+      setDeliveryObservationsEditing('');
+      setDeliveryClientPhoneEditing('');
+      setCustomCustomerNameEditing('');
+      setEditCustomerSearchTerm('');
     }
     setModalOpen(true);
   };
@@ -265,10 +290,32 @@ export default function Sales() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (selectedItems.length === 0 || !selectedCustomerId) return;
+    if (selectedItems.length === 0) {
+      setError("Adicione pelo menos um produto.");
+      return;
+    }
+    if (!isDeliveryEditing && !selectedCustomerId) {
+      setError("Selecione um cliente.");
+      return;
+    }
+    if (isDeliveryEditing && !customCustomerNameEditing.trim()) {
+      setError("Por favor, preencha o nome do cliente.");
+      return;
+    }
     setSaving(true);
 
-    const customer = customers.find(c => c.id === selectedCustomerId);
+    let customerName = 'Cliente Desconhecido';
+    let customerPhone = '';
+
+    if (isDeliveryEditing) {
+      customerName = customCustomerNameEditing.trim();
+      customerPhone = deliveryClientPhoneEditing.trim();
+    } else {
+      const customer = customers.find(c => c.id === selectedCustomerId);
+      customerName = customer?.companyName || 'Cliente Desconhecido';
+      customerPhone = customer?.phone || '';
+    }
+
     const total = selectedItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
     
     // Generate a unique sale ID and number if it's a new sale
@@ -276,21 +323,40 @@ export default function Sales() {
     const now = new Date();
     const dateStr = format(now, 'yyyyMMdd');
     const randomStr = Math.random().toString(36).substring(2, 6).toUpperCase();
-    const generatedSaleNumber = `V-${dateStr}-${randomStr}`;
+    const prefix = isDeliveryEditing ? 'D' : 'V';
+    const generatedSaleNumber = `${prefix}-${dateStr}-${randomStr}`;
+
+    const originalSale = editingSaleId ? sales.find(s => s.id === editingSaleId) : null;
+    let fallbackStatus: SaleStatus = isDeliveryEditing ? 'pending_delivery' : 'ordered';
+    if (originalSale) {
+      fallbackStatus = originalSale.status;
+    }
 
     const saleData: any = {
-      customerName: customer?.companyName || 'Cliente Desconhecido',
-      customerPhone: customer?.phone || '',
+      customerName,
+      customerPhone,
       items: selectedItems,
       total,
-      status: editingSaleId ? sales.find(s => s.id === editingSaleId)?.status || 'ordered' : 'ordered' as SaleStatus,
-      deliveryDate: deliveryDate ? new Date(deliveryDate) : null,
+      status: fallbackStatus,
+      deliveryDate: deliveryDate ? new Date(deliveryDate + 'T12:00:00') : null,
       paymentMethods: selectedPaymentMethods,
-      createdAt: editingSaleId ? sales.find(s => s.id === editingSaleId)?.createdAt : serverTimestamp(),
+      createdAt: editingSaleId ? (originalSale?.createdAt || serverTimestamp()) : serverTimestamp(),
     };
+
+    if (isDeliveryEditing) {
+      saleData.isDelivery = true;
+      saleData.deliveryAddress = deliveryAddressEditing.trim();
+      saleData.observations = deliveryObservationsEditing.trim();
+    } else {
+      saleData.isDelivery = false;
+      saleData.deliveryAddress = '';
+      saleData.observations = '';
+    }
 
     if (!editingSaleId) {
       saleData.saleNumber = generatedSaleNumber;
+    } else if (originalSale?.saleNumber) {
+      saleData.saleNumber = originalSale.saleNumber;
     }
 
     try {
@@ -1868,31 +1934,183 @@ export default function Sales() {
                       {error}
                     </div>
                   )}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Cliente</label>
-                      <select 
-                        value={selectedCustomerId}
-                        onChange={(e) => setSelectedCustomerId(e.target.value)}
-                        required 
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
+
+                  {/* Tipo de Lançamento Toggle */}
+                  <div className="space-y-2">
+                    <label className="text-xs font-black uppercase text-slate-400 tracking-wider ml-1">Tipo de Pedido</label>
+                    <div className="flex bg-slate-100 p-1 rounded-xl w-full sm:w-fit border border-slate-200">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsDeliveryEditing(false);
+                        }}
+                        className={cn(
+                          "px-4 py-2 rounded-lg transition-all text-xs font-extrabold flex items-center gap-1.5 cursor-pointer",
+                          !isDeliveryEditing 
+                            ? "bg-white text-emerald-800 shadow-sm" 
+                            : "text-slate-500 hover:text-slate-700"
+                        )}
                       >
-                        <option value="">Selecione um cliente</option>
-                        {customers.map(c => (
-                          <option key={c.id} value={c.id}>{c.companyName} ({c.contactName})</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Data Prevista de Entrega</label>
-                      <input 
-                        type="date"
-                        value={deliveryDate}
-                        onChange={(e) => setDeliveryDate(e.target.value)}
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      />
+                        Pedido Padrão / Ponto de Venda
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsDeliveryEditing(true);
+                          // If customer select has some value, pre-fill text client fields dynamically
+                          if (selectedCustomerId && !customCustomerNameEditing) {
+                            const cust = customers.find(c => c.id === selectedCustomerId);
+                            if (cust) {
+                              setCustomCustomerNameEditing(cust.companyName);
+                              setDeliveryClientPhoneEditing(cust.phone || '');
+                            }
+                          }
+                        }}
+                        className={cn(
+                          "px-4 py-2 rounded-lg transition-all text-xs font-extrabold flex items-center gap-1.5 cursor-pointer",
+                          isDeliveryEditing 
+                            ? "bg-white text-emerald-800 shadow-sm" 
+                            : "text-slate-500 hover:text-slate-700"
+                        )}
+                      >
+                        <Truck size={14} /> Venda Delivery / Entrega
+                      </button>
                     </div>
                   </div>
+
+                  {isDeliveryEditing ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border border-slate-100 bg-slate-50/30 p-4 rounded-2xl">
+                      {/* Customer Name input with dropdown suggestions */}
+                      <div className="space-y-2 relative">
+                        <label className="text-sm font-bold text-slate-700 ml-1">Nome do Cliente *</label>
+                        <div className="relative">
+                          <input 
+                            type="text"
+                            required
+                            placeholder="Ex: João Silva ou Busque..."
+                            value={customCustomerNameEditing}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setCustomCustomerNameEditing(val);
+                              setEditCustomerSearchTerm(val);
+                              setShowEditCustomerSuggestions(true);
+                            }}
+                            onFocus={() => setShowEditCustomerSuggestions(true)}
+                            className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-bold text-slate-850"
+                          />
+                          {showEditCustomerSuggestions && customers.length > 0 && (
+                            <div className="absolute left-0 right-0 top-full mt-1.5 bg-white border border-slate-200 rounded-xl shadow-xl z-50 max-h-48 overflow-y-auto divide-y divide-slate-50">
+                              {customers
+                                .filter(c => 
+                                  (c.companyName?.toLowerCase() || '').includes(editCustomerSearchTerm.toLowerCase()) || 
+                                  (c.contactName?.toLowerCase() || '').includes(editCustomerSearchTerm.toLowerCase())
+                                )
+                                .map(c => (
+                                  <button
+                                    key={c.id}
+                                    type="button"
+                                    onClick={() => {
+                                      setCustomCustomerNameEditing(c.companyName);
+                                      if (c.phone) setDeliveryClientPhoneEditing(c.phone);
+                                      setShowEditCustomerSuggestions(false);
+                                    }}
+                                    className="w-full text-left px-4 py-2.5 hover:bg-slate-50 hover:text-emerald-700 transition-colors text-xs font-medium text-slate-700"
+                                  >
+                                    <span className="font-bold text-slate-900 block">{c.companyName}</span>
+                                    {c.contactName && <span className="text-[10px] text-slate-400 font-medium">Contato: {c.contactName}</span>}
+                                    {c.phone && <span className="text-[10px] text-slate-450 ml-2">({c.phone})</span>}
+                                  </button>
+                                ))}
+                              <div className="p-2 bg-slate-50 flex justify-between items-center text-[10px] text-slate-400">
+                                <span>Contatos Cadastrados</span>
+                                <button 
+                                  type="button" 
+                                  onClick={() => setShowEditCustomerSuggestions(false)}
+                                  className="font-black text-rose-500 uppercase tracking-widest hover:underline"
+                                >
+                                  Fechar
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Phone Input */}
+                      <div className="space-y-2">
+                        <label className="text-sm font-bold text-slate-700 ml-1">Telefone</label>
+                        <input 
+                          type="text"
+                          placeholder="Ex: (11) 99999-9999"
+                          value={deliveryClientPhoneEditing}
+                          onChange={(e) => setDeliveryClientPhoneEditing(e.target.value)}
+                          className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-semibold text-slate-800"
+                        />
+                      </div>
+
+                      {/* Delivery Date */}
+                      <div className="space-y-2">
+                        <label className="text-sm font-bold text-slate-700 ml-1">Data de Entrega *</label>
+                        <input 
+                          type="date"
+                          required
+                          value={deliveryDate}
+                          onChange={(e) => setDeliveryDate(e.target.value)}
+                          className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-bold text-slate-700"
+                        />
+                      </div>
+
+                      {/* Delivery Address */}
+                      <div className="space-y-2 md:col-span-2">
+                        <label className="text-sm font-bold text-slate-700 ml-1">Endereço de Entrega</label>
+                        <input 
+                          type="text"
+                          placeholder="Ex: Rua das Flores, 123 - Centro"
+                          value={deliveryAddressEditing}
+                          onChange={(e) => setDeliveryAddressEditing(e.target.value)}
+                          className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-semibold text-slate-800"
+                        />
+                      </div>
+
+                      {/* Observations */}
+                      <div className="space-y-2 md:col-span-2">
+                        <label className="text-sm font-bold text-slate-700 ml-1">Observações da Entrega</label>
+                        <textarea 
+                          rows={2}
+                          placeholder="Ponto de referência, observações de troco..."
+                          value={deliveryObservationsEditing}
+                          onChange={(e) => setDeliveryObservationsEditing(e.target.value)}
+                          className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-semibold text-slate-800"
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border border-slate-100 bg-slate-50/30 p-4 rounded-2xl">
+                      <div className="space-y-2">
+                        <label className="text-sm font-bold text-slate-700 ml-1">Cliente *</label>
+                        <select 
+                          value={selectedCustomerId}
+                          onChange={(e) => setSelectedCustomerId(e.target.value)}
+                          required 
+                          className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 font-bold text-slate-800 text-sm"
+                        >
+                          <option value="">Selecione um cliente</option>
+                          {customers.map(c => (
+                            <option key={c.id} value={c.id}>{c.companyName} ({c.contactName})</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-sm font-bold text-slate-700 ml-1">Data Prevista de Entrega</label>
+                        <input 
+                          type="date"
+                          value={deliveryDate}
+                          onChange={(e) => setDeliveryDate(e.target.value)}
+                          className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 font-bold text-slate-800 text-sm"
+                        />
+                      </div>
+                    </div>
+                  )}
 
                   <div className="space-y-4">
                     <label className="text-sm font-bold text-slate-700 ml-1">Produtos da Horta (Estoque de Expedição)</label>

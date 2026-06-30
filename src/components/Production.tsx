@@ -174,6 +174,7 @@ export default function ProductionComponent() {
   const [harvestingItem, setHarvestingItem] = useState<Production | null>(null);
   const [harvestQty, setHarvestQty] = useState('');
   const [harvestDate, setHarvestDate] = useState(new Date().toISOString().split('T')[0]);
+  const [harvestType, setHarvestType] = useState<'partial' | 'final'>('final');
   const [addToInventory, setAddToInventory] = useState(true);
 
   // States for matching or registering inventory products
@@ -563,6 +564,7 @@ export default function ProductionComponent() {
     setHarvestingItem(prod);
     setHarvestQty(String(prod.quantityPlanted));
     setHarvestDate(new Date().toISOString().split('T')[0]);
+    setHarvestType('final');
     setAddToInventory(true);
     
     // Initialize product integration states
@@ -598,12 +600,25 @@ export default function ProductionComponent() {
     try {
       setLoading(true);
 
+      const isFinal = harvestType === 'final';
+      const newStatus = isFinal ? 'harvested' : 'growing';
+
+      const harvestLog = {
+        date: Timestamp.fromDate(new Date(harvestDate)),
+        description: isFinal 
+          ? `Colheita Final realizada: ${qty} ${harvestingItem.unit || 'unidades'}. Lote finalizado.` 
+          : `Colheita Parcial realizada: ${qty} ${harvestingItem.unit || 'unidades'}. Lote continua ativo para mais colheitas.`,
+        products: []
+      };
+
       // Update production cycle in Firestore
       const prodRef = doc(db, 'production', harvestingItem.id);
       await updateDoc(prodRef, {
-        status: 'harvested',
+        status: newStatus,
         harvestDate: Timestamp.fromDate(new Date(harvestDate)),
-        harvestQuantity: qty
+        harvestQuantity: increment(qty),
+        remainingQuantity: increment(qty),
+        logs: [...(harvestingItem.logs || []), harvestLog]
       });
 
       // Integrate into inventory if requested
@@ -643,7 +658,11 @@ export default function ProductionComponent() {
       }
 
       setHarvestingItem(null);
-      alert(`Colheita registrada com sucesso! ${qty} ${harvestingItem.unit || 'un'} de ${harvestingItem.crop} finalizados.`);
+      if (isFinal) {
+        alert(`Colheita Final registrada com sucesso! ${qty} ${harvestingItem.unit || 'un'} de ${harvestingItem.crop} finalizados.`);
+      } else {
+        alert(`Colheita Parcial de ${qty} ${harvestingItem.unit || 'un'} registrada com sucesso! O lote de ${harvestingItem.crop} continua ativo.`);
+      }
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, 'production');
     } finally {
@@ -1614,6 +1633,41 @@ export default function ProductionComponent() {
                       {harvestQty || '0'} <span className="text-xs text-emerald-400 font-bold uppercase">{harvestingItem.unit || 'un'}</span>
                     </p>
                   </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">
+                    Tipo de Colheita *
+                  </label>
+                  <div className="grid grid-cols-2 gap-2 bg-slate-100 p-1 rounded-2xl border border-slate-200/60">
+                    <button
+                      type="button"
+                      onClick={() => setHarvestType('partial')}
+                      className={`py-2 px-3 text-xs font-black rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                        harvestType === 'partial'
+                          ? 'bg-white text-emerald-800 shadow-sm border border-slate-200'
+                          : 'text-slate-500 hover:text-slate-800'
+                      }`}
+                    >
+                      🧺 Parcial
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setHarvestType('final')}
+                      className={`py-2 px-3 text-xs font-black rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                        harvestType === 'final'
+                          ? 'bg-white text-emerald-800 shadow-sm border border-slate-200'
+                          : 'text-slate-500 hover:text-slate-800'
+                      }`}
+                    >
+                      🏁 Final (Encerrar Lote)
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-slate-400 font-bold leading-normal">
+                    {harvestType === 'partial' 
+                      ? '✓ O canteiro continua "Em Crescimento" e novos registros de colheita poderão ser feitos.' 
+                      : '✓ O lote será finalizado ("Colhido") e o canteiro ficará livre para novos plantios.'}
+                  </p>
                 </div>
 
                 <div>

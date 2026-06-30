@@ -68,7 +68,14 @@ export default function BedRecordsComponent() {
   const [bedId, setBedId] = useState('');
   const [crop, setCrop] = useState('');
   const [eventDate, setEventDate] = useState(format(new Date(), 'yyyy-MM-dd'));
-  const [activityType, setActivityType] = useState<'planting' | 'treatment' | 'fertilization' | 'harvest' | 'general'>('treatment');
+  const [activityType, setActivityType] = useState<'planting' | 'manejo' | 'harvest'>('planting');
+  const [manejoType, setManejoType] = useState<'treatment' | 'fertilization' | 'general'>('treatment');
+  const [plantingRows, setPlantingRows] = useState<Array<{
+    bedId: string;
+    crop: string;
+    quantity: string;
+    unit: string;
+  }>>([{ bedId: '', crop: '', quantity: '', unit: 'mudas' }]);
   
   const [treatmentDescription, setTreatmentDescription] = useState('');
   const [fertilizerDescription, setFertilizerDescription] = useState('');
@@ -176,7 +183,9 @@ export default function BedRecordsComponent() {
     setBedId('');
     setCrop('');
     setEventDate(format(new Date(), 'yyyy-MM-dd'));
-    setActivityType('treatment');
+    setActivityType('planting');
+    setManejoType('treatment');
+    setPlantingRows([{ bedId: '', crop: '', quantity: '', unit: 'mudas' }]);
     setTreatmentDescription('');
     setFertilizerDescription('');
     setQuantity('');
@@ -198,30 +207,59 @@ export default function BedRecordsComponent() {
       if (productionMatch) {
         setBedHarvestType(productionMatch.isContinuousHarvest ? 'partial' : 'final');
       }
+      setActivityType('manejo');
+    } else {
+      setActivityType('planting');
+      setPlantingRows([{ bedId: bedName, crop: '', quantity: '', unit: 'mudas' }]);
     }
     setModalOpen(true);
   };
 
   const handleCreateRecord = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!bedId.trim() || !crop.trim() || isSubmitting) return;
+    if (isSubmitting) return;
+
+    // Validate based on activity type
+    if (activityType === 'planting') {
+      for (const row of plantingRows) {
+        if (!row.bedId.trim()) {
+          alert('Por favor, informe o canteiro em todas as linhas de plantio!');
+          return;
+        }
+        if (!row.crop.trim()) {
+          alert('Por favor, informe a cultura/cultivo em todas as linhas de plantio!');
+          return;
+        }
+        const qty = parseFloat(row.quantity);
+        if (isNaN(qty) || qty <= 0) {
+          alert('Por favor, informe uma quantidade válida maior que zero em todas as linhas de plantio!');
+          return;
+        }
+      }
+    } else {
+      if (!bedId.trim()) {
+        alert('Por favor, selecione ou digite o número do canteiro!');
+        return;
+      }
+      if (!crop.trim()) {
+        alert('Por favor, digite o nome da cultura/produto!');
+        return;
+      }
+    }
 
     setIsSubmitting(true);
     setSyncStatusMsg(null);
 
     const recordDate = new Date(eventDate + 'T12:00:00');
     const recordTimestamp = Timestamp.fromDate(recordDate);
-    const parsedQuantity = quantity ? parseFloat(quantity) : 0;
 
     try {
       let syncResultText = '';
-      let productionId: string | undefined = undefined;
-      let matchedCycle: Production | undefined = undefined;
 
-      // 1. Core integration logic with the system ("para depois alimentar o sistema e ter os dados atualizados")
-      if (autoSync) {
-        if (activityType === 'planting') {
-          // Add production cycle directly
+      if (activityType === 'planting') {
+        let createdCount = 0;
+        for (const row of plantingRows) {
+          const parsedQty = parseFloat(row.quantity);
           const initialLogDescription = `Semeadura direta por prontuário do canteiro. Realizado por ${employeeName || 'Funcionário'}.`;
           const initialLog = {
             date: recordTimestamp,
@@ -230,13 +268,13 @@ export default function BedRecordsComponent() {
           };
 
           const prodData = {
-            crop: crop.trim(),
-            bed: bedId.trim(),
+            crop: row.crop.trim(),
+            bed: row.bedId.trim(),
             plantingDate: recordTimestamp,
             transplantDate: null,
             estimatedHarvestDate: null,
-            quantityPlanted: parsedQuantity || 1,
-            unit: 'unidades',
+            quantityPlanted: parsedQty || 1,
+            unit: row.unit || 'mudas',
             inputsUsed: [],
             isContinuousHarvest: false,
             logs: [initialLog],
@@ -246,11 +284,39 @@ export default function BedRecordsComponent() {
             createdAt: serverTimestamp()
           };
 
-          const docRef = await addDoc(collection(db, 'production'), prodData);
-          productionId = docRef.id;
-          syncResultText = `✓ Nova Produção Ativa criada para ${crop} no ${bedId}!`;
+          let productionId = '';
+          if (autoSync) {
+            const docRef = await addDoc(collection(db, 'production'), prodData);
+            productionId = docRef.id;
+          }
 
-        } else if (activityType === 'treatment' || activityType === 'fertilization') {
+          const recordData: any = {
+            bedId: row.bedId.trim(),
+            date: recordTimestamp,
+            crop: row.crop.trim(),
+            activityType: 'planting',
+            employeeName: employeeName.trim() || 'Funcionário',
+            notes: notes.trim(),
+            syncedToProduction: autoSync,
+            quantityPlanted: parsedQty,
+            unitPlanted: row.unit || 'mudas',
+            createdAt: serverTimestamp()
+          };
+
+          if (productionId) {
+            recordData.productionId = productionId;
+          }
+
+          await addDoc(collection(db, 'bed_records'), recordData);
+          createdCount++;
+        }
+        syncResultText = `✓ Sucesso! ${createdCount} plantio(s) registrado(s) e integrados com a Produção Ativa!`;
+
+      } else if (activityType === 'manejo') {
+        let productionId: string | undefined = undefined;
+        let matchedCycle: Production | undefined = undefined;
+
+        if (autoSync) {
           // Append logs to actual active production cycles in this canteiro
           const activeCycles = productions.filter(
             p => p.bed === bedId && p.status === 'growing' && p.crop.toLowerCase() === crop.toLowerCase()
@@ -260,9 +326,11 @@ export default function BedRecordsComponent() {
             matchedCycle = activeCycles[0];
             const originalLogs = [...(matchedCycle.logs || [])];
             
-            const descLog = activityType === 'fertilization' 
+            const descLog = manejoType === 'fertilization' 
               ? `Adubação por prontuário: ${fertilizerDescription.trim()}. Realizado por ${employeeName || 'Funcionário'}.`
-              : `Tratamento por prontuário: ${treatmentDescription.trim()}. Realizado por ${employeeName || 'Funcionário'}.`;
+              : manejoType === 'treatment'
+                ? `Tratamento por prontuário: ${treatmentDescription.trim()}. Realizado por ${employeeName || 'Funcionário'}.`
+                : `Nota clínica por prontuário: ${notes.trim()}. Realizado por ${employeeName || 'Funcionário'}.`;
 
             const newLog = {
               date: recordTimestamp,
@@ -276,10 +344,39 @@ export default function BedRecordsComponent() {
             productionId = matchedCycle.id;
             syncResultText = `✓ Manejo inserido com sucesso na Produção Ativa de ${crop}!`;
           } else {
-            syncResultText = `⚠️ Registro salvo localmente, mas não encontramos ciclo ativo para de [${crop}] no [${bedId}] para injetar o manejo.`;
+            syncResultText = `⚠️ Registro salvo no prontuário, mas não encontramos ciclo ativo para de [${crop}] no [${bedId}] para injetar o manejo.`;
           }
+        }
 
-        } else if (activityType === 'harvest') {
+        const recordData: any = {
+          bedId: bedId.trim(),
+          date: recordTimestamp,
+          crop: crop.trim(),
+          activityType: manejoType, // 'treatment' | 'fertilization' | 'general'
+          employeeName: employeeName.trim() || 'Funcionário',
+          notes: notes.trim(),
+          syncedToProduction: autoSync,
+          createdAt: serverTimestamp()
+        };
+
+        if (productionId) {
+          recordData.productionId = productionId;
+        }
+
+        if (manejoType === 'treatment') {
+          recordData.treatmentDescription = treatmentDescription.trim();
+        } else if (manejoType === 'fertilization') {
+          recordData.fertilizerDescription = fertilizerDescription.trim();
+        }
+
+        await addDoc(collection(db, 'bed_records'), recordData);
+
+      } else if (activityType === 'harvest') {
+        const parsedQuantity = quantity ? parseFloat(quantity) : 0;
+        let productionId: string | undefined = undefined;
+        let matchedCycle: Production | undefined = undefined;
+
+        if (autoSync) {
           // Execute harvest cycle on active productions
           const activeCycles = productions.filter(
             p => p.bed === bedId && p.status === 'growing' && p.crop.toLowerCase() === crop.toLowerCase()
@@ -389,37 +486,26 @@ export default function BedRecordsComponent() {
             syncResultText = `⚠️ Colheita salva, mas não havia ciclo de [${crop}] ativo crescendo no [${bedId}].`;
           }
         }
+
+        const recordData: any = {
+          bedId: bedId.trim(),
+          date: recordTimestamp,
+          crop: crop.trim(),
+          activityType: 'harvest',
+          employeeName: employeeName.trim() || 'Funcionário',
+          notes: notes.trim(),
+          syncedToProduction: autoSync,
+          harvestQuantity: parsedQuantity,
+          harvestUnit: unit,
+          createdAt: serverTimestamp()
+        };
+
+        if (productionId) {
+          recordData.productionId = productionId;
+        }
+
+        await addDoc(collection(db, 'bed_records'), recordData);
       }
-
-      // 2. Add the actual garden bed record document for the visual timeline / medical charts
-      const recordData: any = {
-        bedId: bedId.trim(),
-        date: recordTimestamp,
-        crop: crop.trim(),
-        activityType,
-        employeeName: employeeName.trim() || 'Funcionário',
-        notes: notes.trim(),
-        syncedToProduction: autoSync,
-        createdAt: serverTimestamp()
-      };
-
-      if (productionId) {
-        recordData.productionId = productionId;
-      }
-
-      if (activityType === 'treatment') {
-        recordData.treatmentDescription = treatmentDescription.trim();
-      } else if (activityType === 'fertilization') {
-        recordData.fertilizerDescription = fertilizerDescription.trim();
-      } else if (activityType === 'harvest') {
-        recordData.harvestQuantity = parsedQuantity;
-        recordData.harvestUnit = unit;
-      } else if (activityType === 'planting') {
-        recordData.quantityPlanted = parsedQuantity;
-        recordData.unitPlanted = unit;
-      }
-
-      await addDoc(collection(db, 'bed_records'), recordData);
 
       resetForm();
       setModalOpen(false);
@@ -427,7 +513,7 @@ export default function BedRecordsComponent() {
       if (syncResultText) {
         alert(`Prontuário salvo!\n${syncResultText}`);
       } else {
-        alert(`Prontuário gravado com sucesso para o ${bedId}!`);
+        alert(`Prontuário gravado com sucesso!`);
       }
     } catch (error: any) {
       console.error("Save Record Error:", error);
@@ -457,13 +543,13 @@ export default function BedRecordsComponent() {
       case 'planting':
         return { label: '🌱 Plantio', color: 'bg-emerald-50 text-emerald-700 border-emerald-100' };
       case 'treatment':
-        return { label: '💊 Tratamento', color: 'bg-indigo-50 text-indigo-700 border-indigo-100' };
+        return { label: '🛠️ Manejo (Tratamento)', color: 'bg-indigo-50 text-indigo-700 border-indigo-100' };
       case 'fertilization':
-        return { label: '🧪 Adubação', color: 'bg-amber-50 text-amber-700 border-amber-100' };
+        return { label: '🛠️ Manejo (Adubação)', color: 'bg-amber-50 text-amber-700 border-amber-100' };
       case 'harvest':
         return { label: '🧺 Colheita', color: 'bg-rose-50 text-rose-700 border-rose-100' };
       default:
-        return { label: '📝 Geral', color: 'bg-slate-50 text-slate-700 border-slate-100' };
+        return { label: '🛠️ Manejo (Geral)', color: 'bg-slate-50 text-slate-700 border-slate-100' };
     }
   };
 
@@ -472,7 +558,17 @@ export default function BedRecordsComponent() {
                           r.crop?.toLowerCase().includes(searchTerm.toLowerCase()) ||
                           r.notes?.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesBed = selectedBed ? r.bedId === selectedBed : true;
-    const matchesType = filterType === 'all' ? true : r.activityType === filterType;
+    
+    let matchesType = true;
+    if (filterType !== 'all') {
+      if (filterType === 'planting') {
+        matchesType = r.activityType === 'planting';
+      } else if (filterType === 'harvest') {
+        matchesType = r.activityType === 'harvest';
+      } else if (filterType === 'manejo') {
+        matchesType = r.activityType === 'treatment' || r.activityType === 'fertilization' || r.activityType === 'general';
+      }
+    }
     return matchesSearch && matchesBed && matchesType;
   });
 
@@ -854,10 +950,8 @@ export default function BedRecordsComponent() {
               >
                 <option value="all">Todas Atividades</option>
                 <option value="planting">🌱 Só Plantios</option>
-                <option value="treatment">💊 Só Tratamentos</option>
-                <option value="fertilization">🧪 Só Adubações</option>
+                <option value="manejo">🛠️ Só Manejos</option>
                 <option value="harvest">🧺 Só Colheitas</option>
-                <option value="general">📝 Só Gerais</option>
               </select>
             </div>
           </div>
@@ -982,51 +1076,53 @@ export default function BedRecordsComponent() {
 
               {/* Form Body */}
               <form onSubmit={handleCreateRecord} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
-                <div className="grid grid-cols-2 gap-4">
-                  {/* Bed Identification */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Canteiro No.*</label>
-                    <input 
-                      type="text"
-                      required
-                      placeholder="Ex: Canteiro 3"
-                      value={bedId}
-                      onChange={(e) => setBedId(e.target.value)}
-                      className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-medium"
-                      list="bed-names"
-                    />
-                    <datalist id="bed-names">
-                      {allBeds.map(b => (
-                        <option key={b} value={b} />
-                      ))}
-                    </datalist>
-                  </div>
+                {activityType !== 'planting' && (
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* Bed Identification */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Canteiro No.*</label>
+                      <input 
+                        type="text"
+                        required={activityType !== 'planting'}
+                        placeholder="Ex: Canteiro 3"
+                        value={bedId}
+                        onChange={(e) => setBedId(e.target.value)}
+                        className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-medium"
+                        list="bed-names"
+                      />
+                      <datalist id="bed-names">
+                        {allBeds.map(b => (
+                          <option key={b} value={b} />
+                        ))}
+                      </datalist>
+                    </div>
 
-                  {/* Culture Crop */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Cultura / Cultura*</label>
-                    <input 
-                      type="text"
-                      required
-                      placeholder="Ex: Alface Crespa"
-                      value={crop}
-                      onChange={(e) => setCrop(e.target.value)}
-                      className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-medium"
-                      list="crop-suggestions"
-                    />
-                    <datalist id="crop-suggestions">
-                      <option value="Alface Crespa" />
-                      <option value="Alface Americana" />
-                      <option value="Cebolinha" />
-                      <option value="Coentro" />
-                      <option value="Salsa" />
-                      <option value="Rúcula" />
-                      <option value="Couve-Manteiga" />
-                      <option value="Rabanete" />
-                      <option value="Hortelã" />
-                    </datalist>
+                    {/* Culture Crop */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Cultura / Produto*</label>
+                      <input 
+                        type="text"
+                        required={activityType !== 'planting'}
+                        placeholder="Ex: Alface Crespa"
+                        value={crop}
+                        onChange={(e) => setCrop(e.target.value)}
+                        className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-medium"
+                        list="crop-suggestions"
+                      />
+                      <datalist id="crop-suggestions">
+                        <option value="Alface Crespa" />
+                        <option value="Alface Americana" />
+                        <option value="Cebolinha" />
+                        <option value="Coentro" />
+                        <option value="Salsa" />
+                        <option value="Rúcula" />
+                        <option value="Couve-Manteiga" />
+                        <option value="Rabanete" />
+                        <option value="Hortelã" />
+                      </datalist>
+                    </div>
                   </div>
-                </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-4">
                   {/* Event Date */}
@@ -1049,17 +1145,30 @@ export default function BedRecordsComponent() {
                       onChange={(e) => setActivityType(e.target.value as any)}
                       className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-bold text-slate-700"
                     >
-                      <option value="treatment">💊 Tratamento / Praga / Rega</option>
-                      <option value="fertilization">🧪 Adubação</option>
-                      <option value="planting">🌱 Novo Plantio</option>
+                      <option value="planting">🌱 Plantio</option>
+                      <option value="manejo">🛠️ Manejo</option>
                       <option value="harvest">🧺 Colheita</option>
-                      <option value="general">📝 Outras Notas Gerais</option>
                     </select>
                   </div>
                 </div>
 
+                {activityType === 'manejo' && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Etapa do Manejo</label>
+                    <select
+                      value={manejoType}
+                      onChange={(e) => setManejoType(e.target.value as any)}
+                      className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-bold text-slate-700"
+                    >
+                      <option value="treatment">💊 Tratamento / Praga / Rega</option>
+                      <option value="fertilization">🧪 Adubação</option>
+                      <option value="general">📝 Outras Notas Gerais</option>
+                    </select>
+                  </div>
+                )}
+
                 {/* Conditional Fields based on Activity */}
-                {activityType === 'treatment' && (
+                {activityType === 'manejo' && manejoType === 'treatment' && (
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Qual Tratamento Realizado?*</label>
                     <textarea 
@@ -1073,7 +1182,7 @@ export default function BedRecordsComponent() {
                   </div>
                 )}
 
-                {activityType === 'fertilization' && (
+                {activityType === 'manejo' && manejoType === 'fertilization' && (
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Qual Adubação Realizada?*</label>
                     <textarea 
@@ -1088,29 +1197,111 @@ export default function BedRecordsComponent() {
                 )}
 
                 {activityType === 'planting' && (
-                  <div className="grid grid-cols-2 gap-4 bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-600 uppercase mb-2">Qtd Plantada</label>
-                      <input 
-                        type="number"
-                        placeholder="Ex: 120"
-                        value={quantity}
-                        onChange={(e) => setQuantity(e.target.value)}
-                        className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-600 uppercase mb-2">Unidade</label>
-                      <select
-                        value={unit}
-                        onChange={(e) => setUnit(e.target.value)}
-                        className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm text-slate-700 font-medium"
+                  <div className="space-y-4 bg-emerald-50/30 p-4 rounded-2xl border border-emerald-100">
+                    <div className="flex items-center justify-between border-b border-emerald-100/60 pb-2 mb-2">
+                      <h4 className="text-xs font-black text-emerald-800 uppercase tracking-wider">
+                        Canteiros e Culturas Plantadas
+                      </h4>
+                      <button
+                        type="button"
+                        onClick={() => setPlantingRows([...plantingRows, { bedId: '', crop: '', quantity: '', unit: 'mudas' }])}
+                        className="flex items-center gap-1 text-[11px] font-extrabold text-emerald-600 hover:text-emerald-800 uppercase tracking-wider bg-emerald-100/50 hover:bg-emerald-100 px-2.5 py-1 rounded-lg transition-all cursor-pointer"
                       >
-                        <option value="mudas">Mudas</option>
-                        <option value="unidades">Unidades</option>
-                        <option value="covas">Covas</option>
-                        <option value="gramas">Gramas</option>
-                      </select>
+                        <Plus size={14} /> Add Linha
+                      </button>
+                    </div>
+
+                    <div className="space-y-3">
+                      {plantingRows.map((row, index) => (
+                        <div key={index} className="flex flex-col gap-2 p-3 bg-white border border-slate-100 rounded-xl relative shadow-xs">
+                          {plantingRows.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => setPlantingRows(plantingRows.filter((_, i) => i !== index))}
+                              className="absolute top-2.5 right-2.5 text-slate-400 hover:text-red-500 transition-colors p-1 rounded-lg hover:bg-slate-50"
+                              title="Remover linha"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          )}
+                          
+                          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                            Cultivo #{index + 1}
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2.5">
+                            <div>
+                              <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Canteiro No.*</label>
+                              <input 
+                                type="text"
+                                required
+                                placeholder="Ex: Canteiro 1"
+                                value={row.bedId}
+                                onChange={(e) => {
+                                  const updated = [...plantingRows];
+                                  updated[index].bedId = e.target.value;
+                                  setPlantingRows(updated);
+                                }}
+                                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500 text-xs font-bold"
+                                list="bed-names"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Cultura / Cultura*</label>
+                              <input 
+                                type="text"
+                                required
+                                placeholder="Ex: Alface Americana"
+                                value={row.crop}
+                                onChange={(e) => {
+                                  const updated = [...plantingRows];
+                                  updated[index].crop = e.target.value;
+                                  setPlantingRows(updated);
+                                }}
+                                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500 text-xs font-bold"
+                                list="crop-suggestions"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2.5 mt-1">
+                            <div>
+                              <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Quantidade</label>
+                              <input 
+                                type="number"
+                                required
+                                placeholder="Ex: 360"
+                                value={row.quantity}
+                                onChange={(e) => {
+                                  const updated = [...plantingRows];
+                                  updated[index].quantity = e.target.value;
+                                  setPlantingRows(updated);
+                                }}
+                                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500 text-xs font-bold"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Unidade</label>
+                              <select
+                                value={row.unit}
+                                onChange={(e) => {
+                                  const updated = [...plantingRows];
+                                  updated[index].unit = e.target.value;
+                                  setPlantingRows(updated);
+                                }}
+                                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500 text-xs font-bold text-slate-700"
+                              >
+                                <option value="mudas">Mudas</option>
+                                <option value="unidades">Unidades</option>
+                                <option value="covas">Covas</option>
+                                <option value="gramas">Gramas</option>
+                              </select>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}
@@ -1224,11 +1415,9 @@ export default function BedRecordsComponent() {
                       💡 Integração Automática com Sistema
                     </label>
                     <p className="text-[11px] text-slate-500 mt-0.5">
-                      {activityType === 'planting' && "Criará automaticamente um ciclo de cultivo ativo em 'Produção' com status 'crescendo'."}
-                      {activityType === 'treatment' && "Adicionará uma atividade de manejo ao ciclo ativo de " + (crop ? `[${crop}]` : "cultura") + " no " + (bedId ? `[${bedId}]` : "canteiro") + "."}
-                      {activityType === 'fertilization' && "Adicionará uma adubação aos custos/manejos do cultivo ativo de " + (crop ? `[${crop}]` : "cultura") + " no " + (bedId ? `[${bedId}]` : "canteiro") + "."}
+                      {activityType === 'planting' && "Criará automaticamente ciclos de cultivo ativos em 'Produção' com status 'crescendo' para cada um dos canteiros informados."}
+                      {activityType === 'manejo' && "Adicionará uma atividade de manejo ao ciclo ativo de " + (crop ? `[${crop}]` : "cultura") + " no " + (bedId ? `[${bedId}]` : "canteiro") + "."}
                       {activityType === 'harvest' && "Encerrará o ciclo de cultivo de " + (crop ? `[${crop}]` : "cultura") + " no " + (bedId ? `[${bedId}]` : "canteiro") + " e atualizará o Estoque de Expedição com a quantidade colhida!"}
-                      {activityType === 'general' && "Grava apenas notas clínicas históricas sobre a saúde física do canteiro."}
                     </p>
                   </div>
                 </div>

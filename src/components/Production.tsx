@@ -187,6 +187,13 @@ export default function ProductionComponent() {
   const [newProductMinStock, setNewProductMinStock] = useState('10');
   const [newProductCategory, setNewProductCategory] = useState('Hortaliças');
 
+  // Collective Planting Modal States
+  const [isCollectivePlantingOpen, setIsCollectivePlantingOpen] = useState(false);
+  const [collectivePlantingDate, setCollectivePlantingDate] = useState(new Date().toISOString().split('T')[0]);
+  const [collectiveRows, setCollectiveRows] = useState<Array<{ bed: string; crop: string; quantity: string; unit: string }>>([
+    { bed: '', crop: '', quantity: '', unit: 'un' }
+  ]);
+
   const dispatchCategories = useMemo(() => {
     const categories = inventory
       .filter(item => item.type === 'dispatch' && item.category)
@@ -462,6 +469,75 @@ export default function ProductionComponent() {
     setEditingBedName(null);
     setEditingProductionId(null);
     setEditCrop('');
+  };
+
+  const handleSaveCollectivePlanting = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (loading) return;
+
+    // Validate
+    for (const row of collectiveRows) {
+      if (!row.bed.trim()) {
+        alert('Por favor, informe o canteiro em todas as linhas!');
+        return;
+      }
+      if (!row.crop.trim()) {
+        alert('Por favor, informe a cultura/verdura em todas as linhas!');
+        return;
+      }
+      const qty = Number(row.quantity);
+      if (isNaN(qty) || qty <= 0) {
+        alert('A quantidade plantada deve ser maior que zero!');
+        return;
+      }
+    }
+
+    try {
+      setLoading(true);
+      const plantingDateVal = new Date(collectivePlantingDate + 'T12:00:00');
+      const recordTimestamp = Timestamp.fromDate(plantingDateVal);
+
+      for (const row of collectiveRows) {
+        const qty = Number(row.quantity);
+        const newPlanting = {
+          crop: row.crop.trim(),
+          bed: row.bed.trim(),
+          plantingDate: recordTimestamp,
+          quantityPlanted: qty,
+          unit: row.unit,
+          status: 'growing',
+          logs: [{
+            date: Timestamp.now(),
+            description: `Plantio inicial de ${row.crop.trim()} (${qty} ${row.unit}) registrado via Plantio Coletivo.`
+          }],
+          createdAt: serverTimestamp()
+        };
+        await addDoc(collection(db, 'production'), newPlanting);
+      }
+
+      // Also let's register the activity in bed records (the prontuário) for full integration!
+      for (const row of collectiveRows) {
+        const qty = Number(row.quantity);
+        const recordData = {
+          bedId: row.bed.trim(),
+          crop: row.crop.trim(),
+          date: recordTimestamp,
+          activityType: 'planting',
+          notes: `Plantio coletivo de ${row.crop.trim()} (${qty} ${row.unit}) registrado.`,
+          syncedToProduction: true,
+          employeeName: profile?.displayName || 'Dono',
+          createdAt: serverTimestamp()
+        };
+        await addDoc(collection(db, 'bed_records'), recordData);
+      }
+
+      setIsCollectivePlantingOpen(false);
+      setCollectiveRows([{ bed: '', crop: '', quantity: '', unit: 'un' }]);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'production');
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Handle inline saving of canteiro details
@@ -809,7 +885,18 @@ export default function ProductionComponent() {
         </div>
 
         {/* Excel style export & add buttons */}
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 flex-wrap sm:flex-nowrap">
+          <button
+            onClick={() => {
+              setCollectiveRows([{ bed: '', crop: '', quantity: '', unit: 'un' }]);
+              setIsCollectivePlantingOpen(true);
+            }}
+            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-sm hover:shadow cursor-pointer"
+          >
+            <Sprout size={16} />
+            + Plantio Coletivo
+          </button>
+
           <button
             onClick={() => setIsAddingBed(true)}
             className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-sm hover:shadow cursor-pointer"
@@ -927,6 +1014,211 @@ export default function ProductionComponent() {
                   >
                     Adicionar Linha
                   </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Collective Planting Modal */}
+      <AnimatePresence>
+        {isCollectivePlantingOpen && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-4xl w-full p-6 flex flex-col max-h-[90vh]"
+            >
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+                <div className="flex items-center gap-2">
+                  <Sprout className="text-indigo-600 animate-pulse" size={22} />
+                  <div>
+                    <h3 className="text-lg font-black text-slate-900">Plantio Coletivo</h3>
+                    <p className="text-xs text-slate-500">Registre o plantio em múltiplos canteiros simultaneamente</p>
+                  </div>
+                </div>
+                <button 
+                  type="button"
+                  onClick={() => setIsCollectivePlantingOpen(false)}
+                  className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveCollectivePlanting} className="space-y-4 flex-1 flex flex-col overflow-hidden">
+                {/* Data do Plantio */}
+                <div className="w-full sm:w-64">
+                  <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                    Data do Plantio
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={collectivePlantingDate}
+                    onChange={(e) => setCollectivePlantingDate(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                  />
+                </div>
+
+                {/* Rows Area */}
+                <div className="flex-1 overflow-y-auto pr-2 space-y-3 min-h-[200px]">
+                  <div className="hidden sm:grid sm:grid-cols-12 gap-3 px-2 text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">
+                    <div className="col-span-3">Canteiro [A]</div>
+                    <div className="col-span-4">Cultura / Verdura [C]</div>
+                    <div className="col-span-3">Quantidade [E]</div>
+                    <div className="col-span-2 text-center">Ação</div>
+                  </div>
+
+                  {collectiveRows.map((row, index) => (
+                    <div 
+                      key={index} 
+                      className="grid grid-cols-1 sm:grid-cols-12 gap-2 p-3 sm:p-2 bg-slate-50 sm:bg-transparent rounded-xl border border-slate-100 sm:border-none items-center"
+                    >
+                      {/* Canteiro */}
+                      <div className="col-span-3">
+                        <label className="block sm:hidden text-[9px] font-bold text-slate-400 uppercase mb-1">Canteiro</label>
+                        <select
+                          required
+                          value={row.bed}
+                          onChange={(e) => {
+                            const updated = [...collectiveRows];
+                            updated[index].bed = e.target.value;
+                            setCollectiveRows(updated);
+                          }}
+                          className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-indigo-500"
+                        >
+                          <option value="">Selecione...</option>
+                          {allBedsList.map(bed => (
+                            <option key={bed} value={bed}>{bed}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Cultura */}
+                      <div className="col-span-4">
+                        <label className="block sm:hidden text-[9px] font-bold text-slate-400 uppercase mb-1">Cultura</label>
+                        <select
+                          required
+                          value={row.crop}
+                          onChange={(e) => {
+                            const updated = [...collectiveRows];
+                            const selectedCropName = e.target.value;
+                            updated[index].crop = selectedCropName;
+                            // Pre-fill unit based on catalog or standards
+                            const catItem = produceCatalog.find(item => item.name === selectedCropName);
+                            if (catItem) {
+                              updated[index].unit = catItem.unit || 'un';
+                            }
+                            setCollectiveRows(updated);
+                          }}
+                          className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-indigo-500"
+                        >
+                          <option value="">Selecione a cultura...</option>
+                          <optgroup label="Seus Cultivos Cadastrados">
+                            {produceCatalog.map(item => (
+                              <option key={item.id} value={item.name}>{item.name}</option>
+                            ))}
+                          </optgroup>
+                          <optgroup label="Outros Cultivos Padrão">
+                            {STANDARD_CROPS
+                              .filter(c => !produceCatalog.some(item => item.name === c))
+                              .map(c => (
+                                <option key={c} value={c}>{c}</option>
+                              ))
+                            }
+                          </optgroup>
+                        </select>
+                      </div>
+
+                      {/* Quantidade & Unidade */}
+                      <div className="col-span-3 flex items-center gap-1.5 font-mono">
+                        <div className="flex-1">
+                          <label className="block sm:hidden text-[9px] font-bold text-slate-400 uppercase mb-1">Quantidade</label>
+                          <input
+                            type="number"
+                            required
+                            min="1"
+                            placeholder="Qtd"
+                            value={row.quantity}
+                            onChange={(e) => {
+                              const updated = [...collectiveRows];
+                              updated[index].quantity = e.target.value;
+                              setCollectiveRows(updated);
+                            }}
+                            className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-indigo-500 font-mono text-right"
+                          />
+                        </div>
+                        <div className="w-20">
+                          <label className="block sm:hidden text-[9px] font-bold text-slate-400 uppercase mb-1">Unidade</label>
+                          <select
+                            value={row.unit}
+                            onChange={(e) => {
+                              const updated = [...collectiveRows];
+                              updated[index].unit = e.target.value;
+                              setCollectiveRows(updated);
+                            }}
+                            className="w-full px-2 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-indigo-500 font-sans"
+                          >
+                            {STANDARD_UNITS.map(u => (
+                              <option key={u} value={u}>{u}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Delete Action */}
+                      <div className="col-span-2 text-center pt-2 sm:pt-0">
+                        {collectiveRows.length > 1 ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCollectiveRows(collectiveRows.filter((_, i) => i !== index));
+                            }}
+                            className="text-rose-500 hover:bg-rose-50 p-2 rounded-xl transition-all w-full sm:w-auto flex items-center justify-center gap-1.5 text-xs font-bold uppercase sm:normal-case border border-transparent hover:border-rose-100 sm:border-none cursor-pointer"
+                          >
+                            <Trash2 size={15} />
+                            <span className="sm:hidden">Remover Linha</span>
+                          </button>
+                        ) : (
+                          <span className="text-slate-300 text-xs hidden sm:inline">-</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Add Row and Save Controls */}
+                <div className="border-t border-slate-100 pt-4 flex flex-col sm:flex-row justify-between items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCollectiveRows([...collectiveRows, { bed: '', crop: '', quantity: '', unit: 'un' }]);
+                    }}
+                    className="w-full sm:w-auto px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer border border-slate-200"
+                  >
+                    <PlusCircle size={15} />
+                    + Adicionar outro Canteiro
+                  </button>
+
+                  <div className="w-full sm:w-auto flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsCollectivePlantingOpen(false)}
+                      className="flex-1 sm:flex-initial px-5 py-2.5 rounded-xl text-xs font-extrabold uppercase tracking-wider text-slate-500 hover:bg-slate-100 transition-colors cursor-pointer text-center"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={loading}
+                      className="flex-1 sm:flex-initial px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-extrabold uppercase tracking-wider shadow-sm hover:shadow transition-colors cursor-pointer text-center disabled:opacity-50 font-black"
+                    >
+                      {loading ? 'Registrando...' : 'Registrar Plantios'}
+                    </button>
+                  </div>
                 </div>
               </form>
             </motion.div>

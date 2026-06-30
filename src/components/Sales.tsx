@@ -2299,25 +2299,27 @@ export default function Sales() {
                   )}
 
                   <div className="space-y-4">
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1 block">Produtos da Horta (Estoque de Expedição)</label>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto p-2 border border-slate-100 rounded-xl bg-slate-50/50">
-                        {inventory.filter(item => item.type === 'dispatch' && !isPeUnitOrName(item) && !isMuda(item)).map(item => (
-                          <button
-                            key={item.id}
-                            type="button"
-                            onClick={() => handleAddItem(item.id, 'inventory')}
-                            className="flex items-center justify-between p-2.5 rounded-xl bg-white hover:bg-emerald-50 hover:border-emerald-200 border border-slate-200 transition-all text-left"
-                          >
-                            <div className="flex flex-col min-w-0">
-                              <span className="text-xs font-bold text-slate-800 truncate">{item.name}</span>
-                              <span className="text-[10px] text-slate-400">Qtd: {item.quantity} {formatUnit(item.unit, item.quantity)}</span>
-                            </div>
-                            <Plus size={14} className="text-emerald-600 shrink-0" />
-                          </button>
-                        ))}
+                    {!isDeliveryEditing && (
+                      <div className="space-y-2">
+                        <label className="text-sm font-bold text-slate-700 ml-1 block">Produtos da Horta (Estoque de Expedição)</label>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto p-2 border border-slate-100 rounded-xl bg-slate-50/50">
+                          {inventory.filter(item => item.type === 'dispatch' && !isPeUnitOrName(item) && !isMuda(item)).map(item => (
+                            <button
+                              key={item.id}
+                              type="button"
+                              onClick={() => handleAddItem(item.id, 'inventory')}
+                              className="flex items-center justify-between p-2.5 rounded-xl bg-white hover:bg-emerald-50 hover:border-emerald-200 border border-slate-200 transition-all text-left"
+                            >
+                              <div className="flex flex-col min-w-0">
+                                <span className="text-xs font-bold text-slate-800 truncate">{item.name}</span>
+                                <span className="text-[10px] text-slate-400">Qtd: {item.quantity} {formatUnit(item.unit, item.quantity)}</span>
+                              </div>
+                              <Plus size={14} className="text-emerald-600 shrink-0" />
+                            </button>
+                          ))}
+                        </div>
                       </div>
-                    </div>
+                    )}
 
                     <div className="space-y-2">
                       <label className="text-sm font-bold text-slate-700 ml-1 block">Catálogo de Produtos (Produção)</label>

@@ -7,9 +7,8 @@ import { registerSW } from 'virtual:pwa-register';
 // Register service worker for offline support
 const updateSW = registerSW({
   onNeedRefresh() {
-    if (confirm('Nova versão disponível! Deseja atualizar?')) {
-      updateSW(true);
-    }
+    // Automatically apply update to prevent stale bundle cache on mobile
+    updateSW(true);
   },
   onOfflineReady() {
     console.log('App pronto para uso offline!');

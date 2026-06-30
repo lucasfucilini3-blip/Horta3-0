@@ -1,3959 +1,2003 @@
-import React, { useState, useEffect } from 'react';
-import { collection, query, onSnapshot, addDoc, updateDoc, doc, deleteDoc, serverTimestamp, orderBy, where, increment, getDocs, deleteField, Timestamp } from 'firebase/firestore';
-import { db } from '../firebase';
-import { Production, InventoryItem, Category, LogProduct } from '../types';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
-  Plus, 
-  PlusCircle,
-  Search, 
-  Filter, 
-  Calendar, 
+  collection, 
+  query, 
+  onSnapshot, 
+  addDoc, 
+  updateDoc, 
+  doc, 
+  deleteDoc, 
+  serverTimestamp, 
+  increment, 
+  Timestamp,
+  getDocs,
+  where,
+  orderBy
+} from 'firebase/firestore';
+import { db } from '../firebase';
+import { Production, InventoryItem, ProduceCatalogItem } from '../types';
+import { 
   Sprout, 
+  Plus, 
+  Search, 
   Trash2, 
   Edit2, 
-  CheckCircle2, 
-  XCircle, 
+  Check, 
+  X, 
+  Calendar, 
+  TrendingUp, 
   ClipboardList, 
-  Package, 
-  MapPin, 
-  ArrowRight,
-  ArrowLeft,
-  AlertCircle,
-  Clock,
-  Zap,
-  TrendingUp,
-  Droplets,
-  Thermometer,
-  Maximize2,
-  ShoppingBag,
-  ArrowUpDown,
-  RotateCcw,
-  ChevronDown,
-  ChevronUp
+  FileSpreadsheet, 
+  Download, 
+  AlertTriangle, 
+  Layers, 
+  PlusCircle, 
+  RotateCcw, 
+  CheckSquare, 
+  ChevronRight, 
+  Filter, 
+  ChevronDown, 
+  Info,
+  DollarSign
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth, handleFirestoreError, OperationType } from '../App';
-import { format } from 'date-fns';
-import { ptBR } from 'date-fns/locale';
-import { clsx, type ClassValue } from 'clsx';
-import { twMerge } from 'tailwind-merge';
 
-function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs));
-}
+const STANDARD_CROPS = [
+  'Alface Crespa', 
+  'Alface Americana', 
+  'Alface Lisa', 
+  'Rúcula', 
+  'Cebolinha', 
+  'Salsa', 
+  'Coentro', 
+  'Couve Manteiga', 
+  'Agrião', 
+  'Espinafre', 
+  'Rabanete', 
+  'Brócolis', 
+  'Repolho', 
+  'Couve-Flor', 
+  'Chicória',
+  'Tomate',
+  'Pimentão'
+];
+
+const STANDARD_UNITS = ['un', 'mç', 'kg', 'g', 'bandeja'];
 
 export default function ProductionComponent() {
   const { profile } = useAuth();
+  
+  // Tab control: 'spreadsheet' (Mapa de Canteiros), 'history' (Todos os Lançamentos) ou 'catalog' (Catálogo de Cultivos)
+  const [activeTab, setActiveTab] = useState<'spreadsheet' | 'history' | 'catalog'>('spreadsheet');
+
+  // Core data states
   const [productions, setProductions] = useState<Production[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
+  const [produceCatalog, setProduceCatalog] = useState<ProduceCatalogItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [isModalOpen, setModalOpen] = useState(false);
-  const [isQuickInputModalOpen, setQuickInputModalOpen] = useState(false);
-  const [isLogModalOpen, setLogModalOpen] = useState(false);
-  const [isHarvestModalOpen, setHarvestModalOpen] = useState(false);
-  const [harvestType, setHarvestType] = useState<'partial' | 'final'>('final');
-  const [isProcessModalOpen, setProcessModalOpen] = useState(false);
-  const [focusedProduction, setFocusedProduction] = useState<Production | null>(null);
-  const [selectedProduction, setSelectedProduction] = useState<Production | null>(null);
-  const [editingLogIndex, setEditingLogIndex] = useState<number | null>(null);
-  const [selectedLogProducts, setSelectedLogProducts] = useState<LogProduct[]>([]);
-  const [selectedProcessInputs, setSelectedProcessInputs] = useState<LogProduct[]>([]);
-  const [selectedPlantingInputs, setSelectedPlantingInputs] = useState<LogProduct[]>([]);
-  const [activeTab, setActiveTab] = useState<'seedling' | 'bed' | 'processed'>('bed');
+
+  // Catalog item creation and edit states
+  const [isAddingCatalogItem, setIsAddingCatalogItem] = useState(false);
+  const [catalogName, setCatalogName] = useState('');
+  const [catalogCategory, setCatalogCategory] = useState('Hortaliças');
+  const [catalogUnit, setCatalogUnit] = useState('un');
+  const [catalogDays, setCatalogDays] = useState('45');
+  const [catalogPrice, setCatalogPrice] = useState('5.00');
+  const [editingCatalogItemId, setEditingCatalogItemId] = useState<string | null>(null);
+
+  // Custom confirmation modal state
+  const [confirmationModal, setConfirmationModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    actionLabel: string;
+    onConfirm: () => void | Promise<void>;
+  } | null>(null);
+
+  const confirmAction = (
+    title: string,
+    message: string,
+    actionLabel: string,
+    onConfirm: () => void | Promise<void>
+  ) => {
+    setConfirmationModal({
+      isOpen: true,
+      title,
+      message,
+      actionLabel,
+      onConfirm: async () => {
+        try {
+          await onConfirm();
+        } catch (error) {
+          console.error("Erro na ação confirmada:", error);
+        } finally {
+          setConfirmationModal(null);
+        }
+      }
+    });
+  };
+
+  // Search and quick filtering
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterStatus, setFilterStatus] = useState<string>('all');
-  const [sortBy, setSortBy] = useState<'harvest' | 'planting'>('harvest');
-  const [expandedBeds, setExpandedBeds] = useState<Record<string, boolean>>({});
+  const [statusFilter, setStatusFilter] = useState<'all' | 'growing' | 'harvested' | 'lost'>('all');
 
-  // Batch Operation States
-  const [isBatchModalOpen, setBatchModalOpen] = useState(false);
-  const [batchBedName, setBatchBedName] = useState('');
-  const [batchProductions, setBatchProductions] = useState<Production[]>([]);
-  const [batchActionType, setBatchActionType] = useState<'manejo' | 'harvest'>('manejo');
-  const [selectedBatchProdIds, setSelectedBatchProdIds] = useState<Record<string, boolean>>({});
-  const [batchLogDescription, setBatchLogDescription] = useState('');
-  const [batchLogDate, setBatchLogDate] = useState(new Date().toISOString().split('T')[0]);
-  const [selectedBatchLogProducts, setSelectedBatchLogProducts] = useState<LogProduct[]>([]);
-  const [batchHarvestQuantities, setBatchHarvestQuantities] = useState<Record<string, string>>({});
-  const [batchHarvestTypes, setBatchHarvestTypes] = useState<Record<string, 'partial' | 'final'>>({});
-  const [batchHarvestDate, setBatchHarvestDate] = useState(new Date().toISOString().split('T')[0]);
+  // Spreadsheet bed management
+  const [customBeds, setCustomBeds] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('horta_custom_beds');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [newBedName, setNewBedName] = useState('');
+  const [isAddingBed, setIsAddingBed] = useState(false);
 
+  // Default set of beds
+  const defaultBeds = useMemo(() => [
+    'Canteiro 01', 'Canteiro 02', 'Canteiro 03', 'Canteiro 04', 'Canteiro 05',
+    'Canteiro 06', 'Canteiro 07', 'Canteiro 08', 'Canteiro 09', 'Canteiro 10',
+    'Canteiro 11', 'Canteiro 12'
+  ], []);
+
+  // Merge default beds, custom beds, and any other bed IDs found in existing production database records
+  const allBedsList = useMemo(() => {
+    const dbBeds = productions.map(p => p.bed).filter(Boolean);
+    const unique = Array.from(new Set([...defaultBeds, ...customBeds, ...dbBeds]));
+    return unique.sort((a, b) => {
+      const numA = parseInt(a.replace(/\D/g, ''), 10);
+      const numB = parseInt(b.replace(/\D/g, ''), 10);
+      if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+      return a.localeCompare(b);
+    });
+  }, [productions, defaultBeds, customBeds]);
+
+  // Selected row state for the Excel formula bar simulation
+  const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
+
+  // Inline editing row states
+  // `editingBedName` tells which bed row is in edit mode.
+  // If editing an existing planting, `editingProductionId` is set.
+  // If planting on an empty bed, `editingProductionId` is null.
+  const [editingBedName, setEditingBedName] = useState<string | null>(null);
+  const [editingProductionId, setEditingProductionId] = useState<string | null>(null);
+
+  // Inline edit field states
+  const [editCrop, setEditCrop] = useState('');
+  const [editDate, setEditDate] = useState(new Date().toISOString().split('T')[0]);
+  const [editQuantity, setEditQuantity] = useState(50);
+  const [editUnit, setEditUnit] = useState('un');
+  const [showCropSuggestions, setShowCropSuggestions] = useState(false);
+
+  // Harvest modal state
+  const [harvestingItem, setHarvestingItem] = useState<Production | null>(null);
+  const [harvestQty, setHarvestQty] = useState('');
+  const [harvestDate, setHarvestDate] = useState(new Date().toISOString().split('T')[0]);
+  const [addToInventory, setAddToInventory] = useState(true);
+
+  // States for matching or registering inventory products
+  const [harvestProductMode, setHarvestProductMode] = useState<'existing' | 'new'>('existing');
+  const [selectedInventoryItemId, setSelectedInventoryItemId] = useState<string>('');
+  const [newProductName, setNewProductName] = useState('');
+  const [newProductPrice, setNewProductPrice] = useState('5.00');
+  const [newProductCostPrice, setNewProductCostPrice] = useState('0.00');
+  const [newProductUnit, setNewProductUnit] = useState('un');
+  const [newProductMinStock, setNewProductMinStock] = useState('10');
+  const [newProductCategory, setNewProductCategory] = useState('Hortaliças');
+
+  const dispatchCategories = useMemo(() => {
+    const categories = inventory
+      .filter(item => item.type === 'dispatch' && item.category)
+      .map(item => item.category);
+    return Array.from(new Set(['Hortaliças', 'Legumes', 'Temperos', ...categories]));
+  }, [inventory]);
+
+  // Load production database records & inventory from Firestore
   useEffect(() => {
+    setLoading(true);
     const q = query(collection(db, 'production'), orderBy('plantingDate', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const newProductions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Production));
-      setProductions(newProductions);
+      const fetched = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Production));
+      setProductions(fetched);
       setLoading(false);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'production');
     });
 
     const invQ = query(collection(db, 'inventory'), orderBy('name', 'asc'));
-    const invUnsubscribe = onSnapshot(invQ, (snapshot) => {
-      setInventory(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as InventoryItem)));
+    const unsubscribeInv = onSnapshot(invQ, (snapshot) => {
+      const fetchedInv = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as InventoryItem));
+      setInventory(fetchedInv);
     });
 
-    return () => { unsubscribe(); invUnsubscribe(); };
+    const catQ = collection(db, 'produce_catalog');
+    const unsubscribeCat = onSnapshot(catQ, (snapshot) => {
+      const fetchedCat = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ProduceCatalogItem));
+      fetchedCat.sort((a, b) => a.name.localeCompare(b.name));
+      setProduceCatalog(fetchedCat);
+    }, (error) => {
+      console.error("Erro ao carregar catálogo:", error);
+    });
+
+    return () => {
+      unsubscribe();
+      unsubscribeInv();
+      unsubscribeCat();
+    };
   }, []);
 
-  const handleEditProduction = (p: Production) => {
-    setSelectedProduction(p);
-    setFormProductionType(p.productionType || 'bed');
-    setModalOpen(true);
+  // Save custom beds to localStorage
+  const saveCustomBeds = (beds: string[]) => {
+    setCustomBeds(beds);
+    localStorage.setItem('horta_custom_beds', JSON.stringify(beds));
   };
 
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+  // Add custom bed row
+  const handleAddBed = (e: React.FormEvent) => {
     e.preventDefault();
-    const formData = new FormData(e.currentTarget);
-    
-    const crop = formData.get('crop') as string;
-    const bed = formData.get('bed') as string || (formProductionType === 'seedling' ? 'Estufa' : 'Canteiro');
-    const plantingDate = new Date(formData.get('plantingDate') as string);
-    const transplantDateStr = formData.get('transplantDate') as string;
-    const estimatedHarvestDateStr = formData.get('estimatedHarvestDate') as string;
-    const quantityPlanted = Number(formData.get('quantityPlanted'));
-    const unit = formData.get('unit') as string;
-    const plantingSource = formData.get('plantingSource') as string;
-    const transplantDate = transplantDateStr ? new Date(transplantDateStr) : null;
-    const estimatedHarvestDate = estimatedHarvestDateStr ? new Date(estimatedHarvestDateStr) : null;
-    const isContinuousHarvest = formData.get('isContinuousHarvest') === 'true';
-
-    if (selectedProduction) {
-      // Update existing production
-      try {
-        await updateDoc(doc(db, 'production', selectedProduction.id), {
-          crop,
-          bed,
-          plantingDate,
-          transplantDate,
-          estimatedHarvestDate,
-          quantityPlanted,
-          unit,
-          isContinuousHarvest,
-          productionType: formProductionType,
-          plantingSource: formPlantingSource
-        });
-        
-        if (focusedProduction?.id === selectedProduction.id) {
-          setFocusedProduction({
-            ...focusedProduction,
-            crop,
-            bed,
-            plantingDate,
-            transplantDate,
-            estimatedHarvestDate,
-            quantityPlanted,
-            unit,
-            productionType: formProductionType,
-            plantingSource: formPlantingSource
-          });
-        }
-        
-        setModalOpen(false);
-        setSelectedProduction(null);
-      } catch (error) {
-        handleFirestoreError(error, OperationType.WRITE, 'production');
-      }
+    if (!newBedName.trim()) return;
+    const trimmed = newBedName.trim();
+    if (allBedsList.includes(trimmed)) {
+      alert('Este canteiro já existe na planilha!');
       return;
     }
-
-    // New production logic
-    let initialCost = 0;
-    const inputsWithCost = selectedPlantingInputs.map(p => {
-      const invItem = inventory.find(i => i.id === p.itemId);
-      const costAtTime = invItem?.costPrice || 0;
-      const totalItemCost = costAtTime * p.quantity;
-      initialCost += totalItemCost;
-      return { ...p, costAtTime };
-    });
-
-    const initialLogDescription = 
-      formProductionType === 'seedling' ? 'Semeadura inicial (Viveiro)' :
-      plantingSource === 'purchased_seedlings' ? 'Plantio de mudas compradas' :
-      plantingSource === 'internal_seedlings' ? 'Plantio de mudas próprias' :
-      'Semeadura direta no campo';
-
-    const initialLog = {
-      date: plantingDate,
-      description: initialLogDescription,
-      products: inputsWithCost
-    };
-
-    const data = {
-      crop,
-      bed,
-      plantingDate,
-      transplantDate,
-      estimatedHarvestDate,
-      quantityPlanted,
-      unit,
-      inputsUsed: selectedPlantingInputs.map(p => p.name),
-      isContinuousHarvest,
-      productionType: formProductionType,
-      plantingSource: formProductionType === 'bed' ? plantingSource : 'seeds',
-      logs: [initialLog],
-      status: 'growing',
-      totalCost: initialCost,
-      unitCost: 0,
-      createdAt: serverTimestamp(),
-    };
-
-    try {
-      // Decrement inventory for each input used at planting
-      for (const input of selectedPlantingInputs) {
-        const invRef = doc(db, 'inventory', input.itemId);
-        await updateDoc(invRef, {
-          quantity: increment(-input.quantity),
-          lastUpdated: serverTimestamp()
-        });
-      }
-
-      await addDoc(collection(db, 'production'), data);
-      setModalOpen(false);
-      setSelectedPlantingInputs([]);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'production');
-    }
+    const updated = [...customBeds, trimmed];
+    saveCustomBeds(updated);
+    setNewBedName('');
+    setIsAddingBed(false);
   };
 
-  const handleDeleteLog = async (production: Production, index: number) => {
-    if (!window.confirm('Tem certeza que deseja excluir este registro de manejo? O estoque e custos serão estornados.')) return;
-
-    try {
-      const log = production.logs[index];
-      const logCost = (log.products || []).reduce((acc, p) => acc + ((p.costAtTime || 0) * (p.quantity || 0)), 0);
-
-      if (log.products) {
-        for (const product of log.products) {
-          const invRef = doc(db, 'inventory', product.itemId);
-          await updateDoc(invRef, {
-            quantity: increment(product.quantity),
-            lastUpdated: serverTimestamp()
-          });
-        }
-      }
-
-      const updatedLogs = [...production.logs];
-      updatedLogs.splice(index, 1);
-
-      await updateDoc(doc(db, 'production', production.id), {
-        logs: updatedLogs,
-        totalCost: increment(-logCost)
-      });
-      
-      if (focusedProduction?.id === production.id) {
-        setFocusedProduction({ ...production, logs: updatedLogs, totalCost: production.totalCost - logCost });
-      }
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'production');
-    }
-  };
-
-  const handleAddLog = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!selectedProduction) return;
-    const formData = new FormData(e.currentTarget);
-    
-    let logCost = 0;
-    const productsWithCost = selectedLogProducts.map(p => {
-      const invItem = inventory.find(i => i.id === p.itemId);
-      const costAtTime = invItem?.costPrice || 0;
-      const totalItemCost = costAtTime * p.quantity;
-      logCost += totalItemCost;
-      return { ...p, costAtTime };
-    });
-
-    const newLog: any = {
-      date: new Date(formData.get('date') as string),
-      description: formData.get('description') as string,
-      products: productsWithCost
-    };
-
-    try {
-      // If editing, first revert previous inventory impacts
-      if (editingLogIndex !== null) {
-        const oldLog = selectedProduction.logs[editingLogIndex];
-        const oldCost = (oldLog.products || []).reduce((acc, p) => acc + ((p.costAtTime || 0) * (p.quantity || 0)), 0);
-
-        // Revert old inventory
-        if (oldLog.products) {
-          for (const product of oldLog.products) {
-            const invRef = doc(db, 'inventory', product.itemId);
-            await updateDoc(invRef, {
-              quantity: increment(product.quantity),
-              lastUpdated: serverTimestamp()
-            });
-          }
-        }
-
-        const updatedLogs = [...selectedProduction.logs];
-        updatedLogs[editingLogIndex] = newLog;
-
-        // Deduct new inventory
-        for (const product of selectedLogProducts) {
-          const invRef = doc(db, 'inventory', product.itemId);
-          await updateDoc(invRef, {
-            quantity: increment(-product.quantity),
-            lastUpdated: serverTimestamp()
-          });
-        }
-
-        await updateDoc(doc(db, 'production', selectedProduction.id), {
-          logs: updatedLogs,
-          totalCost: increment(logCost - oldCost)
-        });
-      } else {
-        // Simple add case
-        for (const product of selectedLogProducts) {
-          const invRef = doc(db, 'inventory', product.itemId);
-          await updateDoc(invRef, {
-            quantity: increment(-product.quantity),
-            lastUpdated: serverTimestamp()
-          });
-        }
-
-        await updateDoc(doc(db, 'production', selectedProduction.id), {
-          logs: [...selectedProduction.logs, newLog],
-          totalCost: increment(logCost)
-        });
-      }
-
-      setLogModalOpen(false);
-      setSelectedProduction(null);
-      setEditingLogIndex(null);
-      setSelectedLogProducts([]);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'production');
-    }
-  };
-
-  const toggleLogProduct = (item: InventoryItem) => {
-    const existing = selectedLogProducts.find(p => p.itemId === item.id);
-    if (existing) {
-      setSelectedLogProducts(selectedLogProducts.filter(p => p.itemId !== item.id));
-    } else {
-      setSelectedLogProducts([...selectedLogProducts, { 
-        itemId: item.id, 
-        name: item.name, 
-        quantity: 1, 
-        unit: item.unit 
-      }]);
-    }
-  };
-
-  const updateLogProductQuantity = (itemId: string, quantity: number) => {
-    setSelectedLogProducts(selectedLogProducts.map(p => 
-      p.itemId === itemId ? { ...p, quantity } : p
-    ));
-  };
-
-  const toggleBatchLogProduct = (item: InventoryItem) => {
-    const existing = selectedBatchLogProducts.find(p => p.itemId === item.id);
-    if (existing) {
-      setSelectedBatchLogProducts(selectedBatchLogProducts.filter(p => p.itemId !== item.id));
-    } else {
-      setSelectedBatchLogProducts([...selectedBatchLogProducts, { 
-        itemId: item.id, 
-        name: item.name, 
-        quantity: 1, 
-        unit: item.unit 
-      }]);
-    }
-  };
-
-  const updateBatchLogProductQuantity = (itemId: string, quantity: number) => {
-    setSelectedBatchLogProducts(selectedBatchLogProducts.map(p => 
-      p.itemId === itemId ? { ...p, quantity } : p
-    ));
-  };
-
-  const openBatchModal = (bedName: string, bedProds: Production[]) => {
-    const activeProds = bedProds.filter(p => p.status === 'growing');
-    setBatchBedName(bedName);
-    setBatchProductions(activeProds);
-    setBatchActionType('manejo');
-    
-    const initialSelected: Record<string, boolean> = {};
-    const initialHarvestTypes: Record<string, 'partial' | 'final'> = {};
-    const initialHarvestQuantities: Record<string, string> = {};
-    activeProds.forEach(p => {
-      initialSelected[p.id] = true;
-      initialHarvestTypes[p.id] = 'final';
-      initialHarvestQuantities[p.id] = '';
-    });
-    setSelectedBatchProdIds(initialSelected);
-    setBatchHarvestTypes(initialHarvestTypes);
-    setBatchHarvestQuantities(initialHarvestQuantities);
-    
-    setBatchLogDescription('');
-    setBatchLogDate(new Date().toISOString().split('T')[0]);
-    setSelectedBatchLogProducts([]);
-    setBatchHarvestDate(new Date().toISOString().split('T')[0]);
-    
-    setBatchModalOpen(true);
-  };
-
-  const handleBatchSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const selectedProdsToApply = batchProductions.filter(p => selectedBatchProdIds[p.id]);
-    if (selectedProdsToApply.length === 0) {
-      alert("Por favor, selecione pelo menos um cultivo ativo para aplicar a ação.");
+  // Remove custom bed row (only if it has no active crops)
+  const handleRemoveBed = (bedName: string) => {
+    const hasCrops = productions.some(p => p.bed === bedName && p.status === 'growing');
+    if (hasCrops) {
+      alert('Não é possível remover este canteiro pois ele possui cultivos ativos.');
       return;
     }
-
-    if (batchActionType === 'manejo') {
-      if (!batchLogDescription.trim()) {
-        alert("Por favor, informe a descrição do manejo.");
-        return;
-      }
-
-      try {
-        let totalBatchCost = 0;
-        const productsWithCost = selectedBatchLogProducts.map(p => {
-          const invItem = inventory.find(i => i.id === p.itemId);
-          const costAtTime = invItem?.costPrice || 0;
-          const totalItemCost = costAtTime * p.quantity;
-          totalBatchCost += totalItemCost;
-          return { ...p, costAtTime };
-        });
-
-        // Deduct inventory items once for the entire batch
-        for (const product of selectedBatchLogProducts) {
-          const invRef = doc(db, 'inventory', product.itemId);
-          await updateDoc(invRef, {
-            quantity: increment(-product.quantity),
-            lastUpdated: serverTimestamp()
-          });
-        }
-
-        const divisor = selectedProdsToApply.length;
-        const dividedProducts = productsWithCost.map(p => ({
-          ...p,
-          quantity: p.quantity / divisor
-        }));
-        const dividedCost = totalBatchCost / divisor;
-
-        const batchLog = {
-          date: new Date(batchLogDate),
-          description: `[Manejo Coletivo] ${batchLogDescription}`,
-          products: dividedProducts
-        };
-
-        // Update each of the active selected productions
-        for (const crop of selectedProdsToApply) {
-          await updateDoc(doc(db, 'production', crop.id), {
-            logs: [...(crop.logs || []), batchLog],
-            totalCost: increment(dividedCost)
-          });
-        }
-
-        setBatchModalOpen(false);
-      } catch (error) {
-        handleFirestoreError(error, OperationType.WRITE, 'production');
-      }
-
-    } else {
-      // Colheita Coletiva (Batch Harvest)
-      // Check if some quantities are entered
-      const cropsToHarvest = selectedProdsToApply.filter(p => {
-        const qty = Number(batchHarvestQuantities[p.id]);
-        return !isNaN(qty) && qty > 0;
-      });
-
-      if (cropsToHarvest.length === 0) {
-        alert("Por favor, insira uma quantidade de colheita válida maior que zero para pelo menos um dos cultivos selecionados.");
-        return;
-      }
-
-      try {
-        const harvestDateObj = new Date(batchHarvestDate);
-
-        for (const crop of cropsToHarvest) {
-          const qty = Number(batchHarvestQuantities[crop.id]);
-          const mode = batchHarvestTypes[crop.id] || 'final';
-
-          const totalCost = crop.totalCost || 0;
-          const priorHarvestQuantity = crop.harvestQuantity || 0;
-          const totalNewHarvestQuantity = priorHarvestQuantity + qty;
-          
-          let unitCost = 0;
-          if (mode === 'final') {
-            unitCost = totalNewHarvestQuantity > 0 ? totalCost / totalNewHarvestQuantity : 0;
-          } else {
-            unitCost = totalCost / (crop.quantityPlanted || 1);
-          }
-
-          const isFinal = mode === 'final';
-          const newStatus = isFinal ? 'harvested' : 'growing';
-
-          const harvestLog = {
-            date: harvestDateObj,
-            description: isFinal 
-              ? `Colheita Final Coletiva: ${qty} ${crop.unit}. Lote encerrado.` 
-              : `Colheita Parcial Coletiva: ${qty} ${crop.unit}. Lote continua ativo.`,
-            products: []
-          };
-
-          await updateDoc(doc(db, 'production', crop.id), {
-            status: newStatus,
-            harvestQuantity: increment(qty),
-            remainingQuantity: increment(qty),
-            harvestDate: harvestDateObj,
-            unitCost,
-            logs: [...(crop.logs || []), harvestLog]
-          });
-
-          // update or add product in inventory (Expedição)
-          const invQ = query(collection(db, 'inventory'), where('name', '==', crop.crop));
-          const invSnap = await getDocs(invQ);
-          
-          if (!invSnap.empty) {
-            const existingDoc = invSnap.docs[0];
-            const existingData = existingDoc.data();
-            const currentQty = existingData.quantity || 0;
-            const currentCost = existingData.costPrice || 0;
-            const newTotalCost = (currentQty * currentCost) + (qty * unitCost);
-            const newQty = currentQty + qty;
-            const newAvgCost = newQty > 0 ? newTotalCost / newQty : 0;
-
-            await updateDoc(doc(db, 'inventory', existingDoc.id), {
-              quantity: increment(qty),
-              type: 'dispatch',
-              lastUpdated: serverTimestamp(),
-              costPrice: newAvgCost
-            });
-
-            await addDoc(collection(db, 'inventory_history'), {
-              itemId: existingDoc.id,
-              itemName: crop.crop,
-              quantity: qty,
-              unit: crop.unit,
-              costPrice: unitCost,
-              price: existingData.price || 0,
-              type: 'harvest',
-              description: `Entrada via colheita coletiva (Canteiro: ${crop.bed})`,
-              date: serverTimestamp()
-            });
-          } else {
-            const docRef = await addDoc(collection(db, 'inventory'), {
-              name: crop.crop,
-              type: 'dispatch',
-              category: 'produce',
-              quantity: qty,
-              unit: crop.unit,
-              price: 0,
-              costPrice: unitCost,
-              minStock: 0,
-              lastUpdated: serverTimestamp()
-            });
-
-            await addDoc(collection(db, 'inventory_history'), {
-              itemId: docRef.id,
-              itemName: crop.crop,
-              quantity: qty,
-              unit: crop.unit,
-              costPrice: unitCost,
-              price: 0,
-              type: 'harvest',
-              description: `Entrada via colheita coletiva (Canteiro: ${crop.bed})`,
-              date: serverTimestamp()
-            });
-          }
-        }
-
-        setBatchModalOpen(false);
-      } catch (error) {
-        handleFirestoreError(error, OperationType.WRITE, 'production');
-      }
-    }
-  };
-
-  const togglePlantingInput = (item: InventoryItem) => {
-    const existing = selectedPlantingInputs.find(p => p.itemId === item.id);
-    if (existing) {
-      setSelectedPlantingInputs(selectedPlantingInputs.filter(p => p.itemId !== item.id));
-    } else {
-      setSelectedPlantingInputs([...selectedPlantingInputs, { 
-        itemId: item.id, 
-        name: item.name, 
-        quantity: 1, 
-        unit: item.unit 
-      }]);
-    }
-  };
-
-  const updatePlantingInputQuantity = (itemId: string, quantity: number) => {
-    setSelectedPlantingInputs(selectedPlantingInputs.map(p => 
-      p.itemId === itemId ? { ...p, quantity } : p
-    ));
-  };
-
-  const handleHarvest = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!selectedProduction) return;
-    const formData = new FormData(e.currentTarget);
-    const harvestQuantity = Number(formData.get('harvestQuantity'));
-    const harvestDate = new Date(formData.get('harvestDate') as string);
-
-    try {
-      const totalCost = selectedProduction.totalCost || 0;
-      const priorHarvestQuantity = selectedProduction.harvestQuantity || 0;
-      const totalNewHarvestQuantity = priorHarvestQuantity + harvestQuantity;
-      
-      let unitCost = 0;
-      if (harvestType === 'final') {
-        unitCost = totalNewHarvestQuantity > 0 ? totalCost / totalNewHarvestQuantity : 0;
-      } else {
-        unitCost = totalCost / (selectedProduction.quantityPlanted || 1);
-      }
-
-      const isFinal = harvestType === 'final';
-      const newStatus = isFinal ? 'harvested' : 'growing';
-
-      const harvestLog = {
-        date: harvestDate,
-        description: isFinal 
-          ? `Colheita Final realizada: ${harvestQuantity} ${selectedProduction.unit}. Lote encerrado.` 
-          : `Colheita Parcial realizada: ${harvestQuantity} ${selectedProduction.unit}. Lote continua ativo.`,
-        products: []
-      };
-
-      await updateDoc(doc(db, 'production', selectedProduction.id), {
-        status: newStatus,
-        harvestQuantity: increment(harvestQuantity),
-        remainingQuantity: increment(harvestQuantity),
-        harvestDate,
-        unitCost,
-        logs: [...(selectedProduction.logs || []), harvestLog]
-      });
-
-      // 3. Add/Update the harvested product in inventory (Expedição)
-      const invQ = query(collection(db, 'inventory'), where('name', '==', selectedProduction.crop));
-      const invSnap = await getDocs(invQ);
-      
-      if (!invSnap.empty) {
-        const existingDoc = invSnap.docs[0];
-        const existingData = existingDoc.data();
-        // Weighted average for costPrice
-        const currentQty = existingData.quantity || 0;
-        const currentCost = existingData.costPrice || 0;
-        const newTotalCost = (currentQty * currentCost) + (harvestQuantity * unitCost);
-        const newQty = currentQty + harvestQuantity;
-        const newAvgCost = newQty > 0 ? newTotalCost / newQty : 0;
-
-        await updateDoc(doc(db, 'inventory', existingDoc.id), {
-          quantity: increment(harvestQuantity),
-          type: 'dispatch',
-          lastUpdated: serverTimestamp(),
-          costPrice: newAvgCost
-        });
-
-        await addDoc(collection(db, 'inventory_history'), {
-          itemId: existingDoc.id,
-          itemName: selectedProduction.crop,
-          quantity: harvestQuantity,
-          unit: selectedProduction.unit,
-          costPrice: unitCost,
-          price: existingData.price || 0,
-          type: 'harvest',
-          description: `Entrada via colheita (Canteiro: ${selectedProduction.bed})`,
-          date: serverTimestamp()
-        });
-      } else {
-        const docRef = await addDoc(collection(db, 'inventory'), {
-          name: selectedProduction.crop,
-          type: 'dispatch',
-          category: 'produce',
-          quantity: harvestQuantity,
-          unit: selectedProduction.unit,
-          price: 0, // User will set this in Inventory
-          costPrice: unitCost,
-          minStock: 0,
-          lastUpdated: serverTimestamp()
-        });
-
-        await addDoc(collection(db, 'inventory_history'), {
-          itemId: docRef.id,
-          itemName: selectedProduction.crop,
-          quantity: harvestQuantity,
-          unit: selectedProduction.unit,
-          costPrice: unitCost,
-          price: 0,
-          type: 'harvest',
-          description: `Entrada via colheita (Canteiro: ${selectedProduction.bed})`,
-          date: serverTimestamp()
-        });
-      }
-
-      setHarvestModalOpen(false);
-      setSelectedProduction(null);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'production');
-    }
-  };
-
-  const handleProcess = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!selectedProduction) return;
-    const formData = new FormData(e.currentTarget);
-    const sourceQuantityUsed = Number(formData.get('sourceQuantityUsed'));
-    const newProductName = formData.get('newProductName') as string;
-    const newProductQuantity = Number(formData.get('newProductQuantity'));
-    const newProductUnit = formData.get('newProductUnit') as string;
-    const newProductPrice = Number(formData.get('newProductPrice'));
-
-    try {
-      // Calculate costs
-      const sourceUnitCost = selectedProduction.unitCost || 0;
-      const sourceTotalCost = sourceQuantityUsed * sourceUnitCost;
-      
-      let inputsTotalCost = 0;
-      const productsWithCost = selectedProcessInputs.map(p => {
-        const invItem = inventory.find(i => i.id === p.itemId);
-        const costAtTime = invItem?.costPrice || 0;
-        const totalItemCost = costAtTime * p.quantity;
-        inputsTotalCost += totalItemCost;
-        return { ...p, costAtTime };
-      });
-
-      const finalTotalCost = sourceTotalCost + inputsTotalCost;
-      const finalUnitCost = newProductQuantity > 0 ? finalTotalCost / newProductQuantity : 0;
-
-      // 1. Decrement source production remainingQuantity
-      await updateDoc(doc(db, 'production', selectedProduction.id), {
-        remainingQuantity: increment(-sourceQuantityUsed)
-      });
-
-      // 2. Decrement inventory inputs
-      for (const input of selectedProcessInputs) {
-        const invRef = doc(db, 'inventory', input.itemId);
-        await updateDoc(invRef, {
-          quantity: increment(-input.quantity),
-          lastUpdated: serverTimestamp()
-        });
-
-        const invItem = inventory.find(i => i.id === input.itemId);
-        await addDoc(collection(db, 'inventory_history'), {
-          itemId: input.itemId,
-          itemName: input.name,
-          quantity: -input.quantity,
-          unit: input.unit || '',
-          costPrice: invItem?.costPrice || 0,
-          price: invItem?.price || 0,
-          type: 'use_processing',
-          description: `Consumo para processamento de ${newProductName}`,
-          date: serverTimestamp()
-        });
-      }
-
-      // 3. Add/Update the processed product in inventory
-      const invQ = query(collection(db, 'inventory'), where('name', '==', newProductName));
-      const invSnap = await getDocs(invQ);
-      
-      if (!invSnap.empty) {
-        const existingDoc = invSnap.docs[0];
-        const existingData = existingDoc.data();
-        // Weighted average for costPrice? Or just update to latest? 
-        // Let's use weighted average if possible, or just latest for simplicity as requested "formar o custo"
-        await updateDoc(doc(db, 'inventory', existingDoc.id), {
-          quantity: increment(newProductQuantity),
-          type: 'dispatch',
-          lastUpdated: serverTimestamp(),
-          price: newProductPrice || existingData.price,
-          costPrice: finalUnitCost
-        });
-
-        await addDoc(collection(db, 'inventory_history'), {
-          itemId: existingDoc.id,
-          itemName: newProductName,
-          quantity: newProductQuantity,
-          unit: newProductUnit,
-          costPrice: finalUnitCost,
-          price: newProductPrice || existingData.price || 0,
-          type: 'processing_entry',
-          description: `Entrada via processamento de ${sourceQuantityUsed} ${selectedProduction.unit} de ${selectedProduction.crop}`,
-          date: serverTimestamp()
-        });
-      } else {
-        // Ensure category exists
-        const catQ = query(collection(db, 'categories'), where('name', '==', 'Processados'), where('type', '==', 'inventory'));
-        const catSnap = await getDocs(catQ);
-        if (catSnap.empty) {
-          await addDoc(collection(db, 'categories'), { name: 'Processados', type: 'inventory' });
-        }
-
-        const docRef = await addDoc(collection(db, 'inventory'), {
-          name: newProductName,
-          type: 'dispatch',
-          category: 'Processados',
-          quantity: newProductQuantity,
-          unit: newProductUnit,
-          price: newProductPrice,
-          costPrice: finalUnitCost,
-          lastUpdated: serverTimestamp(),
-          minStock: 0
-        });
-
-        await addDoc(collection(db, 'inventory_history'), {
-          itemId: docRef.id,
-          itemName: newProductName,
-          quantity: newProductQuantity,
-          unit: newProductUnit,
-          costPrice: finalUnitCost,
-          price: newProductPrice,
-          type: 'processing_entry',
-          description: `Entrada via processamento de ${sourceQuantityUsed} ${selectedProduction.unit} de ${selectedProduction.crop}`,
-          date: serverTimestamp()
-        });
-      }
-
-      // 4. Record expense for inputs (if we had costs)
-      // For now, just a log in the production
-      const processLog = {
-        date: new Date(),
-        description: `Processamento: ${sourceQuantityUsed} ${selectedProduction.unit} transformados em ${newProductQuantity} ${newProductUnit} de ${newProductName}.`,
-        products: productsWithCost
-      };
-
-      await updateDoc(doc(db, 'production', selectedProduction.id), {
-        logs: [...selectedProduction.logs, processLog]
-      });
-
-      setProcessModalOpen(false);
-      setSelectedProduction(null);
-      setSelectedProcessInputs([]);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'production');
-    }
-  };
-
-  const toggleProcessInput = (item: InventoryItem) => {
-    const existing = selectedProcessInputs.find(p => p.itemId === item.id);
-    if (existing) {
-      setSelectedProcessInputs(selectedProcessInputs.filter(p => p.itemId !== item.id));
-    } else {
-      setSelectedProcessInputs([...selectedProcessInputs, { 
-        itemId: item.id, 
-        name: item.name, 
-        quantity: 1, 
-        unit: item.unit 
-      }]);
-    }
-  };
-
-  const updateProcessInputQuantity = (itemId: string, quantity: number) => {
-    setSelectedProcessInputs(selectedProcessInputs.map(p => 
-      p.itemId === itemId ? { ...p, quantity } : p
-    ));
-  };
-
-  const markAsLost = async (id: string) => {
-    if (!confirm('Deseja marcar esta produção como perdida?')) return;
-    try {
-      await updateDoc(doc(db, 'production', id), { status: 'lost' });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'production');
-    }
-  };
-
-  const handleDelete = async (id: string) => {
-    if (!confirm('Excluir registro de produção?')) return;
-    try {
-      await deleteDoc(doc(db, 'production', id));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, 'production');
-    }
-  };
-
-  const handleQuickInputSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const formData = new FormData(e.currentTarget);
-    const data = {
-      name: formData.get('name') as string,
-      type: 'input',
-      category: formData.get('category') as string,
-      quantity: Number(formData.get('quantity')),
-      unit: formData.get('unit') as string,
-      costPrice: Number(formData.get('costPrice')) || 0,
-      minStock: 0,
-      lastUpdated: serverTimestamp(),
-    };
-
-    try {
-      const docRef = await addDoc(collection(db, 'inventory'), data);
-      
-      // Auto-select the new item for the current context
-      const newItem = { id: docRef.id, ...data } as any;
-      if (isModalOpen) {
-        togglePlantingInput(newItem);
-      } else if (isLogModalOpen) {
-        toggleLogProduct(newItem);
-      } else if (isProcessModalOpen) {
-        toggleProcessInput(newItem);
-      }
-
-      setQuickInputModalOpen(false);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'inventory');
-    }
-  };
-
-  const processedItems = inventory.filter(item => 
-    item.category === 'Processados' && 
-    item.name.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
-  const activeTabClass = "bg-white text-emerald-600 shadow-sm ring-1 ring-slate-200";
-  const inactiveTabClass = "text-slate-500 hover:text-slate-700 hover:bg-slate-200/50";
-
-  const getDaysSincePlanting = (date: any) => {
-    const plantingDate = date?.toDate ? date.toDate() : new Date(date);
-    const diff = new Date().getTime() - plantingDate.getTime();
-    return Math.floor(diff / (1000 * 60 * 60 * 24));
-  };
-
-  const getStatusProgress = (p: Production) => {
-    if (p.status === 'harvested' || p.status === 'lost') return 100;
     
-    if (p.status === 'growing') {
-      const plantingDate = p.plantingDate?.toDate ? p.plantingDate.toDate() : new Date(p.plantingDate);
-      const estimatedHarvestDate = p.estimatedHarvestDate?.toDate ? p.estimatedHarvestDate.toDate() : (p.estimatedHarvestDate ? new Date(p.estimatedHarvestDate) : null);
-      
-      if (!estimatedHarvestDate) return 0;
-      
-      const today = new Date();
-      const totalDays = estimatedHarvestDate.getTime() - plantingDate.getTime();
-      const elapsedDays = today.getTime() - plantingDate.getTime();
-      
-      if (totalDays <= 0) return 99; // Avoid division by zero or invalid negative duration
-      
-      const progress = Math.min(Math.floor((elapsedDays / totalDays) * 100), 99);
-      return Math.max(progress, 0);
-    }
-    
-    return 0;
-  };
-
-  const filteredProductions = productions
-    .filter(p => {
-      const matchesSearch = p.crop.toLowerCase().includes(searchTerm.toLowerCase()) || p.bed.toLowerCase().includes(searchTerm.toLowerCase());
-      const matchesStatus = filterStatus === 'all' || p.status === filterStatus;
-      const matchesTab = activeTab === 'processed' ? false : (activeTab === 'seedling' ? p.productionType === 'seedling' : p.productionType === 'bed' || !p.productionType);
-      return matchesSearch && matchesStatus && matchesTab;
-    })
-    .sort((a, b) => {
-      // Prioritize "growing" status at the top
-      if (a.status === 'growing' && b.status !== 'growing') return -1;
-      if (a.status !== 'growing' && b.status === 'growing') return 1;
-
-      if (sortBy === 'planting') {
-        const plantA = a.plantingDate?.toDate ? a.plantingDate.toDate() : (a.plantingDate ? new Date(a.plantingDate) : new Date(0));
-        const plantB = b.plantingDate?.toDate ? b.plantingDate.toDate() : (b.plantingDate ? new Date(b.plantingDate) : new Date(0));
-        return plantB.getTime() - plantA.getTime();
-      } else {
-        const dateA = a.estimatedHarvestDate?.toDate ? a.estimatedHarvestDate.toDate() : (a.estimatedHarvestDate ? new Date(a.estimatedHarvestDate) : null);
-        const dateB = b.estimatedHarvestDate?.toDate ? b.estimatedHarvestDate.toDate() : (b.estimatedHarvestDate ? new Date(b.estimatedHarvestDate) : null);
-
-        if (dateA && dateB) {
-          return dateA.getTime() - dateB.getTime(); // Closest date first
+    confirmAction(
+      'Remover Canteiro',
+      `Deseja mesmo remover a linha do "${bedName}" da planilha?`,
+      'Remover',
+      () => {
+        const updated = customBeds.filter(b => b !== bedName);
+        saveCustomBeds(updated);
+        if (editingBedName === bedName) {
+          cancelEditing();
         }
-        
-        if (dateA) return -1;
-        if (dateB) return 1;
-
-        // Fallback to planting date descending
-        const plantA = a.plantingDate?.toDate ? a.plantingDate.toDate() : (a.plantingDate ? new Date(a.plantingDate) : new Date(0));
-        const plantB = b.plantingDate?.toDate ? b.plantingDate.toDate() : (b.plantingDate ? new Date(b.plantingDate) : new Date(0));
-        return plantB.getTime() - plantA.getTime();
       }
-    });
-
-  const sortedHistoricalSeedlings = productions
-    .filter(p => {
-      // 1. It is a completed seedling lot (harvested or lost)
-      if (p.productionType === 'seedling' && p.status !== 'growing') {
-        return true;
-      }
-      // 2. Or it was transplanted! Current type is 'bed', but it originated from internal seedlings or has a transplantDate
-      if (p.productionType === 'bed' && (p.plantingSource === 'internal_seedlings' || p.transplantDate)) {
-        return true;
-      }
-      return false;
-    })
-    .sort((a, b) => {
-      const aDate = a.transplantDate || a.plantingDate;
-      const bDate = b.transplantDate || b.plantingDate;
-      const aTime = aDate?.toDate ? aDate.toDate().getTime() : (aDate ? new Date(aDate).getTime() : 0);
-      const bTime = bDate?.toDate ? bDate.toDate().getTime() : (bDate ? new Date(bDate).getTime() : 0);
-      return bTime - aTime;
-    });
-
-  const quickLogs = [
-    { label: 'Manejo', icon: Zap, color: 'text-emerald-500 bg-emerald-50' },
-  ];
-
-  const handleQuickLog = async (production: Production, type: string) => {
-    setSelectedProduction(production);
-    setLogModalOpen(true);
-  };
-
-  const handleEditLog = (production: Production, index: number) => {
-    setSelectedProduction(production);
-    setEditingLogIndex(index);
-    const log = production.logs[index];
-    setSelectedLogProducts(log.products || []);
-    setLogModalOpen(true);
-  };
-
-  const [formProductionType, setFormProductionType] = useState<'seedling' | 'bed'>('bed');
-  const [formPlantingSource, setFormPlantingSource] = useState<'seeds' | 'internal_seedlings' | 'purchased_seedlings'>('seeds');
-  const [isTransplantModalOpen, setTransplantModalOpen] = useState(false);
-  const [transplantError, setTransplantError] = useState<string | null>(null);
-
-  const [isRevertHarvestModalOpen, setRevertHarvestModalOpen] = useState(false);
-  const [productionToRevertHarvest, setProductionToRevertHarvest] = useState<Production | null>(null);
-  const [revertError, setRevertError] = useState<string | null>(null);
-  const [revertHarvestQty, setRevertHarvestQty] = useState<number>(0);
-  const [revertHarvestLogIndex, setRevertHarvestLogIndex] = useState<number>(-1);
-  const [revertHarvestLogDesc, setRevertHarvestLogDesc] = useState<string>('');
-
-  const handleTransplantSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!selectedProduction) return;
-    setTransplantError(null);
-
-    const formData = new FormData(e.currentTarget);
-    const destinationBed = formData.get('destinationBed') as string;
-    const transplantDateStr = formData.get('transplantDate') as string;
-    const estimatedHarvestDateStr = formData.get('estimatedHarvestDate') as string;
-    const quantityTransplanted = Number(formData.get('quantityTransplanted'));
-
-    const transplantDate = transplantDateStr ? new Date(transplantDateStr + 'T12:00:00') : new Date();
-    const estimatedHarvestDate = estimatedHarvestDateStr ? new Date(estimatedHarvestDateStr + 'T12:00:00') : null;
-
-    const transplantTimestamp = Timestamp.fromDate(transplantDate);
-    const estimatedHarvestTimestamp = estimatedHarvestDate ? Timestamp.fromDate(estimatedHarvestDate) : null;
-
-    try {
-      // 1. Calculate seedling production costs
-      const totalCost = selectedProduction.totalCost || 0;
-      const unitCost = quantityTransplanted > 0 ? totalCost / quantityTransplanted : 0;
-
-      // 2. Resolve inventory item for the crop's seedlings
-      let itemId = '';
-      const cropName = selectedProduction.crop || '';
-      let targetItemName = `Mudas de ${cropName}`;
-      const existingItem = inventory.find(item => {
-        const name = item.name || '';
-        return name.trim().toLowerCase() === `mudas de ${cropName}`.toLowerCase() ||
-               name.trim().toLowerCase() === `muda de ${cropName}`.toLowerCase();
-      });
-
-      if (existingItem) {
-        itemId = existingItem.id;
-        targetItemName = existingItem.name;
-        
-        // Update price metrics with weighted average cost
-        const currentQty = existingItem.quantity || 0;
-        const currentCost = existingItem.costPrice || 0;
-        const newTotalCost = (currentQty * currentCost) + (quantityTransplanted * unitCost);
-        const totalQty = currentQty + quantityTransplanted;
-        const newAvgCost = totalQty > 0 ? newTotalCost / totalQty : 0;
-
-        await updateDoc(doc(db, 'inventory', itemId), {
-          quantity: increment(quantityTransplanted),
-          costPrice: newAvgCost,
-          lastUpdated: serverTimestamp()
-        });
-      } else {
-        // Auto-create category 'Mudas' in inventory if it does not exist
-        const docRef = await addDoc(collection(db, 'inventory'), {
-          name: targetItemName,
-          type: 'dispatch',
-          category: 'Mudas',
-          quantity: quantityTransplanted,
-          unit: selectedProduction.unit || 'mudas',
-          price: 0,
-          costPrice: unitCost,
-          minStock: 0,
-          lastUpdated: serverTimestamp()
-        });
-        itemId = docRef.id;
-      }
-
-      // 3. Register addition in the inventory history
-      await addDoc(collection(db, 'inventory_history'), {
-        itemId: itemId,
-        itemName: targetItemName,
-        quantity: quantityTransplanted,
-        unit: selectedProduction.unit || 'mudas',
-        costPrice: unitCost,
-        price: 0,
-        type: 'add_stock',
-        description: `Entrada via produção de mudas (Estufa de Origem: ${selectedProduction.bed})`,
-        date: serverTimestamp()
-      });
-
-      // 4. Immediately deduct the seedlings as they are planted in the canteiro (dar baixa)
-      await updateDoc(doc(db, 'inventory', itemId), {
-        quantity: increment(-quantityTransplanted),
-        lastUpdated: serverTimestamp()
-      });
-
-      // 5. Register subtraction in the inventory history
-      await addDoc(collection(db, 'inventory_history'), {
-        itemId: itemId,
-        itemName: targetItemName,
-        quantity: -quantityTransplanted,
-        unit: selectedProduction.unit || 'mudas',
-        costPrice: unitCost,
-        price: 0,
-        type: 'use_stock',
-        description: `Saída via transplante para canteiro de destino: ${destinationBed}`,
-        date: serverTimestamp()
-      });
-
-      // 6. Update the production state to 'bed'
-      const originalLogs = [...(selectedProduction.logs || [])];
-      const seedlingLog = {
-        date: transplantTimestamp,
-        description: `Mudas transplantadas da estufa (${selectedProduction.bed}) para o canteiro: ${destinationBed}. Qtd real de mudas plantadas: ${quantityTransplanted} ${selectedProduction.unit}`,
-        products: []
-      };
-      
-      await updateDoc(doc(db, 'production', selectedProduction.id), {
-        productionType: 'bed',
-        plantingSource: 'internal_seedlings',
-        bed: destinationBed,
-        quantityPlanted: quantityTransplanted,
-        transplantDate: transplantTimestamp,
-        estimatedHarvestDate: estimatedHarvestTimestamp,
-        logs: [...originalLogs, seedlingLog]
-      });
-
-      setTransplantModalOpen(false);
-      setSelectedProduction(null);
-    } catch (error: any) {
-      console.error("Erro no transplante:", error);
-      setTransplantError(error?.message || "Ocorreu um erro ao processar o transplante.");
-      handleFirestoreError(error, OperationType.WRITE, 'production');
-    }
-  };
-
-  const handleRevertTransplant = async (p: Production) => {
-    if (!confirm('Deseja desfazer o transplante e retornar esta produção para o estágio de mudas (Estufa)?')) return;
-
-    try {
-      // Revert Inventory logs to maintain history audit trail
-      const cropName = p.crop || '';
-      const itemName = `Mudas de ${cropName}`;
-      const existingItem = inventory.find(item => {
-        const name = item.name || '';
-        return name.trim().toLowerCase() === `mudas de ${cropName}`.toLowerCase() ||
-               name.trim().toLowerCase() === `muda de ${cropName}`.toLowerCase();
-      });
-
-      if (existingItem) {
-        const unitCost = p.totalCost && p.quantityPlanted ? p.totalCost / p.quantityPlanted : 0;
-
-        await addDoc(collection(db, 'inventory_history'), {
-          itemId: existingItem.id,
-          itemName: existingItem.name,
-          quantity: p.quantityPlanted,
-          unit: p.unit || 'mudas',
-          costPrice: unitCost,
-          price: 0,
-          type: 'add_stock',
-          description: `Estorno de Baixa por desfazer transplante de [${p.crop}]`,
-          date: serverTimestamp()
-        });
-
-        await addDoc(collection(db, 'inventory_history'), {
-          itemId: existingItem.id,
-          itemName: existingItem.name,
-          quantity: -p.quantityPlanted,
-          unit: p.unit || 'mudas',
-          costPrice: unitCost,
-          price: 0,
-          type: 'use_stock',
-          description: `Estorno de Entrada por desfazer transplante de [${p.crop}]`,
-          date: serverTimestamp()
-        });
-      }
-
-      // Enhanced sibling seedling matching for previous 2-record transplants
-      const siblingSeedling = productions.find(other => {
-        if (other.id === p.id) return false;
-        
-        // Trim and lowercase comparison for crop names to be extremely lenient with formatting
-        if (other.crop.trim().toLowerCase() !== p.crop.trim().toLowerCase()) return false;
-        
-        // Sibling seedling must be 'harvested' under the old 2-record flow
-        if (other.status !== 'harvested') return false;
-
-        // Ensure it is not a bed record itself if a productionType is defined
-        if (other.productionType === 'bed') return false;
-
-        // Try to match by sowing date (plantingDate)
-        const getMs = (dateVal: any) => {
-          if (!dateVal) return 0;
-          if (typeof dateVal.toDate === 'function') {
-            try { return dateVal.toDate().getTime(); } catch (e) {}
-          }
-          if (dateVal.seconds) return dateVal.seconds * 1000;
-          try { return new Date(dateVal).getTime(); } catch (e) {}
-          return 0;
-        };
-
-        const otherTime = getMs(other.plantingDate);
-        const pTime = getMs(p.plantingDate);
-
-        // Dates match exactly or very closely (within 24 hours is typical)
-        const isSameSowingDate = otherTime > 0 && pTime > 0 && Math.abs(otherTime - pTime) < 24 * 60 * 60 * 1000;
-
-        // Or search the logs for explicit references to verify the match
-        const otherLogsMentionThisBed = other.logs?.some(l => 
-          l.description && l.description.toLowerCase().includes(p.bed.toLowerCase())
-        ) || false;
-
-        const pLogsMentionOtherBed = p.logs?.some(l => 
-          l.description && l.description.toLowerCase().includes(other.bed.toLowerCase())
-        ) || false;
-
-        return isSameSowingDate || otherLogsMentionThisBed || pLogsMentionOtherBed;
-      });
-
-      if (siblingSeedling) {
-        // Option 1: Two-record method was used.
-        // We will restore the old harvested seedling record to 'growing' status, and remove this newly created 'bed' record.
-        const originalLogs = [...(siblingSeedling.logs || [])];
-        
-        // Remove the log recording the transplant from the old seedling record
-        const filteredLogs = originalLogs.filter(log => {
-          const desc = log.description?.toLowerCase() || '';
-          return !desc.includes('transplant') && 
-                 !desc.includes('canteiro') && 
-                 !desc.includes('muda') &&
-                 !desc.includes('origem');
-        });
-
-        await updateDoc(doc(db, 'production', siblingSeedling.id), {
-          status: 'growing',
-          harvestQuantity: deleteField(),
-          remainingQuantity: deleteField(),
-          harvestDate: deleteField(),
-          logs: filteredLogs
-        });
-
-        await deleteDoc(doc(db, 'production', p.id));
-
-        if (focusedProduction?.id === p.id) {
-          setFocusedProduction(null);
-        }
-        
-        alert('Transplante desfeito com sucesso! A produção original de mudas na Estufa foi ativada e este canteiro foi apagado.');
-        return;
-      }
-
-      // Option 2: Single-record method was used.
-      let originalLogs = [...(p.logs || [])];
-      let originalBed = 'Estufa';
-
-      // Find the last log containing transplant info and remove it
-      const transplantLogIndex = [...originalLogs].reverse().findIndex(log => 
-        log.description && (
-          log.description.includes('Mudas transplantadas') || 
-          log.description.includes('Mudas próprias transplantadas') ||
-          log.description.toLowerCase().includes('transplant') ||
-          log.description.toLowerCase().includes('muda')
-        )
-      );
-
-      if (transplantLogIndex !== -1) {
-        const realIndex = originalLogs.length - 1 - transplantLogIndex;
-        const log = originalLogs[realIndex];
-        
-        // Match the original bed name inside parentheses if available, e.g. "Mudas transplantadas da estufa (Estufa Central) para..."
-        const match = log.description.match(/estufa \((.*?)\)/i) || 
-                      log.description.match(/da estufa (.*?) para/i) || 
-                      log.description.match(/Origem: (.*?)\)/i);
-        if (match && match[1]) {
-          originalBed = match[1];
-        }
-
-        // Remove the transplant log
-        originalLogs.splice(realIndex, 1);
-      }
-
-      await updateDoc(doc(db, 'production', p.id), {
-        productionType: 'seedling',
-        plantingSource: 'seeds',
-        bed: originalBed,
-        transplantDate: deleteField(),
-        estimatedHarvestDate: deleteField(),
-        logs: originalLogs
-      });
-
-      if (focusedProduction?.id === p.id) {
-        setFocusedProduction(null);
-      }
-      
-      alert('Transplante desfeito com sucesso! Esta produção retornou para o estágio de mudas (Estufa).');
-    } catch (error: any) {
-      console.error(error);
-      alert('Erro ao tentar desfazer transplante: ' + (error.message || error));
-      handleFirestoreError(error, OperationType.WRITE, 'production');
-    }
-  };
-
-  const prepareRevertHarvest = (p: Production) => {
-    setRevertError(null);
-    setRevertHarvestQty(0);
-    setRevertHarvestLogIndex(-1);
-    setRevertHarvestLogDesc('');
-    setProductionToRevertHarvest(p);
-    setRevertHarvestModalOpen(true);
-
-    if (!p.logs || p.logs.length === 0) {
-      setRevertError("Nenhum registro de atividades encontrado para este lote.");
-      return;
-    }
-
-    // Find the last harvest log
-    const harvestLogIndex = [...p.logs].reverse().findIndex(log => 
-      log.description && (
-        log.description.includes('Colheita Final') || 
-        log.description.includes('Colheita Parcial') ||
-        log.description.includes('via Prontuário realizada')
-      )
     );
-
-    if (harvestLogIndex === -1) {
-      setRevertError("Nenhuma colheita registrada foi encontrada nos registros deste lote.");
-      return;
-    }
-
-    const realIndex = p.logs.length - 1 - harvestLogIndex;
-    const lastHarvestLog = p.logs[realIndex];
-
-    // Parse quantity
-    const match = lastHarvestLog.description.match(/realizada: ([\d.,]+)/i);
-    if (!match) {
-      setRevertError("Não foi possível identificar a quantidade colhida no registro.");
-      return;
-    }
-
-    const qtyStr = match[1].replace(',', '.');
-    const harvestQty = Number(qtyStr);
-    if (isNaN(harvestQty) || harvestQty <= 0) {
-      setRevertError("Quantidade colhida inválida encontrada no registro.");
-      return;
-    }
-
-    setRevertHarvestQty(harvestQty);
-    setRevertHarvestLogIndex(realIndex);
-    setRevertHarvestLogDesc(lastHarvestLog.description);
   };
 
-  const executeRevertLastHarvest = async () => {
-    if (!productionToRevertHarvest) return;
-    const p = productionToRevertHarvest;
+  // Catalog actions
+  const handleAddOrUpdateCatalogItem = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!catalogName.trim()) {
+      alert('Por favor, insira o nome do produto/cultura!');
+      return;
+    }
 
     try {
-      if (revertHarvestLogIndex === -1 || revertHarvestQty <= 0) {
-        setRevertError("Dados de colheita inválidos ou não carregados.");
-        return;
-      }
+      setLoading(true);
+      const payload = {
+        name: catalogName.trim(),
+        category: catalogCategory,
+        unit: catalogUnit,
+        estimatedDaysToHarvest: Number(catalogDays) || 45,
+        defaultPrice: Number(catalogPrice) || 0,
+        createdAt: serverTimestamp()
+      };
 
-      // Step 2: Remove or adjust in inventory / stock.
-      const invQ = query(collection(db, 'inventory'), where('name', '==', p.crop));
-      const invSnap = await getDocs(invQ);
-
-      if (!invSnap.empty) {
-        const existingDoc = invSnap.docs[0];
-        const existingData = existingDoc.data();
-        const currentQty = existingData.quantity || 0;
-        
-        // Subtract the harvested quantity from the main inventory.
-        const revertedQty = Math.max(0, currentQty - revertHarvestQty);
-
-        await updateDoc(doc(db, 'inventory', existingDoc.id), {
-          quantity: revertedQty,
-          lastUpdated: serverTimestamp()
+      if (editingCatalogItemId) {
+        await updateDoc(doc(db, 'produce_catalog', editingCatalogItemId), {
+          ...payload
         });
-
-        // Add compensation log or delete history log to preserve auditable track
-        await addDoc(collection(db, 'inventory_history'), {
-          itemId: existingDoc.id,
-          itemName: p.crop,
-          quantity: -revertHarvestQty,
-          unit: p.unit,
-          costPrice: p.unitCost || 0,
-          price: existingData.price || 0,
-          type: 'harvest',
-          description: `Estorno de colheita por desfazer última colheita (Canteiro: ${p.bed})`,
-          date: serverTimestamp()
-        });
+        alert('Produto do catálogo atualizado com sucesso!');
+      } else {
+        await addDoc(collection(db, 'produce_catalog'), payload);
+        alert('Produto cadastrado no catálogo com sucesso!');
       }
 
-      // Step 3: Update parent Production Document
-      const newLogs = [...p.logs];
-      newLogs.splice(revertHarvestLogIndex, 1); // Remove the harvest log
-
-      const priorTotalHarvestQty = p.harvestQuantity || 0;
-      const newHarvestQuantity = Math.max(0, priorTotalHarvestQty - revertHarvestQty);
-      const newRemainingQuantity = Math.max(0, (p.remainingQuantity || 0) - revertHarvestQty);
-
-      const newStatus = 'growing';
-
-      await updateDoc(doc(db, 'production', p.id), {
-        status: newStatus,
-        harvestQuantity: newHarvestQuantity,
-        remainingQuantity: newRemainingQuantity,
-        logs: newLogs,
-        unitCost: newHarvestQuantity > 0 ? (p.totalCost || 0) / newHarvestQuantity : deleteField(),
-        harvestDate: newHarvestQuantity > 0 ? p.harvestDate : deleteField()
-      });
-
-      if (focusedProduction?.id === p.id) {
-        setFocusedProduction(prev => prev ? {
-          ...prev,
-          status: newStatus,
-          harvestQuantity: newHarvestQuantity,
-          remainingQuantity: newRemainingQuantity,
-          logs: newLogs
-        } : null);
-      }
-
-      setRevertHarvestModalOpen(false);
-      setProductionToRevertHarvest(null);
-      setRevertError(null);
-    } catch (error: any) {
-      console.error(error);
-      setRevertError('Erro ao desfazer colheita: ' + (error.message || error));
-      handleFirestoreError(error, OperationType.WRITE, 'production');
+      // Reset form
+      setCatalogName('');
+      setCatalogCategory('Hortaliças');
+      setCatalogUnit('un');
+      setCatalogDays('45');
+      setCatalogPrice('5.00');
+      setEditingCatalogItemId(null);
+      setIsAddingCatalogItem(false);
+    } catch (error) {
+      console.error("Erro ao salvar no catálogo:", error);
+      handleFirestoreError(error, OperationType.WRITE, 'produce_catalog');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const bedSuggestions = Array.from(new Set(
-    productions
-      .filter(p => p.productionType === 'bed' || !p.productionType)
-      .map(p => p.bed)
-  )).filter(Boolean) as string[];
+  const startEditCatalogItem = (item: ProduceCatalogItem) => {
+    setEditingCatalogItemId(item.id);
+    setCatalogName(item.name);
+    setCatalogCategory(item.category || 'Hortaliças');
+    setCatalogUnit(item.unit || 'un');
+    setCatalogDays(String(item.estimatedDaysToHarvest || 45));
+    setCatalogPrice(String(item.defaultPrice || 5.00));
+    setIsAddingCatalogItem(true);
+  };
+
+  const handleDeleteCatalogItem = async (id: string) => {
+    confirmAction(
+      'Excluir Produto do Catálogo',
+      'Deseja mesmo excluir este produto do catálogo? Os cultivos já registrados que herdam este produto continuarão salvos.',
+      'Excluir',
+      async () => {
+        try {
+          setLoading(true);
+          await deleteDoc(doc(db, 'produce_catalog', id));
+          alert('Produto removido com sucesso!');
+        } catch (error) {
+          console.error("Erro ao deletar do catálogo:", error);
+          handleFirestoreError(error, OperationType.DELETE, 'produce_catalog');
+        } finally {
+          setLoading(false);
+        }
+      }
+    );
+  };
+
+  const handleImportStandardCrops = async () => {
+    try {
+      setLoading(true);
+      let count = 0;
+      for (const crop of STANDARD_CROPS) {
+        const exists = produceCatalog.some(item => item.name.toLowerCase() === crop.toLowerCase());
+        if (!exists) {
+          const payload = {
+            name: crop,
+            category: 'Hortaliças',
+            unit: 'un',
+            estimatedDaysToHarvest: 45,
+            defaultPrice: 5.00,
+            createdAt: serverTimestamp()
+          };
+          await addDoc(collection(db, 'produce_catalog'), payload);
+          count++;
+        }
+      }
+      alert(`${count} cultivos padrão foram importados para o catálogo com sucesso!`);
+    } catch (error) {
+      console.error("Erro ao importar cultivos padrão:", error);
+      handleFirestoreError(error, OperationType.WRITE, 'produce_catalog');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleImportFromInventory = async () => {
+    try {
+      setLoading(true);
+      let count = 0;
+      const dispatchItems = inventory.filter(item => item.type === 'dispatch' || item.category === 'Hortaliças');
+      for (const invItem of dispatchItems) {
+        const exists = produceCatalog.some(item => item.name.toLowerCase() === invItem.name.toLowerCase());
+        if (!exists) {
+          const payload = {
+            name: invItem.name,
+            category: invItem.category || 'Hortaliças',
+            unit: invItem.unit || 'un',
+            estimatedDaysToHarvest: 45,
+            defaultPrice: invItem.price || 5.00,
+            createdAt: serverTimestamp()
+          };
+          await addDoc(collection(db, 'produce_catalog'), payload);
+          count++;
+        }
+      }
+      alert(`${count} produtos do estoque de expedição foram importados para o catálogo com sucesso!`);
+    } catch (error) {
+      console.error("Erro ao importar do estoque:", error);
+      handleFirestoreError(error, OperationType.WRITE, 'produce_catalog');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Convert Firebase Timestamp or any date to native JS date or string
+  const formatDate = (dateValue: any) => {
+    if (!dateValue) return '-';
+    let d: Date;
+    if (dateValue.toDate) {
+      d = dateValue.toDate();
+    } else {
+      d = new Date(dateValue);
+    }
+    if (isNaN(d.getTime())) return '-';
+    return d.toLocaleDateString('pt-BR');
+  };
+
+  // Calculate days in field
+  const getDaysInField = (dateValue: any) => {
+    if (!dateValue) return 0;
+    let d: Date;
+    if (dateValue.toDate) {
+      d = dateValue.toDate();
+    } else {
+      d = new Date(dateValue);
+    }
+    if (isNaN(d.getTime())) return 0;
+    const diff = new Date().getTime() - d.getTime();
+    return Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24)));
+  };
+
+  // Enter edit mode for a canteiro
+  // `prod` is passed if we are editing an existing planting record.
+  // `prod` is null if we are registering a brand-new planting on an empty canteiro.
+  const startEditing = (bedName: string, prod: Production | null = null) => {
+    setEditingBedName(bedName);
+    if (prod) {
+      setEditingProductionId(prod.id);
+      setEditCrop(prod.crop);
+      setEditQuantity(prod.quantityPlanted);
+      setEditUnit(prod.unit || 'un');
+      
+      let pDate = '';
+      if (prod.plantingDate) {
+        const d = prod.plantingDate.toDate ? prod.plantingDate.toDate() : new Date(prod.plantingDate);
+        pDate = d.toISOString().split('T')[0];
+      } else {
+        pDate = new Date().toISOString().split('T')[0];
+      }
+      setEditDate(pDate);
+    } else {
+      setEditingProductionId(null);
+      setEditCrop('');
+      setEditQuantity(50);
+      setEditUnit('un');
+      setEditDate(new Date().toISOString().split('T')[0]);
+    }
+  };
+
+  const cancelEditing = () => {
+    setEditingBedName(null);
+    setEditingProductionId(null);
+    setEditCrop('');
+  };
+
+  // Handle inline saving of canteiro details
+  const saveInlineEdit = async (bedName: string) => {
+    if (!editCrop.trim()) {
+      alert('Por favor, digite o nome da cultura/verdura plantada!');
+      return;
+    }
+    if (editQuantity <= 0) {
+      alert('A quantidade plantada deve ser maior que zero!');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const plantingDateVal = new Date(editDate);
+
+      if (editingProductionId) {
+        // EDIT EXISTING record
+        const prodRef = doc(db, 'production', editingProductionId);
+        await updateDoc(prodRef, {
+          crop: editCrop.trim(),
+          plantingDate: Timestamp.fromDate(plantingDateVal),
+          quantityPlanted: Number(editQuantity),
+          unit: editUnit,
+          bed: bedName
+        });
+      } else {
+        // NEW PLANTING on an empty bed
+        const newPlanting = {
+          crop: editCrop.trim(),
+          bed: bedName,
+          plantingDate: Timestamp.fromDate(plantingDateVal),
+          quantityPlanted: Number(editQuantity),
+          unit: editUnit,
+          status: 'growing',
+          logs: [{
+            date: Timestamp.now(),
+            description: `Plantio inicial de ${editCrop.trim()} (${editQuantity} ${editUnit}) registrado.`
+          }],
+          createdAt: serverTimestamp()
+        };
+        await addDoc(collection(db, 'production'), newPlanting);
+      }
+
+      // Clear edit state
+      cancelEditing();
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'production');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Mark crop as loss
+  const handleMarkLoss = async (prod: Production) => {
+    confirmAction(
+      'Registrar Perda de Cultivo',
+      `Tem certeza que deseja marcar o cultivo de "${prod.crop}" no "${prod.bed}" como PERDA?`,
+      'Confirmar Perda',
+      async () => {
+        try {
+          setLoading(true);
+          const prodRef = doc(db, 'production', prod.id);
+          await updateDoc(prodRef, {
+            status: 'lost',
+            harvestDate: serverTimestamp()
+          });
+          alert('Cultivo finalizado com registro de perda.');
+        } catch (err) {
+          handleFirestoreError(err, OperationType.WRITE, 'production');
+        } finally {
+          setLoading(false);
+        }
+      }
+    );
+  };
+
+  // Delete production record completely
+  const handleDeleteRecord = async (prodId: string) => {
+    confirmAction(
+      'Excluir Registro de Cultivo',
+      'Deseja excluir permanentemente este registro de cultivo do sistema? Esta ação é irreversível.',
+      'Excluir',
+      async () => {
+        try {
+          setLoading(true);
+          await deleteDoc(doc(db, 'production', prodId));
+        } catch (err) {
+          handleFirestoreError(err, OperationType.DELETE, 'production');
+        } finally {
+          setLoading(false);
+        }
+      }
+    );
+  };
+
+  // Open harvest dialog
+  const openHarvestDialog = (prod: Production) => {
+    setHarvestingItem(prod);
+    setHarvestQty(String(prod.quantityPlanted));
+    setHarvestDate(new Date().toISOString().split('T')[0]);
+    setAddToInventory(true);
+    
+    // Initialize product integration states
+    setNewProductName(prod.crop);
+    setNewProductUnit(prod.unit || 'un');
+    setNewProductPrice('5.00');
+    setNewProductCostPrice('0.00');
+    setNewProductMinStock('10');
+    setNewProductCategory('Hortaliças');
+
+    // Find if there is an existing sellable item with the same name as the crop
+    const existingSellable = inventory.find(
+      item => item.type === 'dispatch' && item.name.toLowerCase() === prod.crop.toLowerCase()
+    );
+    if (existingSellable) {
+      setSelectedInventoryItemId(existingSellable.id);
+      setHarvestProductMode('existing');
+    } else {
+      setSelectedInventoryItemId('');
+      setHarvestProductMode('new');
+    }
+  };
+
+  // Handle harvest submission
+  const submitHarvest = async () => {
+    if (!harvestingItem) return;
+    const qty = Number(harvestQty);
+    if (isNaN(qty) || qty <= 0) {
+      alert('Insira uma quantidade colhida válida!');
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      // Update production cycle in Firestore
+      const prodRef = doc(db, 'production', harvestingItem.id);
+      await updateDoc(prodRef, {
+        status: 'harvested',
+        harvestDate: Timestamp.fromDate(new Date(harvestDate)),
+        harvestQuantity: qty
+      });
+
+      // Integrate into inventory if requested
+      if (addToInventory) {
+        if (harvestProductMode === 'existing') {
+          if (!selectedInventoryItemId) {
+            alert('Por favor, selecione um produto do estoque ou escolha cadastrar um novo!');
+            setLoading(false);
+            return;
+          }
+          // Increment quantity of existing item
+          const itemRef = doc(db, 'inventory', selectedInventoryItemId);
+          await updateDoc(itemRef, {
+            quantity: increment(qty),
+            lastUpdated: serverTimestamp()
+          });
+        } else {
+          // Create new dispatch item in inventory on the fly
+          if (!newProductName.trim()) {
+            alert('Por favor, informe o nome do novo produto para cadastro!');
+            setLoading(false);
+            return;
+          }
+          
+          await addDoc(collection(db, 'inventory'), {
+            name: newProductName.trim(),
+            type: 'dispatch',
+            category: newProductCategory.trim() || 'Hortaliças',
+            quantity: qty,
+            unit: newProductUnit,
+            price: Number(newProductPrice) || 0,
+            costPrice: Number(newProductCostPrice) || 0,
+            minStock: Number(newProductMinStock) || 0,
+            lastUpdated: serverTimestamp()
+          });
+        }
+      }
+
+      setHarvestingItem(null);
+      alert(`Colheita registrada com sucesso! ${qty} ${harvestingItem.unit || 'un'} de ${harvestingItem.crop} finalizados.`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'production');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Filter beds or records
+  const filteredBedsList = useMemo(() => {
+    return allBedsList.filter(bedName => {
+      // Find active growing crop for this bed
+      const activeCrop = productions.find(p => p.bed === bedName && p.status === 'growing');
+      const matchesSearch = bedName.toLowerCase().includes(searchTerm.toLowerCase()) || 
+        (activeCrop && activeCrop.crop.toLowerCase().includes(searchTerm.toLowerCase()));
+      return matchesSearch;
+    });
+  }, [allBedsList, productions, searchTerm]);
+
+  const filteredHistory = useMemo(() => {
+    return productions.filter(p => {
+      const matchesSearch = p.crop.toLowerCase().includes(searchTerm.toLowerCase()) || p.bed.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesStatus = statusFilter === 'all' || p.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [productions, searchTerm, statusFilter]);
+
+  const filteredCatalog = useMemo(() => {
+    return produceCatalog.filter(item => {
+      return item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (item.category && item.category.toLowerCase().includes(searchTerm.toLowerCase()));
+    });
+  }, [produceCatalog, searchTerm]);
+
+  // Excel-style totals/summary stats
+  const activeCount = useMemo(() => productions.filter(p => p.status === 'growing').length, [productions]);
+  const totalCanteiros = allBedsList.length;
+  const occupancyRate = totalCanteiros > 0 ? Math.round((activeCount / totalCanteiros) * 100) : 0;
+  
+  const sumPlantedQty = useMemo(() => {
+    return productions
+      .filter(p => p.status === 'growing')
+      .reduce((acc, p) => acc + (p.quantityPlanted || 0), 0);
+  }, [productions]);
+
+  const averageDaysInField = useMemo(() => {
+    const activeCrops = productions.filter(p => p.status === 'growing');
+    if (activeCrops.length === 0) return 0;
+    const totalDays = activeCrops.reduce((acc, p) => acc + getDaysInField(p.plantingDate), 0);
+    return Math.round(totalDays / activeCrops.length);
+  }, [productions]);
+
+  // Simulate spreadsheet export to CSV
+  const handleExportCSV = () => {
+    try {
+      let csvContent = "data:text/csv;charset=utf-8,";
+      
+      if (activeTab === 'spreadsheet') {
+        csvContent += "Canteiro,Status,Cultura Plantada,Data do Plantio,Quantidade Plantada,Unidade,Dias no Campo\n";
+        allBedsList.forEach(bed => {
+          const active = productions.filter(p => p.bed === bed && p.status === 'growing');
+          if (active.length > 0) {
+            active.forEach(p => {
+              const dateStr = formatDate(p.plantingDate);
+              csvContent += `"${bed}","Em Crescimento","${p.crop}","${dateStr}",${p.quantityPlanted},"${p.unit || 'un'}",${getDaysInField(p.plantingDate)}\n`;
+            });
+          } else {
+            csvContent += `"${bed}","Vazio","-","-",0,"-",-\n`;
+          }
+        });
+      } else {
+        csvContent += "Canteiro,Cultura,Data de Plantio,Quantidade,Unidade,Status,Data de Finalização,Quantidade Colhida\n";
+        productions.forEach(p => {
+          const plantDate = formatDate(p.plantingDate);
+          const endDate = p.harvestDate ? formatDate(p.harvestDate) : '-';
+          const statusText = p.status === 'growing' ? 'Em Crescimento' : p.status === 'harvested' ? 'Colhido' : 'Perda';
+          csvContent += `"${p.bed}","${p.crop}","${plantDate}",${p.quantityPlanted},"${p.unit || 'un'}","${statusText}","${endDate}",${p.harvestQuantity || 0}\n`;
+        });
+      }
+
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", `planilha_producao_${activeTab === 'spreadsheet' ? 'canteiros' : 'historico'}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (e) {
+      alert('Erro ao exportar arquivo.');
+    }
+  };
+
+  // Find currently selected row info for formula bar display
+  const selectedRowInfo = useMemo(() => {
+    if (!selectedRowId) return null;
+    if (activeTab === 'spreadsheet') {
+      const activeCrop = productions.find(p => p.bed === selectedRowId && p.status === 'growing');
+      if (activeCrop) {
+        return {
+          title: selectedRowId,
+          desc: `Cultura: ${activeCrop.crop} | Plantio: ${formatDate(activeCrop.plantingDate)} | Qtd: ${activeCrop.quantityPlanted} ${activeCrop.unit || 'un'} | Dias: ${getDaysInField(activeCrop.plantingDate)} dias no campo.`
+        };
+      }
+      return {
+        title: selectedRowId,
+        desc: `Sem cultivos ativos registrados (Vazio). Prontos para realizar novo plantio.`
+      };
+    } else if (activeTab === 'history') {
+      const item = productions.find(p => p.id === selectedRowId);
+      if (item) {
+        const statusText = item.status === 'growing' ? 'Ativo' : item.status === 'harvested' ? 'Colhido' : 'Perda';
+        return {
+          title: `Lançamento ${item.id.slice(0, 6)}`,
+          desc: `Canteiro: ${item.bed} | Cultura: ${item.crop} | Status: ${statusText} | Qtd Plantado: ${item.quantityPlanted} ${item.unit || 'un'} | Plantio: ${formatDate(item.plantingDate)}${item.harvestDate ? ` | Finalizado em: ${formatDate(item.harvestDate)}` : ''}`
+        };
+      }
+    } else if (activeTab === 'catalog') {
+      const item = produceCatalog.find(c => c.id === selectedRowId);
+      if (item) {
+        return {
+          title: item.name,
+          desc: `Categoria: ${item.category} | Unidade: ${item.unit} | Ciclo estimado: ${item.estimatedDaysToHarvest} dias | Preço Sugerido: R$ ${Number(item.defaultPrice).toFixed(2)}`
+        };
+      }
+    }
+    return null;
+  }, [selectedRowId, productions, activeTab]);
 
   return (
-    <div className="space-y-6 md:space-y-8 pb-20">
-      <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div className="min-h-screen bg-slate-50/70 p-4 md:p-8 font-sans text-slate-800">
+      
+      {/* 1. Header with Horta Brand Vibe */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
         <div>
-          <h2 className="text-2xl md:text-3xl font-bold text-slate-900">Produção</h2>
-          <p className="text-slate-500 mt-1 text-sm md:text-base">Acompanhe o ciclo de vida das suas culturas.</p>
-        </div>
-        <div className="flex gap-2 md:gap-3">
-          <button 
-            onClick={() => setProcessModalOpen(true)}
-            className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-amber-50 text-amber-700 border border-amber-200 px-4 md:px-6 py-3 rounded-xl font-bold hover:bg-amber-100 transition-all shadow-sm active:scale-95 text-sm md:text-base"
-          >
-            <Package size={18} className="md:w-5 md:h-5" />
-            Processar
-          </button>
-          <button 
-            onClick={() => setModalOpen(true)}
-            className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-emerald-600 text-white px-4 md:px-6 py-3 rounded-xl font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 active:scale-95 text-sm md:text-base"
-          >
-            <Plus size={18} className="md:w-5 md:h-5" />
-            Novo Plantio
-          </button>
-        </div>
-      </header>
-
-      {/* Tip section */}
-      <div className="bg-blue-50 border border-blue-100 p-4 rounded-2xl flex items-start gap-4">
-        <div className="p-2 bg-blue-100 rounded-lg text-blue-600">
-          <AlertCircle size={20} />
-        </div>
-        <div>
-          <h4 className="font-bold text-blue-900 text-sm">Dica de Processamento</h4>
-          <p className="text-blue-700 text-xs mt-1">
-            Para criar combos (ex: bandejas de milho), primeiro registre a colheita de uma cultura. 
-            Depois, use o botão <strong>"Processar / Combo"</strong> no item colhido ou no topo da página.
+          <span className="text-[10px] bg-emerald-100 text-emerald-800 border border-emerald-200 px-3 py-1 rounded-full font-extrabold uppercase tracking-widest">
+            Horta & Produção
+          </span>
+          <h1 className="text-3xl font-black text-slate-900 tracking-tight mt-1.5 flex items-center gap-2">
+            <Sprout className="text-emerald-600" size={32} />
+            Controle de Canteiros
+          </h1>
+          <p className="text-sm text-slate-500 mt-1">
+            Gerenciamento simplificado em formato de planilha Excel para o plantio e controle da horta.
           </p>
         </div>
-      </div>
 
-      <div className="flex flex-col md:flex-row gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm mb-6">
-        <div className="flex-1 relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
-          <input 
-            type="text" 
-            placeholder="Buscar..." 
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-sm md:text-base"
-          />
-        </div>
-        {activeTab !== 'processed' && (
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-            <div className="flex items-center gap-2">
-              <Filter className="text-slate-400 shrink-0" size={20} />
-              <select 
-                value={filterStatus}
-                onChange={(e) => setFilterStatus(e.target.value)}
-                className="flex-1 md:flex-none bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm md:text-base"
-              >
-                <option value="all">Todos Status</option>
-                <option value="growing">Em Crescimento</option>
-                <option value="harvested">Colhidos</option>
-                <option value="lost">Perdidos</option>
-              </select>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <ArrowUpDown className="text-slate-400 shrink-0" size={20} />
-              <select 
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value as 'harvest' | 'planting')}
-                className="flex-1 md:flex-none bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm md:text-base"
-              >
-                <option value="harvest">Ord. por Previsão de Colheita</option>
-                <option value="planting">Ord. por Data de Plantio</option>
-              </select>
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div className="flex flex-wrap bg-slate-200/50 p-1.5 rounded-2xl w-full md:w-fit mb-6 gap-1">
-        <button
-          onClick={() => setActiveTab('seedling')}
-          className={cn(
-            "flex-1 md:flex-none px-6 py-2.5 rounded-xl text-sm font-bold transition-all duration-200",
-            activeTab === 'seedling' ? activeTabClass : inactiveTabClass
-          )}
-        >
-          <div className="flex items-center justify-center gap-2">
-            <Sprout size={18} />
-            Produção de Mudas
-          </div>
-        </button>
-        <button
-          onClick={() => setActiveTab('bed')}
-          className={cn(
-            "flex-1 md:flex-none px-6 py-2.5 rounded-xl text-sm font-bold transition-all duration-200",
-            activeTab === 'bed' ? activeTabClass : inactiveTabClass
-          )}
-        >
-          <div className="flex items-center justify-center gap-2">
-            <MapPin size={18} />
-            Canteiros
-          </div>
-        </button>
-        <button
-          onClick={() => setActiveTab('processed')}
-          className={cn(
-            "flex-1 md:flex-none px-6 py-2.5 rounded-xl text-sm font-bold transition-all duration-200",
-            activeTab === 'processed' ? activeTabClass : inactiveTabClass
-          )}
-        >
-          <div className="flex items-center justify-center gap-2">
-            <Zap size={18} />
-            Processados
-          </div>
-        </button>
-      </div>
-
-      {activeTab !== 'processed' ? (
-        <>
-          {activeTab === 'bed' ? (
-            <div className="space-y-8 mb-8">
-              {(() => {
-                const grouped = filteredProductions.reduce((acc, p) => {
-                  const bName = p.bed || 'Não Definido';
-                  if (!acc[bName]) acc[bName] = [];
-                  acc[bName].push(p);
-                  return acc;
-                }, {} as Record<string, Production[]>);
-
-                const sortedBeds = Object.keys(grouped).sort((a, b) => {
-                  const numA = parseInt(a.replace(/\D/g, ''), 10);
-                  const numB = parseInt(b.replace(/\D/g, ''), 10);
-                  if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
-                  return a.localeCompare(b);
-                });
-
-                return (
-                  <div className="space-y-4">
-                    {sortedBeds.length > 0 && (
-                      <div className="flex flex-wrap items-center justify-between gap-2 p-1.5 bg-slate-50 border border-slate-200 rounded-xl">
-                        <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest pl-2">
-                          Visualização de Canteiros ({sortedBeds.length})
-                        </span>
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const allCollapsed: Record<string, boolean> = {};
-                              sortedBeds.forEach(b => { allCollapsed[b] = false; });
-                              setExpandedBeds(allCollapsed);
-                            }}
-                            className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 text-[10px] font-black rounded-lg border border-slate-200 shadow-sm transition-all"
-                          >
-                            Recolher Todos
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const allExpanded: Record<string, boolean> = {};
-                              sortedBeds.forEach(b => { allExpanded[b] = true; });
-                              setExpandedBeds(allExpanded);
-                            }}
-                            className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black rounded-lg shadow-sm transition-all"
-                          >
-                            Expandir Todos
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {sortedBeds.map((bedName) => {
-                      const bedProds = grouped[bedName];
-                      const isExpanded = expandedBeds[bedName] === true;
-                      const growingCount = bedProds.filter(p => p.status === 'growing').length;
-
-                      const toggleBed = () => {
-                        setExpandedBeds(prev => ({
-                          ...prev,
-                          [bedName]: !prev[bedName]
-                        }));
-                      };
-
-                      return (
-                        <div key={bedName} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden p-4 md:p-5 transition-all">
-                          <div 
-                            onClick={toggleBed}
-                            className="flex flex-row items-center justify-between gap-4 cursor-pointer select-none hover:bg-slate-50/50 transition-colors p-4 md:p-5 -m-4 md:-m-5"
-                          >
-                            <div className="flex items-center gap-2 bg-transparent">
-                              <div className="w-8 h-8 bg-emerald-50 text-emerald-600 rounded-lg flex items-center justify-center border border-emerald-100">
-                                <MapPin size={16} />
-                              </div>
-                              <div>
-                                <h3 className="text-[15px] font-black text-slate-900 tracking-tight leading-none">{bedName}</h3>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
-                              {isExpanded && growingCount > 0 && (
-                                <button
-                                  type="button"
-                                  onClick={() => openBatchModal(bedName, bedProds)}
-                                  className="flex items-center gap-1.5 bg-indigo-50 hover:bg-indigo-150 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-wider shadow-sm transition-all"
-                                  title="Registrar manejo ou colheita em lote para este canteiro"
-                                >
-                                  <ClipboardList size={12} className="text-indigo-600" />
-                                  Lançamento Coletivo
-                                </button>
-                              )}
-                              <span 
-                                onClick={toggleBed}
-                                className="px-2.5 py-1 bg-slate-50 border border-slate-200 text-slate-600 rounded-md text-[11px] font-bold cursor-pointer hover:bg-slate-100"
-                              >
-                                {bedProds.length} {bedProds.length === 1 ? 'cultivo' : 'cultivos'}
-                                {growingCount > 0 && ` (${growingCount} ativo${growingCount !== 1 ? 's' : ''})`}
-                              </span>
-                              <div 
-                                onClick={toggleBed}
-                                className="p-1 text-slate-400 rounded-lg bg-slate-50 border border-slate-100 transition-colors cursor-pointer hover:bg-slate-100"
-                              >
-                                {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                              </div>
-                            </div>
-                          </div>
-
-                          {isExpanded && (
-                            <div className="overflow-x-auto rounded-xl border border-slate-100 mt-4 animate-in fade-in duration-200">
-                        <table className="w-full text-left border-collapse">
-                          <thead>
-                            <tr className="bg-slate-50/60 border-b border-slate-100 text-slate-400 text-[10px] font-black uppercase tracking-wider">
-                              <th className="py-2 px-3 text-slate-400 text-[9px] font-black uppercase tracking-wider">Cultura</th>
-                              <th className="py-2 px-3 text-slate-400 text-[9px] font-black uppercase tracking-wider">Qtd./Plantio</th>
-                              <th className="py-2 px-3 text-slate-400 text-[9px] font-black uppercase tracking-wider">Idade/Previsão</th>
-                              <th className="py-2 px-3 text-slate-400 text-[9px] font-black uppercase tracking-wider">Progresso</th>
-                              <th className="py-2 px-3 text-slate-400 text-[9px] font-black uppercase tracking-wider text-right">Ação</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100 text-xs">
-                            {bedProds.map((p) => {
-                              const daysIn = getDaysSincePlanting(p.plantingDate);
-                              const progress = getStatusProgress(p);
-                              return (
-                                <tr key={p.id} className="hover:bg-slate-50/50 transition-colors group">
-                                  <td className="py-1.5 px-3 font-bold text-slate-900">
-                                    <div className="flex items-center gap-2">
-                                      <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100 shrink-0">
-                                        <Sprout size={14} />
-                                      </div>
-                                      <div>
-                                        <p className="font-bold text-[13px] text-slate-900 leading-tight">{p.crop}</p>
-                                        <div className="flex flex-wrap items-center gap-1 mt-0.5">
-                                          {p.plantingSource && (
-                                            <span className="text-[8px] font-bold text-slate-400 bg-slate-100 px-1 py-0.2 rounded">
-                                              {p.plantingSource === 'seeds' ? 'Sem.' : p.plantingSource === 'internal_seedlings' ? 'Muda Pr.' : 'Muda Co.'}
-                                            </span>
-                                          )}
-                                          <span className={cn(
-                                            "text-[8px] font-bold px-1 py-0.2 rounded",
-                                            p.status === 'growing' ? "bg-emerald-50 text-emerald-600 border border-emerald-100" :
-                                            p.status === 'harvested' ? "bg-blue-50 text-blue-600 border-blue-100" :
-                                            "bg-rose-50 text-rose-600 border border-rose-100"
-                                          )}>
-                                            {p.status === 'growing' ? 'Crescendo' : p.status === 'harvested' ? 'Colhido' : 'Perdido'}
-                                          </span>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  </td>
-                                  <td className="py-1.5 px-3 font-medium text-slate-500 whitespace-nowrap">
-                                    <p className="font-bold text-xs text-slate-800 leading-tight">{p.quantityPlanted} {p.unit}</p>
-                                    <p className="text-[9px] text-slate-400">
-                                      {p.plantingDate?.toDate ? format(p.plantingDate.toDate(), "dd/MM/yy") : format(new Date(p.plantingDate), "dd/MM/yy")}
-                                    </p>
-                                  </td>
-                                  <td className="py-1.5 px-3 font-medium text-slate-500 whitespace-nowrap">
-                                    <p className="font-bold text-xs text-slate-800 leading-tight">{daysIn} d</p>
-                                    {p.estimatedHarvestDate && (
-                                      <p className="text-[9px] text-emerald-600 font-bold flex items-center gap-0.5 mt-0.5">
-                                        <Calendar size={8} />
-                                        {p.estimatedHarvestDate?.toDate ? format(p.estimatedHarvestDate.toDate(), "dd/MM") : format(new Date(p.estimatedHarvestDate), "dd/MM")}
-                                      </p>
-                                    )}
-                                  </td>
-                                  <td className="py-1.5 px-3 whitespace-nowrap">
-                                    <div className="w-16 space-y-0.5">
-                                      <div className="flex justify-between text-[8px] font-bold text-slate-400 leading-none">
-                                        <span>{progress}%</span>
-                                      </div>
-                                      <div className="h-1 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
-                                        <div 
-                                          className={cn(
-                                            "h-full rounded-full shadow-sm",
-                                            p.status === 'growing' ? "bg-gradient-to-r from-emerald-400 to-emerald-600" :
-                                            p.status === 'harvested' ? "bg-gradient-to-r from-blue-400 to-blue-600" : "bg-rose-500"
-                                          )}
-                                          style={{ width: `${progress}%` }}
-                                        />
-                                      </div>
-                                    </div>
-                                  </td>
-                                  <td className="py-1.5 px-3 text-right whitespace-nowrap">
-                                    <div className="flex items-center justify-end gap-1 opacity-90 group-hover:opacity-100 transition-opacity">
-                                      <button 
-                                        onClick={() => { setSelectedProduction(p); setLogModalOpen(true); }}
-                                        className="px-2 py-1 bg-slate-950 hover:bg-slate-800 text-white rounded-lg text-[10px] font-bold transition-all shadow-sm"
-                                      >
-                                        Manejar
-                                      </button>
-                                      {p.status === 'growing' && (
-                                        <button 
-                                          onClick={() => { 
-                                            setSelectedProduction(p); 
-                                            setHarvestType(p.isContinuousHarvest ? 'partial' : 'final');
-                                            setHarvestModalOpen(true); 
-                                          }}
-                                          className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[10px] font-bold transition-all shadow-sm"
-                                          title="Colher"
-                                        >
-                                          Colher
-                                        </button>
-                                      )}
-                                      <button 
-                                        onClick={() => setFocusedProduction(p)}
-                                        className="px-1.5 py-1 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-600 rounded-lg transition-all font-bold text-[10px]"
-                                        title="Ver"
-                                      >
-                                        Ver
-                                      </button>
-                                      
-                                      <div className="relative group/more-row">
-                                        <button className="px-1 py-1 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-600 rounded-lg transition-all font-bold text-[10px]">
-                                          •••
-                                        </button>
-                                        <div className="absolute top-full right-0 pt-1 w-44 hidden group-hover/more-row:block z-50 animate-in fade-in zoom-in-95 origin-top-right">
-                                          <div className="bg-white rounded-xl shadow-xl border border-slate-100 py-1.5 text-left text-xs">
-                                            <button 
-                                              onClick={() => handleEditProduction(p)}
-                                              className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 font-bold text-slate-600 hover:bg-slate-50 transition-colors"
-                                            >
-                                              <Edit2 size={12} />
-                                              Editar Lote
-                                            </button>
-                                            <button 
-                                              onClick={() => handleDelete(p.id)}
-                                              className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 font-bold text-rose-600 hover:bg-rose-50 transition-colors"
-                                            >
-                                              <Trash2 size={12} />
-                                              Excluir Lote
-                                            </button>
-                                            {p.status === 'growing' && (
-                                              <button 
-                                                onClick={() => markAsLost(p.id)}
-                                                className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-600 transition-colors"
-                                              >
-                                                <XCircle size={12} />
-                                                Marcar Perda
-                                              </button>
-                                            )}
-                                            {p.status === 'growing' && p.productionType === 'seedling' && (
-                                               <button 
-                                                onClick={() => { setSelectedProduction(p); setTransplantModalOpen(true); }}
-                                                className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 font-bold text-slate-600 hover:bg-emerald-50 hover:text-emerald-600 transition-colors"
-                                              >
-                                                <ArrowRight size={12} />
-                                                Transplantar Mudas
-                                              </button>
-                                            )}
-                                            {p.status === 'growing' && p.productionType === 'bed' && (p.plantingSource === 'internal_seedlings' || p.transplantDate || p.logs?.some(l => l.description && (l.description.toLowerCase().includes('transplant') || l.description.toLowerCase().includes('muda')))) && (
-                                               <button 
-                                                onClick={() => handleRevertTransplant(p)}
-                                                className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 font-bold text-slate-600 hover:bg-orange-50 hover:text-orange-600 transition-colors"
-                                              >
-                                                <ArrowLeft size={12} />
-                                                Desfazer Transplante
-                                              </button>
-                                            )}
-                                            {((p.status === 'harvested' || p.status === 'growing') && (p.remainingQuantity ?? 0) > 0) && (
-                                               <button 
-                                                onClick={() => { setSelectedProduction(p); setProcessModalOpen(true); }}
-                                                className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 font-bold text-slate-600 hover:bg-amber-50 hover:text-amber-600 transition-colors"
-                                              >
-                                                <Package size={12} />
-                                                Processar Cultura
-                                              </button>
-                                            )}
-                                            {p.logs?.some(l => l.description && (l.description.includes('Colheita Final') || l.description.includes('Colheita Parcial'))) && (
-                                              <button 
-                                                onClick={() => prepareRevertHarvest(p)}
-                                                className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 font-bold text-slate-600 hover:bg-amber-50 hover:text-amber-600 transition-colors"
-                                              >
-                                                <RotateCcw size={12} />
-                                                Desfazer Última Colheita
-                                              </button>
-                                            )}
-                                          </div>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          );
-        })()}
-      </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-              {filteredProductions.map((p) => {
-                const daysIn = getDaysSincePlanting(p.plantingDate);
-                const progress = getStatusProgress(p);
-                
-                return (
-                  <motion.div 
-                    layout
-                    key={p.id} 
-                    className={cn(
-                      "flex flex-col bg-white rounded-3xl border border-slate-200 shadow-sm hover:shadow-xl transition-all duration-300 overflow-hidden group relative",
-                      p.status === 'lost' && "opacity-80 grayscale-[0.5]"
-                    )}
-                  >
-                    <div className="p-6 space-y-5">
-                      {/* Header */}
-                      <div className="flex items-start justify-between">
-                        <div className="space-y-1">
-                          <h4 className="text-xl font-black text-slate-900 truncate tracking-tight">{p.crop}</h4>
-                          <div className="flex flex-wrap items-center gap-3">
-                            <div className="flex items-center gap-1.5 text-sm font-bold text-slate-500">
-                              <div className="w-5 h-5 rounded-md bg-slate-100 flex items-center justify-center">
-                                <MapPin size={10} className="text-slate-400" />
-                              </div>
-                              {p.bed}
-                            </div>
-                            {p.plantingSource && (
-                              <div className="flex items-center gap-1 text-[9px] font-black uppercase text-slate-400 border border-slate-100 px-1.5 py-0.5 rounded-lg bg-slate-50/80">
-                                {p.plantingSource === 'seeds' && <Package size={10} />}
-                                {p.plantingSource === 'internal_seedlings' && <Sprout size={10} />}
-                                {p.plantingSource === 'purchased_seedlings' && <ShoppingBag size={10} />}
-                                {p.plantingSource === 'seeds' ? 'Semente' : p.plantingSource === 'internal_seedlings' ? 'Muda Própria' : 'Muda Comprada'}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        <div className={cn(
-                          "px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest border",
-                          p.status === 'growing' ? "bg-emerald-50 text-emerald-600 border-emerald-100 shadow-sm shadow-emerald-50" :
-                          p.status === 'harvested' ? "bg-blue-50 text-blue-600 border-blue-100 shadow-sm shadow-blue-50" :
-                          "bg-rose-50 text-rose-600 border-rose-100"
-                        )}>
-                          {p.status === 'growing' ? 'Em Crescimento' : 
-                           p.status === 'harvested' ? 'Colhido' : 'Perdido'}
-                        </div>
-                      </div>
-
-                      {/* Stats Grid */}
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
-                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Idade</p>
-                          <p className="text-lg font-black text-slate-700">{daysIn} <span className="text-xs font-bold text-slate-400">dias</span></p>
-                        </div>
-                        <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
-                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Plantado</p>
-                          <p className="text-lg font-black text-slate-700">{p.quantityPlanted} <span className="text-xs font-bold text-slate-400">{p.unit}</span></p>
-                        </div>
-                        {p.transplantDate && (
-                          <div className="col-span-2 p-3 bg-indigo-50/50 rounded-2xl border border-indigo-100">
-                            <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-1 flex items-center gap-1">
-                              <TrendingUp size={10} /> 
-                              Previsão de Transplante
-                            </p>
-                            <p className="text-sm font-black text-indigo-700">
-                              {p.transplantDate?.toDate ? format(p.transplantDate.toDate(), "dd/MM/yyyy") : format(new Date(p.transplantDate), "dd/MM/yyyy")}
-                            </p>
-                          </div>
-                        )}
-                        {p.estimatedHarvestDate && (
-                          <div className="col-span-2 p-3 bg-emerald-50/50 rounded-2xl border border-emerald-100">
-                            <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider mb-1 flex items-center gap-1">
-                              <Calendar size={10} /> 
-                              Previsão de Colheita
-                            </p>
-                            <p className="text-sm font-black text-emerald-700">
-                              {p.estimatedHarvestDate?.toDate ? format(p.estimatedHarvestDate.toDate(), "dd/MM/yyyy") : format(new Date(p.estimatedHarvestDate), "dd/MM/yyyy")}
-                            </p>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Lifecycle Progress */}
-                      <div className="space-y-2">
-                        <div className="flex justify-between text-[10px] font-black text-slate-400 uppercase tracking-wider">
-                          <span>Ciclo de Vida</span>
-                          <span className={cn(
-                            p.status === 'growing' ? "text-emerald-500" :
-                            p.status === 'harvested' ? "text-blue-500" : "text-rose-500"
-                          )}>{progress}%</span>
-                        </div>
-                        <div className="h-3 bg-slate-100 rounded-full overflow-hidden p-0.5 border border-slate-200">
-                          <motion.div 
-                            initial={{ width: 0 }}
-                            animate={{ width: `${progress}%` }}
-                            className={cn(
-                              "h-full rounded-full shadow-[0_0_10px_rgba(0,0,0,0.05)]",
-                              p.status === 'growing' ? "bg-gradient-to-r from-emerald-400 to-emerald-600" :
-                              p.status === 'harvested' ? "bg-gradient-to-r from-blue-400 to-blue-600" : "bg-rose-500"
-                            )}
-                          />
-                        </div>
-                      <div className="flex flex-col gap-3 pt-2">
-                        <div className="flex items-center gap-2">
-                          <button 
-                            onClick={() => { setSelectedProduction(p); setLogModalOpen(true); }}
-                            className="flex-1 flex items-center justify-center gap-2 py-3 bg-slate-900 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-800 transition-all shadow-lg shadow-slate-200 active:scale-95"
-                          >
-                            <Zap size={14} fill="currentColor" />
-                            Manejar
-                          </button>
-                          {p.status === 'growing' && (
-                            p.productionType === 'seedling' ? (
-                              <button 
-                                onClick={() => { setSelectedProduction(p); setTransplantModalOpen(true); }}
-                                className="flex-1 flex items-center justify-center gap-1.5 py-3 bg-emerald-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-200 active:scale-95"
-                                title="Transplantar Lote para o Campo"
-                              >
-                                <ArrowRight size={14} />
-                                Transplantar
-                              </button>
-                            ) : (
-                              <button 
-                                onClick={() => { 
-                                  setSelectedProduction(p); 
-                                  setHarvestType(p.isContinuousHarvest ? 'partial' : 'final');
-                                  setHarvestModalOpen(true); 
-                                }}
-                                className="flex items-center justify-center p-3 bg-blue-600 text-white rounded-2xl shadow-lg shadow-blue-100 hover:bg-blue-700 transition-all active:scale-95"
-                                title="Colher"
-                              >
-                                <CheckCircle2 size={20} />
-                              </button>
-                            )
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Log Vertical Timeline (Inside Card - Mini) */}
-                    {p.logs.length > 0 && (
-                      <div className="px-6 py-4 bg-slate-50/40 border-t border-slate-100 max-h-40 overflow-y-auto custom-scrollbar">
-                        <div className="space-y-4">
-                          {p.logs.slice().reverse().slice(0, 5).map((log, i) => {
-                            const originalIndex = p.logs.length - 1 - i;
-                            return (
-                              <div key={i} className="group/log relative pl-6 before:absolute before:left-[7px] before:top-2 before:bottom-[-20px] before:w-[2px] before:bg-slate-200 last:before:hidden">
-                                <div className="absolute left-0 top-1 w-4 h-4 rounded-full border-2 border-slate-200 bg-white flex items-center justify-center z-10">
-                                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                                </div>
-                                <div className="flex items-start justify-between gap-2">
-                                  <div className="space-y-0.5 min-w-0">
-                                    <p className="text-[10px] font-bold text-slate-800 line-clamp-1">{log.description}</p>
-                                    <p className="text-[9px] font-black text-slate-400 uppercase">
-                                      {log.date?.toDate ? format(log.date.toDate(), "dd/MM 'às' HH:mm", { locale: ptBR }) : format(new Date(log.date), "dd/MM 'às' HH:mm")}
-                                    </p>
-                                  </div>
-                                  <div className="flex items-center gap-1 opacity-0 group-hover/log:opacity-100 transition-all">
-                                    <button 
-                                      onClick={() => handleEditLog(p, originalIndex)}
-                                      className="p-1 text-slate-400 hover:text-emerald-600 transition-all"
-                                      title="Editar"
-                                    >
-                                      <Edit2 size={12} />
-                                    </button>
-                                    <button 
-                                      onClick={() => handleDeleteLog(p, originalIndex)}
-                                      className="p-1 text-slate-400 hover:text-rose-600 transition-all"
-                                      title="Excluir"
-                                    >
-                                      <Trash2 size={12} />
-                                    </button>
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Card Options Menu (Absolute positioned for overlay) */}
-                    <div className="absolute top-4 right-4 flex gap-2">
-                      <button 
-                        onClick={() => setFocusedProduction(p)}
-                        className="flex items-center justify-center w-8 h-8 bg-white/90 hover:bg-white shadow-sm text-emerald-600 rounded-full transition-all active:scale-95"
-                        title="Focar / Detalhes"
-                      >
-                        <Maximize2 size={14} />
-                      </button>
-                      <div className="relative group/more">
-                        <button className="flex items-center justify-center w-8 h-8 bg-black/5 hover:bg-black/10 backdrop-blur-md text-slate-600 rounded-full transition-all">
-                          <ArrowRight size={14} className="rotate-90" />
-                        </button>
-                        <div className="absolute top-full right-0 pt-2 w-48 hidden group-hover/more:block z-50 animate-in fade-in zoom-in-95 origin-top-right">
-                          <div className="bg-white rounded-2xl shadow-2xl border border-slate-100 py-2">
-                            <button 
-                                onClick={() => handleEditProduction(p)}
-                                className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50 transition-colors"
-                              >
-                                <Edit2 size={16} />
-                                Editar Produção
-                              </button>
-                            <button 
-                                onClick={() => handleDelete(p.id)}
-                                className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-rose-600 hover:bg-rose-50 transition-colors"
-                              >
-                                <Trash2 size={16} />
-                                Excluir Registro
-                              </button>
-                              {p.status === 'growing' && (
-                                 <button 
-                                  onClick={() => markAsLost(p.id)}
-                                  className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-rose-50 hover:text-rose-600 transition-colors"
-                                >
-                                  <XCircle size={16} />
-                                  Marcar Perda
-                                </button>
-                              )}
-                              {p.status === 'growing' && p.productionType === 'seedling' && (
-                                 <button 
-                                  onClick={() => { setSelectedProduction(p); setTransplantModalOpen(true); }}
-                                  className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-emerald-50 hover:text-emerald-600 transition-colors"
-                                >
-                                  <ArrowRight size={16} />
-                                  Transplantar Mudas
-                                </button>
-                              )}
-                              {p.status === 'growing' && p.productionType === 'bed' && (p.plantingSource === 'internal_seedlings' || p.transplantDate || p.logs?.some(l => l.description && (l.description.toLowerCase().includes('transplant') || l.description.toLowerCase().includes('muda')))) && (
-                                 <button 
-                                  onClick={() => handleRevertTransplant(p)}
-                                  className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-orange-50 hover:text-orange-600 transition-colors"
-                                >
-                                  <ArrowLeft size={16} />
-                                  Desfazer Transplante
-                                </button>
-                              )}
-                              {((p.status === 'harvested' || p.status === 'growing') && (p.remainingQuantity ?? 0) > 0) && (
-                                 <button 
-                                  onClick={() => { setSelectedProduction(p); setProcessModalOpen(true); }}
-                                  className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-amber-50 hover:text-amber-600 transition-colors"
-                                >
-                                  <Package size={16} />
-                                  Processar Cultura
-                                </button>
-                              )}
-                              {p.logs?.some(l => l.description && (l.description.includes('Colheita Final') || l.description.includes('Colheita Parcial'))) && (
-                                <button 
-                                  onClick={() => prepareRevertHarvest(p)}
-                                  className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-amber-50 hover:text-amber-600 transition-colors"
-                                >
-                                  <RotateCcw size={16} />
-                                  Desfazer Última Colheita
-                                </button>
-                              )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Footer Stats summary */}
-                    <div className="px-6 py-4 bg-white border-t border-slate-100 flex items-center justify-between text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                      <div className="flex items-center gap-1.5">
-                        <Calendar size={12} />
-                        <span>{p.plantingDate?.toDate ? format(p.plantingDate.toDate(), "dd.MM.yy") : format(new Date(p.plantingDate), "dd.MM.yy")}</span>
-                      </div>
-                      <span>{p.status === 'growing' ? (p.totalCost > 0 ? `Custo: R$ ${p.totalCost.toFixed(2)}` : 'S/ Custo') : (p.unitCost > 0 ? `Custo: R$ ${p.unitCost.toFixed(2)}` : 'S/ Custo')}</span>
-                    </div>
-                  </motion.div>
-                );
-              })}
-            </div>
-          )}
-
-          {filteredProductions.length === 0 && (
-            <div className="text-center py-16 bg-white rounded-3xl border border-slate-200 shadow-sm p-6 mb-8">
-              <Sprout size={48} className="mx-auto text-slate-300 mb-4 animate-pulse" />
-              <p className="text-slate-500 font-bold text-sm md:text-base">Nenhum lote ativo em cultivo encontrado no momento.</p>
-              <p className="text-slate-400 text-xs mt-1">Inicie um novo plantio pressionando o botão "Novo Plantio" acima.</p>
-            </div>
-          )}
-
-          {/* Histórico de Semeadura e Mudas (Exclusivo da aba de Mudas) */}
-          {activeTab === 'seedling' && (
-            <div className="mt-8 bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-4">
-              <div className="flex flex-row items-center justify-between gap-4 border-b border-slate-100 pb-3">
-                <div>
-                  <h3 className="text-base font-black text-slate-900 flex items-center gap-1.5 leading-none">
-                    <ClipboardList size={18} className="text-emerald-600" />
-                    Histórico de Semeadura e Mudas
-                  </h3>
-                   <p className="text-slate-500 text-[10px] mt-0.5">Lotes de sementes semeadas e mudas transplantadas ou concluídas.</p>
-                </div>
-                <span className="px-2.5 py-1 bg-slate-50 border border-slate-200 text-slate-600 rounded-lg text-xs font-bold shrink-0">
-                  {sortedHistoricalSeedlings.length} {sortedHistoricalSeedlings.length === 1 ? 'registro' : 'registros'}
-                </span>
-              </div>
-
-              {sortedHistoricalSeedlings.length === 0 ? (
-                <div className="text-center py-10 text-slate-400 italic bg-slate-50/50 rounded-xl border border-dashed border-slate-200 text-xs">
-                  Nenhum histórico de transplante ou semeaduras concluídas no momento.
-                </div>
-              ) : (
-                <div className="overflow-x-auto rounded-xl border border-slate-100">
-                  <table className="w-full text-left border-collapse">
-                    <thead>
-                      <tr className="bg-slate-50/60 border-b border-slate-100 text-slate-400 text-[9px] font-black uppercase tracking-wider">
-                        <th className="py-2.5 px-4">Cultura / Lote</th>
-                        <th className="py-2.5 px-4">Semeado em</th>
-                        <th className="py-2.5 px-4">Status / Transplante</th>
-                        <th className="py-2.5 px-4">Custo Un. Est.</th>
-                        <th className="py-2.5 px-4">Canteiro Destino</th>
-                        <th className="py-2.5 px-4 text-right">Ação</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 text-xs">
-                      {sortedHistoricalSeedlings.map((p) => {
-                        const sDate = p.plantingDate?.toDate ? p.plantingDate.toDate() : (p.plantingDate ? new Date(p.plantingDate) : null);
-                        const tDate = p.transplantDate?.toDate ? p.transplantDate.toDate() : (p.transplantDate ? new Date(p.transplantDate) : null);
-                        
-                        // Extract original nursery/bed if available
-                        let originalNursery = "Estufa";
-                        const transplantLog = p.logs?.find(l => {
-                          const desc = l.description?.toLowerCase() || '';
-                          return desc.includes('transplant') || desc.includes('muda') || desc.includes('semeadura');
-                        });
-                        if (transplantLog) {
-                          const match = transplantLog.description.match(/estufa \((.*?)\)/i) || transplantLog.description.match(/da estufa (.*?) para/i) || transplantLog.description.match(/Origem: (.*?)\)/i);
-                          if (match && match[1]) {
-                            originalNursery = match[1];
-                          }
-                        }
-
-                        const transplantedQty = p.quantityPlanted;
-                        const totalCost = p.totalCost || 0;
-                        const seedlingUnitCost = transplantedQty > 0 ? totalCost / transplantedQty : 0;
-
-                        return (
-                          <tr key={p.id} className="hover:bg-slate-50/50 transition-colors group">
-                            <td className="py-1.5 px-4 font-bold text-slate-900">
-                              <div className="flex items-center gap-2">
-                                <Sprout size={14} className="text-emerald-500 shrink-0" />
-                                <div>
-                                  <p className="font-bold text-slate-900 leading-tight text-xs">{p.crop}</p>
-                                  <p className="text-[9px] text-slate-400 font-medium">Origem: {originalNursery}</p>
-                                </div>
-                              </div>
-                            </td>
-                            <td className="py-1.5 px-4 text-slate-500 font-medium whitespace-nowrap leading-tight text-xs">
-                              {sDate ? format(sDate, "dd/MM/yyyy") : 'N/A'}
-                            </td>
-                            <td className="py-1.5 px-4 whitespace-nowrap">
-                              {p.productionType === 'bed' ? (
-                                <div className="space-y-0.5">
-                                  <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded px-1.5 py-0.2 text-[9px] font-black uppercase leading-none">
-                                    <ArrowRight size={8} />
-                                    Transplantado
-                                  </span>
-                                  {tDate && (
-                                    <p className="text-[9px] text-slate-400 font-bold leading-none mt-0.5">
-                                      {format(tDate, "dd/MM/yyyy")} ({transplantedQty} {p.unit})
-                                    </p>
-                                  )}
-                                </div>
-                              ) : p.status === 'harvested' ? (
-                                <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 border border-blue-100 rounded px-1.5 py-0.2 text-[9px] font-black uppercase leading-none">
-                                  Concluído (Colhido)
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 bg-rose-50 text-rose-700 border border-rose-100 rounded px-1.5 py-0.2 text-[9px] font-black uppercase leading-none">
-                                  Perda Registrada
-                                </span>
-                              )}
-                            </td>
-                             <td className="py-1.5 px-4 font-mono font-bold text-slate-600 text-xs leading-tight">
-                              {seedlingUnitCost > 0 ? `R$ ${seedlingUnitCost.toFixed(2)}` : 'S/ Custo'}
-                            </td>
-                            <td className="py-1.5 px-4 font-bold text-indigo-600 text-xs leading-tight">
-                              {p.productionType === 'bed' ? p.bed : '-'}
-                            </td>
-                            <td className="py-1.5 px-4 text-right whitespace-nowrap">
-                              <div className="flex items-center justify-end gap-1 opacity-80 group-hover:opacity-100 transition-opacity">
-                                <button
-                                  type="button"
-                                  onClick={() => setFocusedProduction(p)}
-                                  className="px-2 py-1 bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 text-slate-600 font-bold rounded-lg text-[10px] transition-colors border border-slate-200"
-                                >
-                                  Ver Detalhes
-                                </button>
-                                {p.productionType === 'bed' && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleRevertTransplant(p)}
-                                    className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold rounded-lg text-[10px] transition-colors flex items-center gap-0.5 border border-rose-100"
-                                  >
-                                    <ArrowLeft size={8} />
-                                    Desfazer
-                                  </button>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
-        </>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">
-          {processedItems.map((item) => (
-            <motion.div 
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              key={item.id}
-              className="bg-white p-5 md:p-6 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-all"
-            >
-              <div className="flex items-center gap-3 md:gap-4 mb-4">
-                <div className="w-10 h-10 md:w-12 md:h-12 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center border border-amber-100 shrink-0">
-                  <Package size={20} className="md:w-6 md:h-6" />
-                </div>
-                <div className="min-w-0">
-                  <h4 className="font-bold text-slate-900 text-sm md:text-base truncate">{item.name}</h4>
-                  <span className="text-[10px] md:text-xs text-slate-400">Processado / Combo</span>
-                </div>
-              </div>
-              
-              <div className="space-y-2 md:space-y-3">
-                <div className="flex items-center justify-between text-xs md:text-sm">
-                  <span className="text-slate-500">Quantidade em Estoque:</span>
-                  <span className="font-bold text-slate-900">{item.quantity} {item.unit}</span>
-                </div>
-                {profile?.role === 'owner' && (
-                  <>
-                    <div className="flex items-center justify-between text-xs md:text-sm">
-                      <span className="text-slate-500">Custo Unitário:</span>
-                      <span className="font-bold text-rose-600">R$ {item.costPrice?.toFixed(2) || '0.00'}</span>
-                    </div>
-                    <div className="flex items-center justify-between text-xs md:text-sm">
-                      <span className="text-slate-500 font-bold">Valor Total em Estoque:</span>
-                      <span className="font-bold text-slate-900">R$ {(item.quantity * (item.costPrice || 0)).toFixed(2)}</span>
-                    </div>
-                  </>
-                )}
-                <div className="flex items-center justify-between text-xs md:text-sm">
-                  <span className="text-slate-500">Preço de Venda:</span>
-                  <span className="font-bold text-emerald-600">R$ {item.price?.toFixed(2) || '0.00'}</span>
-                </div>
-                <div className="pt-2 md:pt-3 border-t border-slate-100 flex items-center justify-between text-[10px] md:text-xs">
-                  <span className="text-slate-400">Última atualização:</span>
-                  <span className="text-slate-500 font-medium">
-                    {item.lastUpdated?.toDate ? format(item.lastUpdated.toDate(), "dd/MM/yyyy") : 'N/A'}
-                  </span>
-                </div>
-              </div>
-            </motion.div>
-          ))}
-          {processedItems.length === 0 && (
-            <div className="col-span-full py-12 text-center text-slate-400 italic bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200">
-              Nenhum item processado ou combo encontrado.
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Quick Input Modal */}
-      <AnimatePresence>
-        {isQuickInputModalOpen && (
-          <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setQuickInputModalOpen(false)}
-              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" 
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative bg-white w-full max-w-lg rounded-[2rem] shadow-2xl overflow-y-auto max-h-[90vh]"
-            >
-              <div className="p-8">
-                <div className="flex items-center justify-between mb-8">
-                  <h3 className="text-xl font-bold text-slate-900">Cadastrar Novo Insumo</h3>
-                  <button onClick={() => setQuickInputModalOpen(false)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full">
-                    <XCircle size={24} />
-                  </button>
-                </div>
-
-                <form onSubmit={handleQuickInputSubmit} className="space-y-4">
-                  <div className="space-y-2">
-                    <label className="text-sm font-bold text-slate-700 ml-1">Nome do Insumo</label>
-                    <input 
-                      name="name" 
-                      required 
-                      placeholder="Ex: Semente de Alface"
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Categoria</label>
-                      <select 
-                        name="category" 
-                        required 
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      >
-                        <option value="seed">Sementes</option>
-                        <option value="fertilizer">Fertilizantes</option>
-                        <option value="other">Outros</option>
-                      </select>
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Unidade</label>
-                      <input 
-                        name="unit" 
-                        required 
-                        placeholder="Ex: un, kg, g"
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Qtd em Estoque</label>
-                      <input 
-                        name="quantity" 
-                        type="number" 
-                        step="0.01"
-                        required 
-                        placeholder="0.00"
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Custo Unitário (R$)</label>
-                      <input 
-                        name="costPrice" 
-                        type="number" 
-                        step="0.01"
-                        required 
-                        placeholder="0.00"
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="pt-4 flex gap-3">
-                    <button 
-                      type="button" 
-                      onClick={() => setQuickInputModalOpen(false)}
-                      className="flex-1 px-6 py-4 rounded-2xl font-bold text-slate-600 hover:bg-slate-50 transition-colors"
-                    >
-                      Cancelar
-                    </button>
-                    <button 
-                      type="submit"
-                      className="flex-1 px-6 py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100"
-                    >
-                      Cadastrar e Usar
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* New Production Modal */}
-      <AnimatePresence>
-        {isModalOpen && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setModalOpen(false)}
-              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" 
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative bg-white w-full max-w-2xl rounded-[2rem] shadow-2xl overflow-y-auto max-h-[90vh]"
-            >
-              <div className="p-8">
-                <div className="flex items-center justify-between mb-8">
-                  <h3 className="text-2xl font-bold text-slate-900">
-                    {selectedProduction ? 'Editar Produção' : 'Novo Plantio'}
-                  </h3>
-                  <button onClick={() => { setModalOpen(false); setSelectedProduction(null); }} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full">
-                    <XCircle size={24} />
-                  </button>
-                </div>
-
-                <form onSubmit={handleSubmit} className="space-y-6">
-                  {!selectedProduction && (
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Tipo de Produção</label>
-                      <div className="flex gap-2">
-                        <label className={cn(
-                          "flex-1 flex items-center justify-center gap-2 p-3 rounded-xl border-2 transition-all cursor-pointer",
-                          "hover:bg-slate-50 text-sm font-bold",
-                          "border-slate-100",
-                          formProductionType === 'seedling' && "bg-emerald-50 border-emerald-500 text-emerald-700"
-                        )}>
-                          <input 
-                            type="radio" 
-                            name="productionType" 
-                            value="seedling" 
-                            className="hidden" 
-                            checked={formProductionType === 'seedling'}
-                            onChange={() => setFormProductionType('seedling')} 
-                          />
-                          <Sprout size={16} />
-                          Produção de Mudas
-                        </label>
-                        <label className={cn(
-                          "flex-1 flex items-center justify-center gap-2 p-3 rounded-xl border-2 transition-all cursor-pointer",
-                          "hover:bg-slate-50 text-sm font-bold",
-                          "border-slate-100",
-                          formProductionType === 'bed' && "bg-emerald-50 border-emerald-500 text-emerald-700"
-                        )}>
-                          <input 
-                            type="radio" 
-                            name="productionType" 
-                            value="bed" 
-                            className="hidden" 
-                            checked={formProductionType === 'bed'}
-                            onChange={() => setFormProductionType('bed')} 
-                          />
-                          <MapPin size={16} />
-                          Canteiros
-                        </label>
-                      </div>
-                    </div>
-                  )}
-
-                  {formProductionType === 'bed' && !selectedProduction && (
-                    <div className="space-y-4 px-1">
-                      <label className="text-sm font-bold text-slate-700 ml-1 block">Origem do Plantio</label>
-                      <div className="flex flex-wrap gap-2">
-                        {[
-                          { id: 'seeds', label: 'Sementes / Direto', icon: Package },
-                          { id: 'internal_seedlings', label: 'Mudas Próprias', icon: Sprout },
-                          { id: 'purchased_seedlings', label: 'Mudas Compradas', icon: ShoppingBag },
-                        ].map((option) => (
-                           <label key={option.id} className={cn(
-                            "flex-1 min-w-[120px] flex items-center justify-center gap-2 p-3 rounded-xl border-2 transition-all cursor-pointer",
-                            "hover:bg-slate-50 text-xs font-bold",
-                            "border-slate-100",
-                            formPlantingSource === option.id && "bg-emerald-50 border-emerald-500 text-emerald-700 shadow-sm"
-                          )}>
-                            <input 
-                              type="radio" 
-                              name="plantingSource" 
-                              value={option.id} 
-                              className="hidden" 
-                              checked={formPlantingSource === option.id}
-                              onChange={() => setFormPlantingSource(option.id as any)} 
-                            />
-                            <option.icon size={14} />
-                            {option.label}
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Cultura (O que está plantando?)</label>
-                      <input 
-                        name="crop" 
-                        required 
-                        defaultValue={selectedProduction?.crop || ''}
-                        placeholder="Ex: Alface Americana"
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Local (Canteiro / Viveiro)</label>
-                      <input 
-                        name="bed" 
-                        required 
-                        placeholder={formProductionType === 'bed' ? 'Ex: Canteiro 01, Setor A' : 'Ex: Estufa, Viveiro A'}
-                        defaultValue={selectedProduction?.bed || (formProductionType === 'seedling' ? 'Estufa' : '')}
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Data de Plantio</label>
-                      <input 
-                        name="plantingDate" 
-                        type="date"
-                        required 
-                        defaultValue={selectedProduction?.plantingDate 
-                          ? (selectedProduction.plantingDate.toDate ? format(selectedProduction.plantingDate.toDate(), 'yyyy-MM-dd') : format(new Date(selectedProduction.plantingDate), 'yyyy-MM-dd'))
-                          : new Date().toISOString().split('T')[0]
-                        }
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      />
-                    </div>
-                    {formProductionType === 'seedling' && (
-                      <div className="space-y-2">
-                        <label className="text-sm font-bold text-slate-700 ml-1">Previsão de Transplante</label>
-                        <input 
-                          name="transplantDate" 
-                          type="date"
-                          defaultValue={selectedProduction?.transplantDate 
-                            ? (selectedProduction.transplantDate.toDate ? format(selectedProduction.transplantDate.toDate(), 'yyyy-MM-dd') : format(new Date(selectedProduction.transplantDate), 'yyyy-MM-dd'))
-                            : ''
-                          }
-                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                        />
-                      </div>
-                    )}
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Previsão de Colheita</label>
-                      <input 
-                        name="estimatedHarvestDate" 
-                        type="date"
-                        defaultValue={selectedProduction?.estimatedHarvestDate 
-                          ? (selectedProduction.estimatedHarvestDate.toDate ? format(selectedProduction.estimatedHarvestDate.toDate(), 'yyyy-MM-dd') : format(new Date(selectedProduction.estimatedHarvestDate), 'yyyy-MM-dd'))
-                          : ''
-                        }
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Quantidade</label>
-                      <input 
-                        name="quantityPlanted" 
-                        type="number"
-                        required 
-                        defaultValue={selectedProduction?.quantityPlanted || ''}
-                        placeholder="0"
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Unidade</label>
-                      <input 
-                        name="unit" 
-                        required 
-                        defaultValue={selectedProduction?.unit || ''}
-                        placeholder="Ex: mudas, un, kg"
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      />
-                    </div>
-                    <div className="space-y-2 flex items-center gap-3 pt-6">
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input 
-                          type="checkbox" 
-                          name="isContinuousHarvest" 
-                          value="true"
-                          defaultChecked={selectedProduction?.isContinuousHarvest}
-                          className="sr-only peer" 
-                        />
-                        <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-emerald-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
-                        <span className="ml-3 text-sm font-bold text-slate-700">Colheita Contínua?</span>
-                      </label>
-                      <p className="text-[10px] text-slate-400 font-medium">Crops like tomato/pepper.</p>
-                    </div>
-                  </div>
-
-                  {!selectedProduction && (
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between ml-1">
-                        <label className="text-sm font-bold text-slate-700">Insumos Utilizados (Baixa Automática e Custo)</label>
-                        <button 
-                          type="button"
-                          onClick={() => setQuickInputModalOpen(true)}
-                          className="text-[10px] font-bold text-emerald-600 hover:text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100 transition-all flex items-center gap-1"
-                        >
-                          <Plus size={10} />
-                          Cadastrar Insumo
-                        </button>
-                      </div>
-                      <div className="flex flex-col gap-1.5 max-h-44 overflow-y-auto p-2 border border-slate-100 rounded-xl bg-slate-50/20 scrollbar-thin">
-                        {inventory.filter(item => item.type === 'input' || !item.type).map(item => {
-                          const isSelected = selectedPlantingInputs.some(p => p.itemId === item.id);
-                          return (
-                            <button
-                              key={item.id}
-                              type="button"
-                              onClick={() => togglePlantingInput(item)}
-                              className={cn(
-                                "flex items-center justify-between p-2.5 rounded-xl border transition-all text-left",
-                                isSelected
-                                  ? "bg-emerald-50 border-emerald-250 text-emerald-950 shadow-sm font-bold"
-                                  : "bg-white border-slate-150 text-slate-700 hover:bg-slate-50"
-                              )}
-                            >
-                              <div className="flex items-center gap-2.5 min-w-0">
-                                <div className={cn(
-                                  "w-4 h-4 rounded flex items-center justify-center border shrink-0 text-white font-black text-[10px] leading-none",
-                                  isSelected ? "bg-emerald-600 border-emerald-600" : "bg-white border-slate-300"
-                                )}>
-                                  {isSelected && "✓"}
-                                </div>
-                                <span className="text-xs font-bold truncate">{item.name}</span>
-                              </div>
-                              <span className="text-[10px] text-slate-500 font-bold bg-slate-100/80 px-2 py-0.5 rounded-md shrink-0">
-                                {item.quantity} {item.unit} disp.
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-
-                      {selectedPlantingInputs.length > 0 && (
-                        <div className="space-y-2">
-                          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Quantidades Iniciais</p>
-                          <div className="space-y-2">
-                            {selectedPlantingInputs.map(prod => (
-                              <div key={prod.itemId} className="flex items-center justify-between gap-4 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                                <span className="text-sm font-medium text-slate-700">{prod.name}</span>
-                                <div className="flex items-center gap-2">
-                                  <input 
-                                    type="number"
-                                    step="0.01"
-                                    value={prod.quantity}
-                                    onChange={(e) => updatePlantingInputQuantity(prod.itemId, Number(e.target.value))}
-                                    className="w-20 px-2 py-1 bg-white border border-slate-200 rounded-lg text-right text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                                  />
-                                  <span className="text-xs text-slate-500 w-8">{prod.unit}</span>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="pt-4 flex gap-3">
-                    <button 
-                      type="button" 
-                      onClick={() => { setModalOpen(false); setSelectedProduction(null); }}
-                      className="flex-1 px-6 py-4 rounded-2xl font-bold text-slate-600 hover:bg-slate-50 transition-colors"
-                    >
-                      Cancelar
-                    </button>
-                    <button 
-                      type="submit"
-                      className="flex-1 px-6 py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100"
-                    >
-                      {selectedProduction ? 'Salvar Alterações' : 'Iniciar Produção'}
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* Log Modal */}
-      <AnimatePresence>
-        {isLogModalOpen && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setLogModalOpen(false)}
-              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" 
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative bg-white w-full max-w-xl rounded-[2rem] shadow-2xl overflow-y-auto max-h-[90vh]"
-            >
-              <div className="p-8">
-                <div className="flex items-center justify-between mb-8">
-                  <h3 className="text-2xl font-bold text-slate-900">
-                    {editingLogIndex !== null ? 'Editar Manejo' : 'Registrar Manejo'}
-                  </h3>
-                  <button onClick={() => { setLogModalOpen(false); setSelectedLogProducts([]); setEditingLogIndex(null); }} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full">
-                    <XCircle size={24} />
-                  </button>
-                </div>
-
-                <form onSubmit={handleAddLog} className="space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Data do Manejo</label>
-                      <input 
-                        name="date" 
-                        type="date"
-                        required 
-                        defaultValue={editingLogIndex !== null && selectedProduction?.logs[editingLogIndex] 
-                          ? (selectedProduction.logs[editingLogIndex].date?.toDate 
-                            ? format(selectedProduction.logs[editingLogIndex].date.toDate(), 'yyyy-MM-dd') 
-                            : format(new Date(selectedProduction.logs[editingLogIndex].date), 'yyyy-MM-dd'))
-                          : new Date().toISOString().split('T')[0]}
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Descrição</label>
-                      <input 
-                        name="description" 
-                        required 
-                        placeholder="Ex: Adubação foliar"
-                        defaultValue={editingLogIndex !== null && selectedProduction?.logs[editingLogIndex] ? selectedProduction.logs[editingLogIndex].description : ''}
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between ml-1">
-                      <label className="text-sm font-bold text-slate-700">Produtos Utilizados (Baixa Automática)</label>
-                      <button 
-                        type="button"
-                        onClick={() => setQuickInputModalOpen(true)}
-                        className="text-[10px] font-bold text-emerald-600 hover:text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100 transition-all flex items-center gap-1"
-                      >
-                        <Plus size={10} />
-                        Cadastrar Insumo
-                      </button>
-                    </div>
-                    <div className="flex flex-col gap-1.5 max-h-44 overflow-y-auto p-2 border border-slate-100 rounded-xl bg-slate-50/20 scrollbar-thin">
-                      {inventory.map(item => {
-                        const isSelected = selectedLogProducts.some(p => p.itemId === item.id);
-                        return (
-                          <button
-                            key={item.id}
-                            type="button"
-                            onClick={() => toggleLogProduct(item)}
-                            className={cn(
-                              "flex items-center justify-between p-2.5 rounded-xl border transition-all text-left",
-                              isSelected
-                                ? "bg-emerald-50 border-emerald-250 text-emerald-950 shadow-sm font-bold"
-                                : "bg-white border-slate-150 text-slate-700 hover:bg-slate-50"
-                            )}
-                          >
-                            <div className="flex items-center gap-2.5 min-w-0">
-                              <div className={cn(
-                                "w-4 h-4 rounded flex items-center justify-center border shrink-0 text-white font-black text-[10px] leading-none",
-                                isSelected ? "bg-emerald-600 border-emerald-600" : "bg-white border-slate-300"
-                              )}>
-                                {isSelected && "✓"}
-                              </div>
-                              <span className="text-xs font-bold truncate">{item.name}</span>
-                            </div>
-                            <span className="text-[10px] text-slate-500 font-bold bg-slate-100/80 px-2 py-0.5 rounded-md shrink-0">
-                              {item.quantity} {item.unit} disp.
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {selectedLogProducts.length > 0 && (
-                      <div className="space-y-2">
-                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Quantidades Utilizadas</p>
-                        <div className="space-y-2">
-                          {selectedLogProducts.map(prod => (
-                            <div key={prod.itemId} className="flex items-center justify-between gap-4 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                              <span className="text-sm font-medium text-slate-700">{prod.name}</span>
-                              <div className="flex items-center gap-2">
-                                <input 
-                                  type="number"
-                                  step="0.01"
-                                  value={prod.quantity}
-                                  onChange={(e) => updateLogProductQuantity(prod.itemId, Number(e.target.value))}
-                                  className="w-20 px-2 py-1 bg-white border border-slate-200 rounded-lg text-right text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                                />
-                                <span className="text-xs text-slate-500 w-8">{prod.unit}</span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="pt-4 flex gap-3">
-                    <button 
-                      type="button" 
-                      onClick={() => { setLogModalOpen(false); setSelectedLogProducts([]); }}
-                      className="flex-1 px-6 py-4 rounded-2xl font-bold text-slate-600 hover:bg-slate-50 transition-colors"
-                    >
-                      Cancelar
-                    </button>
-                    <button 
-                      type="submit"
-                      className="flex-1 px-6 py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100"
-                    >
-                      Salvar e Dar Baixa
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* Process Modal */}
-      <AnimatePresence>
-        {isProcessModalOpen && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => { setProcessModalOpen(false); setSelectedProcessInputs([]); }}
-              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" 
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative bg-white w-full max-w-2xl rounded-[2rem] shadow-2xl overflow-y-auto max-h-[90vh]"
-            >
-              <div className="p-8">
-                <div className="flex items-center justify-between mb-8">
-                  <h3 className="text-2xl font-bold text-slate-900 text-amber-600">Processar / Criar Combo</h3>
-                  <button onClick={() => { setProcessModalOpen(false); setSelectedProcessInputs([]); }} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full">
-                    <XCircle size={24} />
-                  </button>
-                </div>
-
-                <form onSubmit={handleProcess} className="space-y-6">
-                  {!selectedProduction && (
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Selecione a Produção Colhida</label>
-                      <select 
-                        required
-                        onChange={(e) => {
-                          const p = productions.find(prod => prod.id === e.target.value);
-                          if (p) setSelectedProduction(p);
-                        }}
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500"
-                      >
-                        <option value="">Selecione uma colheita...</option>
-                        {productions.filter(p => (p.remainingQuantity ?? 0) > 0).map(p => (
-                          <option key={p.id} value={p.id}>{p.crop} - {p.bed} ({p.remainingQuantity} {p.unit} disp. {p.status === 'growing' ? '[Ativo]' : '[Finalizado]'})</option>
-                        ))}
-                      </select>
-                      {productions.filter(p => (p.remainingQuantity ?? 0) > 0).length === 0 && (
-                        <p className="text-xs text-rose-500 font-bold mt-1 ml-1">Nenhuma colheita disponível para processamento.</p>
-                      )}
-                    </div>
-                  )}
-
-                  {selectedProduction && (
-                    <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100">
-                      <p className="text-sm font-bold text-amber-700">Origem: {selectedProduction?.crop} ({(selectedProduction?.remainingQuantity ?? selectedProduction?.harvestQuantity ?? 0)} {selectedProduction?.unit} disponíveis)</p>
-                      {!isProcessModalOpen && <button type="button" onClick={() => setSelectedProduction(null)} className="text-xs text-amber-600 underline mt-1">Trocar origem</button>}
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Qtd. de Origem Utilizada ({selectedProduction?.unit})</label>
-                      <input 
-                        name="sourceQuantityUsed" 
-                        type="number"
-                        step="0.01"
-                        required 
-                        placeholder="Ex: 100"
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Nome do Novo Produto</label>
-                      <input 
-                        name="newProductName" 
-                        required 
-                        placeholder="Ex: Bandeja de Milho (5 un)"
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Qtd. Produzida</label>
-                      <input 
-                        name="newProductQuantity" 
-                        type="number"
-                        required 
-                        placeholder="Ex: 20"
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Unidade</label>
-                      <input 
-                        name="newProductUnit" 
-                        required 
-                        placeholder="Ex: bandeja"
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Preço Sugerido (R$)</label>
-                      <input 
-                        name="newProductPrice" 
-                        type="number"
-                        step="0.01"
-                        placeholder="0,00"
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between ml-1">
-                      <label className="text-sm font-bold text-slate-700">Embalagens / Insumos Utilizados</label>
-                      <button 
-                        type="button"
-                        onClick={() => setQuickInputModalOpen(true)}
-                        className="text-[10px] font-bold text-emerald-600 hover:text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100 transition-all flex items-center gap-1"
-                      >
-                        <Plus size={10} />
-                        Cadastrar Insumo
-                      </button>
-                    </div>
-                    <div className="flex flex-col gap-1.5 max-h-44 overflow-y-auto p-2 border border-slate-100 rounded-xl bg-slate-50/20 scrollbar-thin">
-                      {inventory.map(item => {
-                        const isSelected = selectedProcessInputs.some(p => p.itemId === item.id);
-                        return (
-                          <button
-                            key={item.id}
-                            type="button"
-                            onClick={() => toggleProcessInput(item)}
-                            className={cn(
-                              "flex items-center justify-between p-2.5 rounded-xl border transition-all text-left",
-                              isSelected
-                                ? "bg-amber-50 border-amber-250 text-amber-950 shadow-sm font-bold"
-                                : "bg-white border-slate-150 text-slate-700 hover:bg-slate-50"
-                            )}
-                          >
-                            <div className="flex items-center gap-2.5 min-w-0">
-                              <div className={cn(
-                                "w-4 h-4 rounded flex items-center justify-center border shrink-0 text-white font-black text-[10px] leading-none",
-                                isSelected ? "bg-amber-600 border-amber-600" : "bg-white border-slate-300"
-                              )}>
-                                {isSelected && "✓"}
-                              </div>
-                              <span className="text-xs font-bold truncate">{item.name}</span>
-                            </div>
-                            <span className="text-[10px] text-slate-500 font-bold bg-slate-150 px-2 py-0.5 rounded-md shrink-0">
-                              {item.quantity} {item.unit} disp.
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {selectedProcessInputs.length > 0 && (
-                      <div className="space-y-2">
-                        <div className="space-y-2">
-                          {selectedProcessInputs.map(prod => (
-                            <div key={prod.itemId} className="flex items-center justify-between gap-4 bg-slate-50 p-2 rounded-xl border border-slate-100">
-                              <span className="text-xs font-medium text-slate-700">{prod.name}</span>
-                              <div className="flex items-center gap-2">
-                                <input 
-                                  type="number"
-                                  step="0.01"
-                                  value={prod.quantity}
-                                  onChange={(e) => updateProcessInputQuantity(prod.itemId, Number(e.target.value))}
-                                  className="w-16 px-2 py-1 bg-white border border-slate-200 rounded-lg text-right text-xs focus:outline-none focus:ring-2 focus:ring-amber-500"
-                                />
-                                <span className="text-[10px] text-slate-500 w-8">{prod.unit}</span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="pt-4 flex gap-3">
-                    <button 
-                      type="button" 
-                      onClick={() => { setProcessModalOpen(false); setSelectedProcessInputs([]); }}
-                      className="flex-1 px-6 py-4 rounded-2xl font-bold text-slate-600 hover:bg-slate-50 transition-colors"
-                    >
-                      Cancelar
-                    </button>
-                    <button 
-                      type="submit"
-                      className="flex-1 px-6 py-4 bg-amber-600 text-white rounded-2xl font-bold hover:bg-amber-700 transition-all shadow-lg shadow-amber-100"
-                    >
-                      Finalizar Processamento
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* Collective Launch (Lançamento Coletivo) Modal */}
-      <AnimatePresence>
-        {isBatchModalOpen && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setBatchModalOpen(false)}
-              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" 
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative bg-white w-full max-w-lg rounded-[2rem] shadow-2xl overflow-y-auto max-h-[90vh]-custom scrollbar-thin z-10 p-6 md:p-8"
-              style={{ maxHeight: '92vh' }}
-            >
-              <div>
-                <div className="flex items-center justify-between mb-6">
-                  <div>
-                    <span className="text-[10px] bg-indigo-50 border border-indigo-150 text-indigo-700 px-2 py-0.5 rounded-md font-mono font-bold uppercase">
-                      Lançamento em Lote
-                    </span>
-                    <h3 className="text-xl font-black text-slate-900 mt-1">Canteiro: {batchBedName}</h3>
-                  </div>
-                  <button onClick={() => setBatchModalOpen(false)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full">
-                    <XCircle size={22} />
-                  </button>
-                </div>
-
-                <form onSubmit={handleBatchSubmit} className="space-y-6">
-                  {/* Selector: Manejo vs Colheita */}
-                  <div className="grid grid-cols-2 gap-2 bg-slate-110 p-1 rounded-2xl border border-slate-200">
-                    <button
-                      type="button"
-                      onClick={() => setBatchActionType('manejo')}
-                      className={cn(
-                        "py-3 rounded-xl font-black text-xs uppercase tracking-wider transition-all",
-                        batchActionType === 'manejo'
-                          ? "bg-white text-indigo-700 shadow-sm"
-                          : "text-slate-500 hover:bg-slate-50/50"
-                      )}
-                    >
-                      <span className="flex items-center justify-center gap-1.5">
-                        <ClipboardList size={14} />
-                        Manejos
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setBatchActionType('harvest')}
-                      className={cn(
-                        "py-3 rounded-xl font-black text-xs uppercase tracking-wider transition-all",
-                        batchActionType === 'harvest'
-                          ? "bg-white text-emerald-700 shadow-sm"
-                          : "text-slate-500 hover:bg-slate-50/50"
-                      )}
-                    >
-                      <span className="flex items-center justify-center gap-1.5">
-                        <Sprout size={14} />
-                        Colheita
-                      </span>
-                    </button>
-                  </div>
-
-                  {/* Cultivos do Canteiro Select Section */}
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs font-black uppercase text-slate-400 tracking-wider">
-                        Selecione as Culturas Ativas ({batchProductions.filter(p => selectedBatchProdIds[p.id]).length})
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const allSelected = batchProductions.every(p => selectedBatchProdIds[p.id]);
-                          const next: Record<string, boolean> = {};
-                          batchProductions.forEach(p => next[p.id] = !allSelected);
-                          setSelectedBatchProdIds(next);
-                        }}
-                        className="text-[10px] font-bold text-slate-550 hover:text-indigo-600 underline"
-                      >
-                        Alternar Todos
-                      </button>
-                    </div>
-
-                    <div className="divide-y divide-slate-100 border border-slate-250 rounded-2xl bg-slate-50/30 max-h-48 overflow-y-auto scrollbar-thin">
-                      {batchProductions.map(p => {
-                        const isChecked = selectedBatchProdIds[p.id] === true;
-                        return (
-                          <div
-                            key={p.id}
-                            onClick={() => {
-                              setSelectedBatchProdIds(prev => ({ ...prev, [p.id]: !prev[p.id] }));
-                            }}
-                            className={cn(
-                              "flex items-center justify-between p-3.5 cursor-pointer hover:bg-slate-50 transition-colors select-none",
-                              isChecked ? "bg-slate-50/40" : ""
-                            )}
-                          >
-                            <div className="flex items-center gap-2.5 min-w-0">
-                              <div className={cn(
-                                "w-4 h-4 rounded-md flex items-center justify-center border shrink-0 text-white font-black text-[10px]",
-                                isChecked ? "bg-indigo-650 border-indigo-650" : "bg-white border-slate-300"
-                              )}>
-                                {isChecked && "✓"}
-                              </div>
-                              <span className="text-sm font-black text-slate-900 truncate">{p.crop}</span>
-                            </div>
-                            <span className="text-[10px] text-slate-500 font-bold bg-slate-100/80 px-2 py-0.5 rounded-md">
-                              Plantado: {p.plantingDate?.toDate ? format(p.plantingDate.toDate(), 'dd/MM/yyyy') : '---'}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Form fields based on Action Type */}
-                  {batchActionType === 'manejo' ? (
-                    <div className="space-y-4">
-                      {/* Description input */}
-                      <div className="space-y-2">
-                        <label className="text-xs font-black uppercase text-slate-400 tracking-wider">Descrição do Manejo</label>
-                        <input
-                          type="text"
-                          required={batchActionType === 'manejo'}
-                          placeholder="Ex: Adubação foliar, pulverização, capina..."
-                          value={batchLogDescription}
-                          onChange={(e) => setBatchLogDescription(e.target.value)}
-                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all font-bold placeholder:text-slate-400"
-                        />
-                      </div>
-
-                      {/* Date selection */}
-                      <div className="space-y-2">
-                        <label className="text-xs font-black uppercase text-slate-400 tracking-wider">Data do Registro</label>
-                        <input
-                          type="date"
-                          required
-                          value={batchLogDate}
-                          onChange={(e) => setBatchLogDate(e.target.value)}
-                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all font-bold"
-                        />
-                      </div>
-
-                      {/* Select associated inputs */}
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between">
-                          <label className="text-xs font-black uppercase text-slate-400 tracking-wider">
-                            Vincular Insumo do Estoque (Custo Rateado entre Culturas)
-                          </label>
-                          <button 
-                            type="button"
-                            onClick={() => setQuickInputModalOpen(true)}
-                            className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 px-2 py-1 rounded-lg border border-indigo-150 transition-all flex items-center gap-1"
-                          >
-                            <Plus size={10} />
-                            Novo Insumo
-                          </button>
-                        </div>
-
-                        <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto p-2 border border-slate-220 rounded-2xl bg-slate-50/20 scrollbar-thin">
-                          {inventory.filter(item => item.type === 'input' || !item.type).map(item => {
-                            const isSelected = selectedBatchLogProducts.some(p => p.itemId === item.id);
-                            return (
-                              <button
-                                key={item.id}
-                                type="button"
-                                onClick={() => toggleBatchLogProduct(item)}
-                                className={cn(
-                                  "flex items-center justify-between p-2.5 rounded-xl border transition-all text-left",
-                                  isSelected
-                                    ? "bg-indigo-50/60 border-indigo-250 text-indigo-950 shadow-sm font-bold"
-                                    : "bg-white border-slate-150 text-slate-700 hover:bg-slate-50"
-                                )}
-                              >
-                                <div className="flex items-center gap-2.5 min-w-0">
-                                  <div className={cn(
-                                    "w-4 h-4 rounded flex items-center justify-center border shrink-0 text-white font-black text-[10px] leading-none",
-                                    isSelected ? "bg-indigo-600 border-indigo-600" : "bg-white border-slate-300"
-                                  )}>
-                                    {isSelected && "✓"}
-                                  </div>
-                                  <span className="text-xs font-bold truncate">{item.name}</span>
-                                </div>
-                                <span className="text-[10px] text-slate-500 font-bold bg-slate-100/80 px-2 py-0.5 rounded-md shrink-0">
-                                  {item.quantity} {item.unit} disp.
-                                </span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      {/* Input Quantity entry list */}
-                      {selectedBatchLogProducts.length > 0 && (
-                        <div className="space-y-2">
-                          <label className="text-xs font-black uppercase text-slate-400 tracking-wider">Quantidades Globais do Insumo</label>
-                          <div className="space-y-2">
-                            {selectedBatchLogProducts.map(prod => (
-                              <div key={prod.itemId} className="flex items-center justify-between gap-4 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                                <span className="text-sm font-medium text-slate-700">{prod.name}</span>
-                                <div className="flex items-center gap-2">
-                                  <input 
-                                    type="number"
-                                    step="0.01"
-                                    value={prod.quantity}
-                                    onChange={(e) => updateBatchLogProductQuantity(prod.itemId, Number(e.target.value))}
-                                    className="w-24 px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-right text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                                  />
-                                  <span className="text-xs text-slate-500 font-bold w-8">{prod.unit}</span>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    // Type: COLHEITA (Harvest)
-                    <div className="space-y-4">
-                      {/* Date of Harvest */}
-                      <div className="space-y-2">
-                        <label className="text-xs font-black uppercase text-slate-400 tracking-wider">Data da Colheita</label>
-                        <input
-                          type="date"
-                          required
-                          value={batchHarvestDate}
-                          onChange={(e) => setBatchHarvestDate(e.target.value)}
-                          className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all font-bold"
-                        />
-                      </div>
-
-                      <div className="space-y-3">
-                        <label className="text-xs font-black uppercase text-slate-400 tracking-wider block">Insira as Quantidades Colhidas</label>
-                        <div className="space-y-3">
-                          {batchProductions.filter(p => selectedBatchProdIds[p.id]).map(p => (
-                            <div key={p.id} className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
-                              <div className="flex items-center justify-between">
-                                <h4 className="text-sm font-black text-slate-900">{p.crop}</h4>
-                                <span className="text-[10px] text-slate-550 font-medium font-mono">Lote plantou {p.quantityPlanted} {p.unit}</span>
-                              </div>
-                              <div className="grid grid-cols-2 gap-3">
-                                {/* Qty input */}
-                                <div className="space-y-1">
-                                  <label className="text-[10px] text-slate-450 font-bold uppercase tracking-wider">Quantidade ({p.unit})</label>
-                                  <input
-                                    type="number"
-                                    step="0.01"
-                                    placeholder="Ex: 15"
-                                    value={batchHarvestQuantities[p.id] || ''}
-                                    onChange={(e) => setBatchHarvestQuantities(prev => ({ ...prev, [p.id]: e.target.value }))}
-                                    className="w-full px-3 py-2 bg-white border border-slate-250 rounded-xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                                  />
-                                </div>
-                                {/* Harvest Mode */}
-                                <div className="space-y-1">
-                                  <label className="text-[10px] text-slate-455 font-bold uppercase tracking-wider">Modo Colheita</label>
-                                  <select
-                                    value={batchHarvestTypes[p.id] || 'final'}
-                                    onChange={(e) => setBatchHarvestTypes(prev => ({ ...prev, [p.id]: e.target.value as 'partial' | 'final' }))}
-                                    className="w-full px-3 py-2 bg-white border border-slate-250 rounded-xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                                  >
-                                    <option value="final">Final (Fecha lote)</option>
-                                    <option value="partial">Parcial (Mantém lote)</option>
-                                  </select>
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="pt-4 flex gap-3">
-                    <button 
-                      type="button" 
-                      onClick={() => setBatchModalOpen(false)}
-                      className="flex-1 px-6 py-4 rounded-xl font-bold bg-slate-100 text-slate-600 hover:bg-slate-200 transition-colors text-xs uppercase tracking-wider"
-                    >
-                      Cancelar
-                    </button>
-                    <button 
-                      type="submit"
-                      className={cn(
-                        "flex-1 px-6 py-4 text-white rounded-xl font-bold transition-all shadow-lg text-xs uppercase tracking-wider",
-                        batchActionType === 'manejo'
-                          ? "bg-indigo-600 hover:bg-indigo-700 shadow-indigo-100"
-                          : "bg-emerald-600 hover:bg-emerald-700 shadow-emerald-100"
-                      )}
-                    >
-                      Salvar Lançamento
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* Harvest Modal */}
-      <AnimatePresence>
-        {isHarvestModalOpen && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setHarvestModalOpen(false)}
-              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" 
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative bg-white w-full max-w-md rounded-[2rem] shadow-2xl overflow-y-auto max-h-[90vh]"
-            >
-              <div className="p-8">
-                <div className="flex items-center justify-between mb-8">
-                  <h3 className="text-2xl font-bold text-slate-900 text-blue-600">Registrar Colheita</h3>
-                  <button onClick={() => setHarvestModalOpen(false)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full">
-                    <XCircle size={24} />
-                  </button>
-                </div>
-
-                <form onSubmit={handleHarvest} className="space-y-6">
-                  <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100">
-                    <p className="text-sm font-bold text-blue-700">Cultura: {selectedProduction?.crop}</p>
-                    <p className="text-xs text-blue-600">Local: {selectedProduction?.bed}</p>
-                  </div>
-
-                  <div className="space-y-4">
-                    <label className="text-sm font-bold text-slate-700 ml-1">Tipo de Colheita</label>
-                    <div className="grid grid-cols-2 gap-3">
-                      <button
-                        type="button"
-                        onClick={() => setHarvestType('partial')}
-                        className={cn(
-                          "flex items-center justify-center gap-2 p-3.5 border rounded-2xl cursor-pointer transition-all text-xs font-black uppercase tracking-wider",
-                          harvestType === 'partial' 
-                            ? "bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-100" 
-                            : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
-                        )}
-                      >
-                        🧺 Colheita Parcial
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setHarvestType('final')}
-                        className={cn(
-                          "flex items-center justify-center gap-2 p-3.5 border rounded-2xl cursor-pointer transition-all text-xs font-black uppercase tracking-wider",
-                          harvestType === 'final' 
-                            ? "bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-100" 
-                            : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
-                        )}
-                      >
-                        🏁 Colheita Final
-                      </button>
-                    </div>
-                    <p className="text-[11px] text-slate-400 font-medium leading-relaxed px-1">
-                      {harvestType === 'partial' 
-                        ? 'O canteiro continuará Ativo no status "Em Crescimento" permitindo novos lançamentos futuros.' 
-                        : 'O canteiro mudará de status para "Colhido" (Lote de produção será encerrado).'
-                      }
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-sm font-bold text-slate-700 ml-1">Data da Colheita</label>
-                    <input 
-                      name="harvestDate" 
-                      type="date"
-                      required 
-                      defaultValue={new Date().toISOString().split('T')[0]}
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-bold text-slate-700 ml-1">Quantidade Colhida ({selectedProduction?.unit})</label>
-                    <input 
-                      name="harvestQuantity" 
-                      type="number"
-                      step="0.01"
-                      required 
-                      placeholder="0.00"
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    />
-                  </div>
-
-                  <div className="pt-4 flex gap-3">
-                    <button 
-                      type="button" 
-                      onClick={() => setHarvestModalOpen(false)}
-                      className="flex-1 px-6 py-4 rounded-2xl font-bold text-slate-600 hover:bg-slate-50 transition-colors"
-                    >
-                      Cancelar
-                    </button>
-                    <button 
-                      type="submit"
-                      className="flex-1 px-6 py-4 bg-blue-600 text-white rounded-2xl font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-100"
-                    >
-                      Confirmar Colheita
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* Transplant Seedling Modal */}
-      <AnimatePresence>
-        {isTransplantModalOpen && selectedProduction && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => { setTransplantModalOpen(false); setSelectedProduction(null); setTransplantError(null); }}
-              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" 
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative bg-white w-full max-w-lg rounded-[2rem] shadow-2xl overflow-y-auto max-h-[90vh]"
-            >
-              <div className="p-8">
-                <div className="flex items-center justify-between mb-8">
-                  <h3 className="text-2xl font-bold text-slate-900 text-emerald-600">Transplantar ao Campo</h3>
-                  <button onClick={() => { setTransplantModalOpen(false); setSelectedProduction(null); setTransplantError(null); }} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full">
-                    <XCircle size={24} />
-                  </button>
-                </div>
-
-                <form onSubmit={handleTransplantSubmit} className="space-y-6">
-                  {transplantError && (
-                    <div className="p-4 bg-rose-50 border border-rose-200 text-rose-700 rounded-2xl text-xs font-bold">
-                      {transplantError}
-                    </div>
-                  )}
-
-                  <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100">
-                    <p className="text-sm font-bold text-emerald-800">Cultura: {selectedProduction.crop}</p>
-                    <p className="text-xs text-emerald-600">Origem: {selectedProduction.bed} ({selectedProduction.quantityPlanted} {selectedProduction.unit} semeadas)</p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-sm font-bold text-slate-700 ml-1">Data de Transplante</label>
-                    <input 
-                      name="transplantDate" 
-                      type="date"
-                      required 
-                      defaultValue={new Date().toISOString().split('T')[0]}
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-sm font-bold text-slate-700 ml-1">Canteiro de Destino (Campo)</label>
-                    <input 
-                      name="destinationBed" 
-                      required 
-                      placeholder="Ex: Canteiro 04, Setor B"
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
-                      list="existing-beds-list"
-                    />
-                    <datalist id="existing-beds-list">
-                      {bedSuggestions.map(bedName => (
-                        <option key={bedName} value={bedName} />
-                      ))}
-                    </datalist>
-                    {bedSuggestions.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 mt-2">
-                        <span className="text-[10px] text-slate-400 font-bold uppercase self-center mr-1">Sugestões:</span>
-                        {bedSuggestions.slice(0, 4).map(bedName => (
-                          <button
-                            key={bedName}
-                            type="button"
-                            onClick={(e) => {
-                              const form = e.currentTarget.closest('form');
-                              const input = form?.elements.namedItem('destinationBed') as HTMLInputElement;
-                              if (input) input.value = bedName;
-                            }}
-                            className="text-[10px] bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold px-2 py-1 rounded-lg transition-colors border border-slate-200"
-                          >
-                            {bedName}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1 flex items-center justify-between">
-                        <span>Qtd. Real de Mudas</span>
-                        <span className="text-[10px] text-slate-400 font-medium">(Nem todas vingaram)</span>
-                      </label>
-                      <input 
-                        name="quantityTransplanted" 
-                        type="number"
-                        required 
-                        defaultValue={selectedProduction.quantityPlanted}
-                        placeholder="0"
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Previsão de Colheita</label>
-                      <input 
-                        name="estimatedHarvestDate" 
-                        type="date"
-                        defaultValue={selectedProduction.estimatedHarvestDate 
-                          ? (selectedProduction.estimatedHarvestDate.toDate ? format(selectedProduction.estimatedHarvestDate.toDate(), 'yyyy-MM-dd') : format(new Date(selectedProduction.estimatedHarvestDate), 'yyyy-MM-dd'))
-                          : ''
-                        }
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="pt-4 flex gap-3">
-                    <button 
-                      type="button" 
-                      onClick={() => { setTransplantModalOpen(false); setSelectedProduction(null); setTransplantError(null); }}
-                      className="flex-1 px-6 py-4 rounded-2xl font-bold text-slate-600 hover:bg-slate-50 transition-colors"
-                    >
-                      Cancelar
-                    </button>
-                    <button 
-                      type="submit"
-                      className="flex-1 px-6 py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100"
-                    >
-                      Confirmar Transplante
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* Modal para Desfazer Última Colheita */}
-      <AnimatePresence>
-        {isRevertHarvestModalOpen && productionToRevertHarvest && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => { setRevertHarvestModalOpen(false); setProductionToRevertHarvest(null); setRevertError(null); }}
-              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" 
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative bg-white w-full max-w-lg rounded-[2rem] shadow-2xl overflow-y-auto max-h-[90vh]"
-            >
-              <div className="p-8">
-                <div className="flex items-center justify-between mb-6">
-                  <h3 className="text-2xl font-bold text-amber-600 flex items-center gap-2">
-                    <RotateCcw size={24} />
-                    Desfazer Última Colheita
-                  </h3>
-                  <button onClick={() => { setRevertHarvestModalOpen(false); setProductionToRevertHarvest(null); setRevertError(null); }} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full">
-                    <XCircle size={24} />
-                  </button>
-                </div>
-
-                {revertError ? (
-                  <div className="space-y-4">
-                    <div className="p-4 bg-rose-50 border border-rose-200 text-rose-700 rounded-2xl text-xs font-bold leading-relaxed">
-                      {revertError}
-                    </div>
-                    <button 
-                      onClick={() => { setRevertHarvestModalOpen(false); setProductionToRevertHarvest(null); setRevertError(null); }}
-                      className="w-full px-6 py-4 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-2xl font-bold transition-all text-sm"
-                    >
-                      Voltar
-                    </button>
-                  </div>
-                ) : (
-                  <div className="space-y-6">
-                    <p className="text-sm text-slate-600 leading-relaxed">
-                      Você está prestes a desfazer o último registro de colheita realizado para este lote.
-                    </p>
-
-                    <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 space-y-2">
-                      <p className="text-sm font-bold text-amber-900">Cultura: {productionToRevertHarvest.crop}</p>
-                      <p className="text-xs text-amber-800">Local/Canteiro: <b className="font-black">{productionToRevertHarvest.bed}</b></p>
-                      <p className="text-xs text-amber-800">Status Atual: <b className="font-black text-rose-600 uppercase">{productionToRevertHarvest.status}</b></p>
-                      {revertHarvestQty > 0 && (
-                        <p className="text-xs text-amber-1000 font-bold text-amber-900">
-                          Quantidade a ser estornada do estoque: {revertHarvestQty} {productionToRevertHarvest.unit}
-                        </p>
-                      )}
-                      {revertHarvestLogDesc && (
-                        <p className="text-[11px] text-amber-700 leading-tight bg-white/60 p-2.5 rounded-xl border border-amber-200/50 italic mt-2">
-                          Registro: {revertHarvestLogDesc}
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/60 text-xs text-slate-500 leading-relaxed">
-                      📌 <b className="text-slate-700">O que vai acontecer?</b>
-                      <ul className="list-disc pl-4 mt-1.5 space-y-1">
-                        <li>O canteiro/lote voltará para o status original <b className="text-emerald-600">"Em Crescimento"</b>.</li>
-                        <li>A quantidade colhida ({revertHarvestQty} {productionToRevertHarvest.unit}) será removida do estoque da Expedição de forma automática.</li>
-                        <li>Um registro de estorno será gerado no histórico do seu estoque para manter a auditoria.</li>
-                      </ul>
-                    </div>
-
-                    <div className="pt-4 flex gap-3">
-                      <button 
-                        type="button" 
-                        onClick={() => { setRevertHarvestModalOpen(false); setProductionToRevertHarvest(null); }}
-                        className="flex-1 px-6 py-4 rounded-2xl font-bold text-slate-600 hover:bg-slate-50 transition-colors text-sm"
-                      >
-                        Cancelar
-                      </button>
-                      <button 
-                        onClick={executeRevertLastHarvest}
-                        className="flex-1 px-6 py-4 bg-amber-600 text-white rounded-2xl font-bold hover:bg-amber-700 transition-all shadow-lg shadow-amber-100 text-sm"
-                      >
-                        Confirmar e Desfazer
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* Modal de Visão Focada */}
-      <AnimatePresence>
-        {focusedProduction && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-8 bg-slate-900/95 backdrop-blur-md"
+        {/* Excel style export & add buttons */}
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={() => setIsAddingBed(true)}
+            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-sm hover:shadow cursor-pointer"
           >
-            <motion.div
-              initial={{ scale: 0.95, y: 20 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.95, y: 20 }}
-              className="bg-white w-full max-w-5xl h-full md:h-[90vh] rounded-[2.5rem] shadow-2xl flex flex-col overflow-hidden"
+            <Plus size={16} />
+            + Adicionar Canteiro
+          </button>
+          
+          <button
+            onClick={handleExportCSV}
+            className="flex items-center gap-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-sm cursor-pointer"
+          >
+            <Download size={16} className="text-slate-400" />
+            Exportar Excel (CSV)
+          </button>
+        </div>
+      </div>
+
+      {/* 2. Top Stats Summary Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden group hover:border-emerald-500/50 transition-all">
+          <p className="text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">Canteiros Totais</p>
+          <div className="flex items-baseline gap-2 mt-2">
+            <span className="text-3xl font-black text-slate-900">{totalCanteiros}</span>
+            <span className="text-xs font-bold text-slate-400">fileiras</span>
+          </div>
+          <div className="absolute right-3 bottom-3 text-slate-100 group-hover:text-emerald-50/70 transition-colors">
+            <Layers size={40} />
+          </div>
+        </div>
+
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden group hover:border-emerald-500/50 transition-all">
+          <p className="text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">Canteiros Ocupados</p>
+          <div className="flex items-baseline gap-2 mt-2">
+            <span className="text-3xl font-black text-emerald-700">{activeCount}</span>
+            <span className="text-xs font-bold text-slate-400">ativos</span>
+          </div>
+          <div className="absolute right-3 bottom-3 text-emerald-50/30 group-hover:text-emerald-100/40 transition-colors">
+            <Sprout size={40} />
+          </div>
+        </div>
+
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden group hover:border-emerald-500/50 transition-all">
+          <p className="text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">Total de Mudas Plantadas</p>
+          <div className="flex items-baseline gap-2 mt-2">
+            <span className="text-3xl font-black text-slate-900">{sumPlantedQty.toLocaleString('pt-BR')}</span>
+            <span className="text-xs font-bold text-slate-400">unidades</span>
+          </div>
+          <div className="absolute right-3 bottom-3 text-slate-100 group-hover:text-emerald-50/70 transition-colors">
+            <TrendingUp size={40} />
+          </div>
+        </div>
+
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden group hover:border-emerald-500/50 transition-all">
+          <p className="text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">Taxa de Ocupação</p>
+          <div className="flex items-baseline gap-2 mt-2">
+            <span className="text-3xl font-black text-slate-900">{occupancyRate}%</span>
+            <span className="text-xs font-bold text-slate-400">da horta</span>
+          </div>
+          <div className="absolute right-3 bottom-3 text-slate-100 group-hover:text-emerald-50/70 transition-colors">
+            <CheckSquare size={40} />
+          </div>
+        </div>
+      </div>
+
+      {/* 3. Modal to Add New Bed Row */}
+      <AnimatePresence>
+        {isAddingBed && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-sm w-full p-6"
             >
-              {/* Header */}
-              <div className="p-8 border-b border-slate-100 flex items-start justify-between bg-gradient-to-br from-white to-slate-50">
-                <div className="space-y-4">
-                  <div className="flex items-center gap-3">
-                    <div className="w-14 h-14 rounded-3xl bg-emerald-600 text-white flex items-center justify-center shadow-xl shadow-emerald-200">
-                      <Sprout size={32} />
-                    </div>
-                    <div>
-                      <h3 className="text-3xl font-black text-slate-900 tracking-tight">{focusedProduction.crop}</h3>
-                      <div className="flex items-center gap-3 text-slate-500 font-bold">
-                        <span className="flex items-center gap-1.5">
-                          <MapPin size={16} /> {focusedProduction.bed}
-                        </span>
-                        <span className="w-1.5 h-1.5 rounded-full bg-slate-300" />
-                        <span className="flex items-center gap-1.5">
-                          <Calendar size={16} /> {focusedProduction.plantingDate?.toDate ? format(focusedProduction.plantingDate.toDate(), "dd/MM/yyyy") : format(new Date(focusedProduction.plantingDate), "dd/MM/yyyy")}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <div className="flex flex-wrap gap-2">
-                    <button 
-                      onClick={() => handleEditProduction(focusedProduction)}
-                      className="px-4 py-2 bg-emerald-50 text-emerald-700 rounded-2xl border border-emerald-100 shadow-sm flex items-center gap-2 hover:bg-emerald-100 transition-all font-bold text-xs"
-                    >
-                      <Edit2 size={14} />
-                      Editar Dados
-                    </button>
-                    {focusedProduction.status === 'growing' && focusedProduction.productionType === 'seedling' && (
-                      <button 
-                        onClick={() => { setSelectedProduction(focusedProduction); setTransplantModalOpen(true); }}
-                        className="px-4 py-2 bg-emerald-600 text-white rounded-2xl border border-emerald-500 shadow-sm shadow-emerald-100 flex items-center gap-2 hover:bg-emerald-700 transition-all font-bold text-xs"
-                      >
-                        <ArrowRight size={14} />
-                        Transplantar Mudas
-                      </button>
-                    )}
-                    {focusedProduction.status === 'growing' && focusedProduction.productionType === 'bed' && (focusedProduction.plantingSource === 'internal_seedlings' || focusedProduction.transplantDate || focusedProduction.logs?.some(l => l.description && (l.description.toLowerCase().includes('transplant') || l.description.toLowerCase().includes('muda')))) && (
-                      <button 
-                        onClick={() => handleRevertTransplant(focusedProduction)}
-                        className="px-4 py-2 bg-orange-50 text-orange-700 rounded-2xl border border-orange-100 shadow-sm flex items-center gap-2 hover:bg-orange-100 transition-all font-bold text-xs"
-                      >
-                        <ArrowLeft size={14} />
-                        Desfazer Transplante
-                      </button>
-                    )}
-                    {focusedProduction.logs?.some(l => l.description && (l.description.includes('Colheita Final') || l.description.includes('Colheita Parcial'))) && (
-                      <button 
-                        onClick={() => prepareRevertHarvest(focusedProduction)}
-                        className="px-4 py-2 bg-amber-50 text-amber-700 rounded-2xl border border-amber-200 shadow-sm flex items-center gap-2 hover:bg-amber-100 transition-all font-bold text-xs"
-                      >
-                        <RotateCcw size={14} />
-                        Desfazer Última Colheita
-                      </button>
-                    )}
-                    <button 
-                      onClick={() => { handleDelete(focusedProduction.id); setFocusedProduction(null); }}
-                      className="px-4 py-2 bg-rose-50 text-rose-700 rounded-2xl border border-rose-100 shadow-sm flex items-center gap-2 hover:bg-rose-100 transition-all font-bold text-xs"
-                    >
-                      <Trash2 size={14} />
-                      Excluir Registro
-                    </button>
-                    <div className="px-4 py-2 bg-white rounded-2xl border border-slate-200 shadow-sm flex items-center gap-2">
-                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Status:</span>
-                      <span className={cn(
-                        "text-xs font-black uppercase",
-                        focusedProduction.status === 'growing' ? "text-emerald-600" :
-                        focusedProduction.status === 'harvested' ? "text-blue-600" : "text-rose-600"
-                      )}>{focusedProduction.status}</span>
-                    </div>
-                    <div className="px-4 py-2 bg-white rounded-2xl border border-slate-200 shadow-sm flex items-center gap-2">
-                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Quantidade:</span>
-                      <span className="text-xs font-black text-slate-700">{focusedProduction.quantityPlanted} {focusedProduction.unit}</span>
-                    </div>
-                    <div className="px-4 py-2 bg-slate-900 text-white rounded-2xl shadow-lg shadow-slate-200 flex items-center gap-2">
-                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Custo Total:</span>
-                      <span className="text-xs font-black">R$ {focusedProduction.totalCost.toFixed(2)}</span>
-                    </div>
-                  </div>
-                </div>
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+                <h3 className="text-base font-black text-slate-900">Novo Canteiro</h3>
                 <button 
-                  onClick={() => setFocusedProduction(null)}
-                  className="p-3 text-slate-400 hover:bg-slate-100 rounded-3xl transition-all"
+                  onClick={() => setIsAddingBed(false)}
+                  className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
                 >
-                  <XCircle size={32} />
+                  <X size={18} />
                 </button>
               </div>
 
-              {/* Main Content Areas */}
-              <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
-                {/* Timeline Area */}
-                <div className="flex-1 p-8 overflow-y-auto custom-scrollbar flex flex-col bg-white">
-                  <div className="flex items-center justify-between mb-8">
-                    <h4 className="text-xl font-black text-slate-900 flex items-center gap-2">
-                      <div className="w-8 h-8 rounded-xl bg-slate-900 text-white flex items-center justify-center">
-                        <Zap size={16} fill="currentColor" />
-                      </div>
-                      Histórico de Manejo
-                    </h4>
-                    <button 
-                      onClick={() => { setSelectedProduction(focusedProduction); setLogModalOpen(true); }}
-                      className="px-6 py-3 bg-emerald-600 text-white rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-xl shadow-emerald-100 flex items-center gap-2"
-                    >
-                      <PlusCircle size={16} />
-                      Novo Manejo
-                    </button>
-                  </div>
-
-                  <div className="space-y-10 relative pl-8 before:absolute before:left-12 before:top-4 before:bottom-0 before:w-[2px] before:bg-slate-100">
-                    {focusedProduction.logs.length === 0 ? (
-                      <div className="text-center py-20 bg-slate-50 rounded-[2.5rem] border-2 border-dashed border-slate-200">
-                        <ClipboardList size={48} className="mx-auto text-slate-300 mb-4" />
-                        <p className="text-slate-500 font-bold">Nenhum manejo registrado ainda.</p>
-                      </div>
-                    ) : (
-                      focusedProduction.logs.slice().reverse().map((log, idx) => {
-                        const originalIndex = focusedProduction.logs.length - 1 - idx;
-                        return (
-                          <div key={idx} className="relative group/focuslog">
-                            {/* Marker */}
-                            <div className="absolute -left-8 top-1 w-8 h-8 rounded-2xl bg-white border-4 border-slate-50 shadow-sm flex items-center justify-center z-10">
-                              <div className="w-2.5 h-2.5 rounded-full bg-emerald-600" />
-                            </div>
-                            
-                            <div className="bg-slate-50 hover:bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm hover:shadow-xl hover:border-emerald-100 transition-all duration-300">
-                              <div className="flex items-start justify-between mb-4">
-                                <div>
-                                  <p className="text-sm font-black text-slate-400 uppercase tracking-widest mb-1">
-                                    {log.date?.toDate ? format(log.date.toDate(), "dd 'de' MMMM", { locale: ptBR }) : format(new Date(log.date), "dd 'de' MMMM", { locale: ptBR })}
-                                  </p>
-                                  <h5 className="text-xl font-bold text-slate-900">{log.description}</h5>
-                                </div>
-                                <div className="flex items-center gap-2 opacity-0 group-hover/focuslog:opacity-100 transition-all">
-                                  <button 
-                                    onClick={() => handleEditLog(focusedProduction, originalIndex)}
-                                    className="p-3 bg-white text-slate-400 hover:text-emerald-600 rounded-2xl shadow-sm border border-slate-100"
-                                    title="Editar"
-                                  >
-                                    <Edit2 size={18} />
-                                  </button>
-                                  <button 
-                                    onClick={() => handleDeleteLog(focusedProduction, originalIndex)}
-                                    className="p-3 bg-white text-slate-400 hover:text-rose-600 rounded-2xl shadow-sm border border-slate-100"
-                                    title="Excluir"
-                                  >
-                                    <Trash2 size={18} />
-                                  </button>
-                                </div>
-                              </div>
-
-                              {log.products && log.products.length > 0 && (
-                                <div className="flex flex-wrap gap-3 pt-4 border-t border-slate-100">
-                                  {log.products.map((prod, j) => (
-                                    <div key={j} className="px-4 py-2 bg-white rounded-xl border border-slate-200 text-xs font-bold text-slate-600 flex items-center gap-2">
-                                      <Package size={14} className="text-slate-400" />
-                                      {prod.name}: {prod.quantity} {prod.unit}
-                                      <span className="text-[10px] text-slate-400 font-black">R$ {(prod.costAtTime * prod.quantity).toFixed(2)}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
+              <form onSubmit={handleAddBed} className="space-y-4">
+                <div>
+                  <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                    Nome ou Número do Canteiro
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: Canteiro 13, Canteiro Lateral B"
+                    value={newBedName}
+                    onChange={(e) => setNewBedName(e.target.value)}
+                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1 leading-normal">
+                    Este canteiro será inserido permanentemente na planilha do seu painel ativo.
+                  </p>
                 </div>
 
-                {/* Sidebar Info Area */}
-                <div className="w-full md:w-80 bg-slate-50 p-8 border-l border-slate-100 space-y-8 h-full overflow-y-auto text-slate-900">
-                   <div>
-                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-4">Métricas do Lote</p>
-                      <div className="space-y-4">
-                        <div className="p-5 bg-white rounded-3xl shadow-sm border border-slate-100">
-                          <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Idade Atual</p>
-                          <p className="text-2xl font-black text-slate-800">{getDaysSincePlanting(focusedProduction.plantingDate)} dias</p>
-                        </div>
-                        <div className="p-5 bg-white rounded-3xl shadow-sm border border-slate-100">
-                          <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Custo por Unidade</p>
-                          <p className="text-2xl font-black text-slate-800">R$ {(focusedProduction.totalCost / focusedProduction.quantityPlanted).toFixed(2)}</p>
-                        </div>
-                      </div>
-                   </div>
-
-                   <div>
-                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-4">Datas Chave</p>
-                      <div className="space-y-3">
-                         <div className="flex items-center justify-between text-xs font-bold">
-                            <span className="text-slate-500">Plantio:</span>
-                            <span className="text-slate-900">{focusedProduction.plantingDate?.toDate ? format(focusedProduction.plantingDate.toDate(), "dd/MM/yy") : format(new Date(focusedProduction.plantingDate), "dd/MM/yy")}</span>
-                         </div>
-                         {focusedProduction.transplantDate && (
-                           <div className="flex items-center justify-between text-xs font-bold">
-                              <span className="text-slate-500">Transplante:</span>
-                              <span className="text-emerald-600 uppercase font-black">{focusedProduction.transplantDate?.toDate ? format(focusedProduction.transplantDate.toDate(), "dd/MM/yy") : format(new Date(focusedProduction.transplantDate), "dd/MM/yy")}</span>
-                           </div>
-                         )}
-                         {focusedProduction.estimatedHarvestDate && (
-                           <div className="flex items-center justify-between text-xs font-bold">
-                              <span className="text-slate-500">Colheita Est.:</span>
-                              <span className="text-blue-600 uppercase font-black">{focusedProduction.estimatedHarvestDate?.toDate ? format(focusedProduction.estimatedHarvestDate.toDate(), "dd/MM/yy") : format(new Date(focusedProduction.estimatedHarvestDate), "dd/MM/yy")}</span>
-                           </div>
-                         )}
-                      </div>
-                   </div>
-
-                   <div className="pt-8 opacity-50">
-                      <p className="text-center italic text-[10px] font-bold text-slate-400 uppercase group-hover:opacity-100">HortoManager Focus Mode v2.0</p>
-                   </div>
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsAddingBed(false)}
+                    className="px-4 py-2 rounded-xl text-xs font-extrabold uppercase tracking-wider text-slate-500 hover:bg-slate-100 transition-colors cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-extrabold uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
+                  >
+                    Adicionar Linha
+                  </button>
                 </div>
-              </div>
+              </form>
             </motion.div>
-          </motion.div>
+          </div>
         )}
       </AnimatePresence>
+
+      {/* 4. Excel-Style Sheet Tabs & Controls */}
+      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden mb-6">
+        
+        {/* Excel style ribbon toolbar */}
+        <div className="bg-slate-50 border-b border-slate-200 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          
+          {/* Tabs with Excel Sheet Style */}
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => {
+                setActiveTab('spreadsheet');
+                setSelectedRowId(null);
+                cancelEditing();
+              }}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                activeTab === 'spreadsheet' 
+                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200 shadow-xs' 
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-800'
+              }`}
+            >
+              <FileSpreadsheet size={15} />
+              Planilha de Canteiros (Ativos)
+            </button>
+            
+            <button
+              onClick={() => {
+                setActiveTab('history');
+                setSelectedRowId(null);
+                cancelEditing();
+              }}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                activeTab === 'history' 
+                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200 shadow-xs' 
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-800'
+              }`}
+            >
+              <ClipboardList size={15} />
+              Histórico Geral de Lançamentos
+            </button>
+
+            <button
+              onClick={() => {
+                setActiveTab('catalog');
+                setSelectedRowId(null);
+                cancelEditing();
+              }}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                activeTab === 'catalog' 
+                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200 shadow-xs' 
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-800'
+              }`}
+            >
+              <Sprout size={15} />
+              Catálogo de Cultivos (Produtos)
+            </button>
+          </div>
+
+          {/* Quick Filters inside spreadsheet header */}
+          <div className="flex items-center gap-2">
+            {activeTab === 'history' && (
+              <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-2.5 py-1.5">
+                <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Status:</span>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value as any)}
+                  className="bg-transparent text-xs font-bold text-slate-700 focus:outline-none border-none p-0 pr-6"
+                >
+                  <option value="all">Todos</option>
+                  <option value="growing">Em Crescimento</option>
+                  <option value="harvested">Colhidos</option>
+                  <option value="lost">Perdas</option>
+                </select>
+              </div>
+            )}
+
+            <div className="relative">
+              <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+              <input
+                type="text"
+                placeholder={activeTab === 'spreadsheet' ? "Buscar canteiro ou cultura..." : "Buscar cultura ou canteiro..."}
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-9 pr-3.5 py-1.5 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white w-48 sm:w-56 placeholder-slate-400"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* 5. Excel Formula Bar Display */}
+        <div className="bg-white border-b border-slate-200 px-4 py-2 flex items-center gap-3 text-xs">
+          <div className="font-extrabold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded border border-emerald-100 select-none">
+            fx
+          </div>
+          <div className="h-4 w-[1px] bg-slate-200" />
+          <div className="flex-1 font-mono text-slate-500 truncate select-none">
+            {selectedRowInfo ? (
+              <span>
+                <strong className="text-slate-800 font-sans font-bold">{selectedRowInfo.title}:</strong> {selectedRowInfo.desc}
+              </span>
+            ) : (
+              <span className="italic text-slate-400">Clique em qualquer linha da planilha para visualizar a barra de fórmulas...</span>
+            )}
+          </div>
+        </div>
+
+        {/* 6. Main Interactive Spreadsheet Grid */}
+        {loading ? (
+          <div className="p-12 text-center">
+            <div className="w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+            <p className="text-sm text-slate-500 font-semibold">Carregando dados da horta...</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            
+            {/* TAB 1: SpreadSheet View (Each bed is a line) */}
+            {activeTab === 'spreadsheet' && (
+              <table className="w-full text-left border-collapse select-none">
+                <thead>
+                  <tr className="bg-slate-50/80 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    {/* Excel numbering column header */}
+                    <th className="py-2 px-3 text-center border-r border-slate-200 w-12 bg-slate-100 font-mono text-slate-400 select-none">#</th>
+                    <th className="py-2.5 px-4 border-r border-slate-200 w-44 font-black text-slate-700">Nº do Canteiro [A]</th>
+                    <th className="py-2.5 px-4 border-r border-slate-200 w-40 font-black text-slate-700">Status [B]</th>
+                    <th className="py-2.5 px-4 border-r border-slate-200 w-64 font-black text-slate-700">Cultura Plantada [C]</th>
+                    <th className="py-2.5 px-4 border-r border-slate-200 w-44 font-black text-slate-700">Data de Plantio [D]</th>
+                    <th className="py-2.5 px-4 border-r border-slate-200 w-40 font-black text-slate-700">Qtd. Plantada [E]</th>
+                    <th className="py-2.5 px-4 border-r border-slate-200 w-36 font-black text-slate-700">Idade [F]</th>
+                    <th className="py-2.5 px-4 text-center font-black text-slate-700">Ações Rápidas [G]</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-150 text-xs">
+                  {filteredBedsList.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="py-8 text-center text-slate-400">
+                        Nenhum canteiro coincide com sua busca.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredBedsList.map((bedName, idx) => {
+                      // Get active growing crop for this bed
+                      const activeCrop = productions.find(p => p.bed === bedName && p.status === 'growing');
+                      const isEditing = editingBedName === bedName;
+                      const isSelected = selectedRowId === bedName;
+
+                      return (
+                        <tr 
+                          key={bedName}
+                          onClick={() => setSelectedRowId(bedName)}
+                          className={`group transition-colors border-b border-slate-100 ${
+                            isEditing 
+                              ? 'bg-emerald-50/30' 
+                              : isSelected 
+                                ? 'bg-emerald-50/15 ring-1 ring-emerald-500/10' 
+                                : 'hover:bg-slate-50/50'
+                          }`}
+                        >
+                          {/* Row Number Column */}
+                          <td className="py-3 px-3 text-center border-r border-slate-200 bg-slate-50 font-mono text-slate-400 font-semibold select-none text-[11px]">
+                            {idx + 1}
+                          </td>
+
+                          {/* Canteiro Name */}
+                          <td className="py-3 px-4 font-bold text-slate-900 border-r border-slate-150">
+                            <div className="flex items-center justify-between">
+                              <span>{bedName}</span>
+                              {/* Option to delete custom bed */}
+                              {customBeds.includes(bedName) && !isEditing && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleRemoveBed(bedName);
+                                  }}
+                                  title="Remover este canteiro da planilha"
+                                  className="opacity-0 group-hover:opacity-100 p-0.5 text-rose-500 hover:bg-rose-50 rounded transition-all cursor-pointer"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Status */}
+                          <td className="py-3 px-4 border-r border-slate-150">
+                            {isEditing ? (
+                              <span className="text-[10px] bg-emerald-100 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-md font-bold uppercase">
+                                {editingProductionId ? 'Editando...' : 'Plantando...'}
+                              </span>
+                            ) : activeCrop ? (
+                              <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-800 border border-amber-200/50 px-2.5 py-0.5 rounded-full text-[11px] font-bold">
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                                Em Crescimento
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 bg-slate-100 text-slate-500 border border-slate-200/60 px-2.5 py-0.5 rounded-full text-[11px] font-bold">
+                                <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                                Canteiro Vazio
+                              </span>
+                            )}
+                          </td>
+
+                          {/* Cultura Plantada */}
+                          <td className="py-3 px-4 border-r border-slate-150">
+                            {isEditing ? (
+                              <div className="relative">
+                                <input
+                                  type="text"
+                                  placeholder="Digite a cultura"
+                                  value={editCrop}
+                                  onChange={(e) => setEditCrop(e.target.value)}
+                                  onFocus={() => setShowCropSuggestions(true)}
+                                  onBlur={() => setTimeout(() => setShowCropSuggestions(false), 250)}
+                                  className="w-full px-2 py-1 border border-slate-300 rounded font-semibold text-slate-800 focus:outline-none focus:border-emerald-500 bg-white text-xs"
+                                />
+                                {showCropSuggestions && (
+                                  <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-48 overflow-y-auto z-10 p-1.5 space-y-1">
+                                    {produceCatalog.length > 0 && (
+                                      <>
+                                        <p className="text-[9px] font-black text-emerald-700 uppercase tracking-wider px-2 py-0.5">Seus Cultivos Cadastrados:</p>
+                                        {produceCatalog
+                                          .filter(item => !editCrop || item.name.toLowerCase().includes(editCrop.toLowerCase()))
+                                          .map(item => (
+                                            <button
+                                              key={item.id}
+                                              type="button"
+                                              onMouseDown={() => {
+                                                setEditCrop(item.name);
+                                                setEditUnit(item.unit || 'un');
+                                              }}
+                                              className="w-full text-left px-2 py-1 hover:bg-emerald-50 rounded text-[11px] font-semibold text-slate-700 cursor-pointer flex justify-between items-center"
+                                            >
+                                              <span>{item.name}</span>
+                                              <span className="text-[9px] text-emerald-600 bg-emerald-50 px-1 rounded">
+                                                {item.unit} • {item.estimatedDaysToHarvest}d
+                                              </span>
+                                            </button>
+                                          ))}
+                                        <div className="border-t border-slate-100 my-1" />
+                                      </>
+                                    )}
+                                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-wider px-2 py-0.5">Sugestões Padrão:</p>
+                                    {STANDARD_CROPS
+                                      .filter(crop => !editCrop || crop.toLowerCase().includes(editCrop.toLowerCase()))
+                                      .map(crop => (
+                                        <button
+                                          key={crop}
+                                          type="button"
+                                          onMouseDown={() => setEditCrop(crop)}
+                                          className="w-full text-left px-2 py-1 hover:bg-slate-50 rounded text-[11px] font-semibold text-slate-700 cursor-pointer"
+                                        >
+                                          {crop}
+                                        </button>
+                                      ))}
+                                  </div>
+                                )}
+                              </div>
+                            ) : activeCrop ? (
+                              <div className="flex items-center gap-2">
+                                <div className="p-1 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded">
+                                  <Sprout size={13} />
+                                </div>
+                                <span className="font-bold text-slate-800">{activeCrop.crop}</span>
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 italic font-mono">-</span>
+                            )}
+                          </td>
+
+                          {/* Data de Plantio */}
+                          <td className="py-3 px-4 border-r border-slate-150 font-mono">
+                            {isEditing ? (
+                              <input
+                                type="date"
+                                value={editDate}
+                                onChange={(e) => setEditDate(e.target.value)}
+                                className="w-full px-2 py-1 border border-slate-300 rounded text-slate-800 focus:outline-none focus:border-emerald-500 bg-white text-[11px]"
+                              />
+                            ) : activeCrop ? (
+                              <div className="flex items-center gap-1.5 text-slate-600">
+                                <Calendar size={13} className="text-slate-400" />
+                                <span>{formatDate(activeCrop.plantingDate)}</span>
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 italic">-</span>
+                            )}
+                          </td>
+
+                          {/* Quantidade Plantada */}
+                          <td className="py-3 px-4 border-r border-slate-150">
+                            {isEditing ? (
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="number"
+                                  min="1"
+                                  value={editQuantity}
+                                  onChange={(e) => setEditQuantity(Number(e.target.value))}
+                                  className="w-20 px-2 py-1 border border-slate-300 rounded text-slate-800 focus:outline-none focus:border-emerald-500 bg-white font-mono"
+                                />
+                                <select
+                                  value={editUnit}
+                                  onChange={(e) => setEditUnit(e.target.value)}
+                                  className="px-1.5 py-1 border border-slate-300 rounded text-slate-800 focus:outline-none focus:border-emerald-500 bg-white text-[11px]"
+                                >
+                                  {STANDARD_UNITS.map(u => (
+                                    <option key={u} value={u}>{u}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            ) : activeCrop ? (
+                              <span className="font-mono font-bold text-slate-800">
+                                {activeCrop.quantityPlanted} <span className="text-[10px] text-slate-400 font-sans font-normal uppercase">{activeCrop.unit || 'un'}</span>
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 italic font-mono">-</span>
+                            )}
+                          </td>
+
+                          {/* Idade no Campo */}
+                          <td className="py-3 px-4 border-r border-slate-150 font-mono font-bold text-slate-600">
+                            {activeCrop ? (
+                              <span>
+                                {getDaysInField(activeCrop.plantingDate)} <span className="text-[10px] text-slate-400 font-sans font-normal">dias</span>
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 italic">-</span>
+                            )}
+                          </td>
+
+                          {/* Action Buttons inside the Excel Row */}
+                          <td className="py-2.5 px-4 text-center">
+                            {isEditing ? (
+                              <div className="flex items-center justify-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                                <button
+                                  type="button"
+                                  onClick={() => saveInlineEdit(bedName)}
+                                  title="Confirmar e Salvar no Banco de Dados"
+                                  className="p-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg shadow-xs transition-colors cursor-pointer"
+                                >
+                                  <Check size={14} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={cancelEditing}
+                                  title="Descartar Alterações"
+                                  className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg transition-colors cursor-pointer"
+                                >
+                                  <X size={14} />
+                                </button>
+                              </div>
+                            ) : activeCrop ? (
+                              <div className="flex items-center justify-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                                <button
+                                  type="button"
+                                  onClick={() => openHarvestDialog(activeCrop)}
+                                  className="flex items-center gap-1 px-2.5 py-1 bg-emerald-100 hover:bg-emerald-600 hover:text-white text-emerald-800 border border-emerald-200 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer shadow-xs"
+                                >
+                                  Colher
+                                </button>
+                                
+                                <button
+                                  type="button"
+                                  onClick={() => handleMarkLoss(activeCrop)}
+                                  className="p-1.5 text-amber-600 hover:bg-amber-50 rounded-lg border border-transparent hover:border-amber-100 transition-colors cursor-pointer"
+                                  title="Marcar como Perda de Safra"
+                                >
+                                  <AlertTriangle size={13} />
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => startEditing(bedName, activeCrop)}
+                                  className="p-1.5 text-slate-400 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                                  title="Editar Lançamento"
+                                >
+                                  <Edit2 size={13} />
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteRecord(activeCrop.id)}
+                                  className="p-1.5 text-rose-500 hover:bg-rose-50 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
+                                  title="Excluir Lançamento"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex justify-center" onClick={(e) => e.stopPropagation()}>
+                                <button
+                                  type="button"
+                                  onClick={() => startEditing(bedName)}
+                                  className="flex items-center gap-1 px-3 py-1 bg-slate-100 hover:bg-emerald-50 text-slate-600 hover:text-emerald-700 border border-slate-200 hover:border-emerald-200 rounded-lg text-[10px] font-extrabold uppercase tracking-wider transition-all cursor-pointer shadow-xs"
+                                >
+                                  <PlusCircle size={11} />
+                                  Plantar
+                                </button>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            )}
+
+            {/* TAB 2: History View (Full Listing of past cycles) */}
+            {activeTab === 'history' && (
+              <table className="w-full text-left border-collapse select-none">
+                <thead>
+                  <tr className="bg-slate-50/80 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    <th className="py-2 px-3 text-center border-r border-slate-200 w-12 bg-slate-100 font-mono text-slate-400 select-none">#</th>
+                    <th className="py-2.5 px-4 border-r border-slate-200 w-44 font-black text-slate-700">Canteiro [A]</th>
+                    <th className="py-2.5 px-4 border-r border-slate-200 w-44 font-black text-slate-700">Cultura [B]</th>
+                    <th className="py-2.5 px-4 border-r border-slate-200 w-36 font-black text-slate-700">Status [C]</th>
+                    <th className="py-2.5 px-4 border-r border-slate-200 w-44 font-black text-slate-700">Data Plantio [D]</th>
+                    <th className="py-2.5 px-4 border-r border-slate-200 w-40 font-black text-slate-700">Qtd. Plantada [E]</th>
+                    <th className="py-2.5 px-4 border-r border-slate-200 w-44 font-black text-slate-700">Data Finalização [F]</th>
+                    <th className="py-2.5 px-4 border-r border-slate-200 w-40 font-black text-slate-700">Colhido [G]</th>
+                    <th className="py-2.5 px-4 text-center font-black text-slate-700">Ações [H]</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-150 text-xs">
+                  {filteredHistory.length === 0 ? (
+                    <tr>
+                      <td colSpan={9} className="py-12 text-center text-slate-400">
+                        Nenhum registro histórico correspondente foi encontrado.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredHistory.map((p, idx) => {
+                      const isSelected = selectedRowId === p.id;
+                      
+                      return (
+                        <tr
+                          key={p.id}
+                          onClick={() => setSelectedRowId(p.id)}
+                          className={`transition-colors border-b border-slate-100 ${
+                            isSelected ? 'bg-emerald-50/15 ring-1 ring-emerald-500/10' : 'hover:bg-slate-50/50'
+                          }`}
+                        >
+                          <td className="py-3 px-3 text-center border-r border-slate-200 bg-slate-50 font-mono text-slate-400 font-semibold select-none text-[11px]">
+                            {idx + 1}
+                          </td>
+                          <td className="py-3 px-4 font-bold text-slate-800 border-r border-slate-150">
+                            {p.bed}
+                          </td>
+                          <td className="py-3 px-4 border-r border-slate-150 font-semibold text-slate-900">
+                            {p.crop}
+                          </td>
+                          <td className="py-3 px-4 border-r border-slate-150">
+                            {p.status === 'growing' ? (
+                              <span className="bg-amber-50 text-amber-800 border border-amber-200/50 px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider">Ativo</span>
+                            ) : p.status === 'harvested' ? (
+                              <span className="bg-emerald-50 text-emerald-800 border border-emerald-200/50 px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider">Colhido</span>
+                            ) : (
+                              <span className="bg-rose-50 text-rose-800 border border-rose-200/50 px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider">Perda</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 border-r border-slate-150 font-mono">
+                            {formatDate(p.plantingDate)}
+                          </td>
+                          <td className="py-3 px-4 border-r border-slate-150 font-mono">
+                            {p.quantityPlanted} {p.unit || 'un'}
+                          </td>
+                          <td className="py-3 px-4 border-r border-slate-150 font-mono">
+                            {p.harvestDate ? formatDate(p.harvestDate) : '-'}
+                          </td>
+                          <td className="py-3 px-4 border-r border-slate-150 font-mono font-bold text-slate-800">
+                            {p.status === 'harvested' ? `${p.harvestQuantity || 0} ${p.unit || 'un'}` : p.status === 'lost' ? 'Perda' : '-'}
+                          </td>
+                          <td className="py-2.5 px-4 text-center" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteRecord(p.id)}
+                              className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer inline-flex items-center justify-center"
+                              title="Excluir Registro"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            )}
+
+            {/* TAB 3: Catalog View (Pre-registered producible crops) */}
+            {activeTab === 'catalog' && (
+              <div className="p-4 bg-white">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4 bg-slate-50 border border-slate-200/60 p-4 rounded-2xl">
+                  <div>
+                    <h3 className="text-sm font-black text-slate-800 flex items-center gap-2">
+                      <Sprout size={16} className="text-emerald-600" />
+                      Catálogo de Cultivos Planejados (Produtos)
+                    </h3>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Cadastre aqui os produtos que você planeja produzir. Ao plantar em qualquer canteiro, os dados como ciclo de cultivo e unidade padrão serão herdados automaticamente do catálogo.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleImportStandardCrops}
+                      className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                      title="Importar os cultivos padrão recomendados para começar rapidamente"
+                    >
+                      <Download size={13} />
+                      Importar Padrão
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleImportFromInventory}
+                      className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                      title="Importar produtos que já existem no estoque da expedição"
+                    >
+                      <Download size={13} />
+                      Importar do Estoque
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingCatalogItemId(null);
+                        setCatalogName('');
+                        setCatalogCategory('Hortaliças');
+                        setCatalogUnit('un');
+                        setCatalogDays('45');
+                        setCatalogPrice('5.00');
+                        setIsAddingCatalogItem(true);
+                      }}
+                      className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-xs cursor-pointer"
+                    >
+                      <Plus size={14} />
+                      Novo Produto
+                    </button>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                  <table className="w-full text-left border-collapse select-none">
+                    <thead>
+                      <tr className="bg-slate-50/80 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        <th className="py-2.5 px-3 text-center border-r border-slate-200 w-12 bg-slate-100 font-mono text-slate-400 select-none">#</th>
+                        <th className="py-2.5 px-4 border-r border-slate-200 font-black text-slate-700">Nome do Produto [A]</th>
+                        <th className="py-2.5 px-4 border-r border-slate-200 font-black text-slate-700 w-44">Categoria [B]</th>
+                        <th className="py-2.5 px-4 border-r border-slate-200 font-black text-slate-700 w-36">Unidade [C]</th>
+                        <th className="py-2.5 px-4 border-r border-slate-200 font-black text-slate-700 w-40">Ciclo Médio [D]</th>
+                        <th className="py-2.5 px-4 border-r border-slate-200 font-black text-slate-700 w-44">Preço Comercial [E]</th>
+                        <th className="py-2.5 px-4 text-center font-black text-slate-700 w-28">Ações [F]</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-150 text-xs">
+                      {filteredCatalog.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="py-12 text-center text-slate-400 font-semibold">
+                            Nenhum produto cadastrado no catálogo correspondente. Clique em "Novo Produto" para cadastrar o primeiro!
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredCatalog.map((item, idx) => {
+                          const isSelected = selectedRowId === item.id;
+                          return (
+                            <tr
+                              key={item.id}
+                              onClick={() => setSelectedRowId(item.id)}
+                              className={`transition-colors border-b border-slate-100 cursor-pointer ${
+                                isSelected ? 'bg-emerald-50/15 ring-1 ring-emerald-500/10' : 'hover:bg-slate-50/50'
+                              }`}
+                            >
+                              <td className="py-3 px-3 text-center border-r border-slate-200 bg-slate-50 font-mono text-slate-400 font-semibold select-none text-[11px]">
+                                {idx + 1}
+                              </td>
+                              <td className="py-3 px-4 font-bold text-slate-800 border-r border-slate-150">
+                                {item.name}
+                              </td>
+                              <td className="py-3 px-4 border-r border-slate-150 text-slate-600 font-semibold">
+                                {item.category || 'Hortaliças'}
+                              </td>
+                              <td className="py-3 px-4 border-r border-slate-150">
+                                <span className="bg-slate-100 text-slate-700 font-bold px-2 py-0.5 rounded text-[10px] uppercase">
+                                  {item.unit || 'un'}
+                                </span>
+                              </td>
+                              <td className="py-3 px-4 border-r border-slate-150 font-mono font-bold text-slate-600">
+                                {item.estimatedDaysToHarvest} <span className="text-[10px] text-slate-400 font-normal">dias</span>
+                              </td>
+                              <td className="py-3 px-4 border-r border-slate-150 font-mono font-bold text-emerald-700">
+                                R$ {Number(item.defaultPrice || 0).toFixed(2)}
+                              </td>
+                              <td className="py-2.5 px-4 text-center" onClick={(e) => e.stopPropagation()}>
+                                <div className="flex items-center justify-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => startEditCatalogItem(item)}
+                                    className="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-slate-50 rounded-lg transition-colors cursor-pointer"
+                                    title="Editar Produto"
+                                  >
+                                    <Edit2 size={13} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteCatalogItem(item.id)}
+                                    className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                    title="Excluir Produto"
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+          </div>
+        )}
+
+        {/* 7. Bottom Status Bar (Simulating Excel summary footer) */}
+        <div className="bg-emerald-800 border-t border-emerald-900 px-4 py-2 flex flex-wrap items-center justify-between text-white font-mono text-[11px] select-none gap-y-1">
+          <div className="flex items-center gap-3">
+            <span className="bg-emerald-950 px-2 py-0.5 rounded text-[9px] font-black tracking-widest text-emerald-400">PRONTO</span>
+            <span className="font-semibold">Planilha de Cultivo Ativa</span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-emerald-100">
+            <div>
+              Total Canteiros: <span className="font-black text-white">{totalCanteiros}</span>
+            </div>
+            <div>
+              Canteiros Ativos: <span className="font-black text-white">{activeCount}</span>
+            </div>
+            <div>
+              Mudas Ativas: <span className="font-black text-white">{sumPlantedQty} un</span>
+            </div>
+            <div>
+              Taxa Ocupação: <span className="font-black text-white">{occupancyRate}%</span>
+            </div>
+            {activeCount > 0 && (
+              <div>
+                Idade Média: <span className="font-black text-white">{averageDaysInField} dias</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+      </div>
+
+      {/* 8. Harvest Action Modal (Elegant sliding/dialog overlay) */}
+      <AnimatePresence>
+        {harvestingItem && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-3xl border border-slate-200 shadow-xl max-w-md w-full p-6 md:p-8"
+            >
+              <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-5">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                    <CheckSquare size={18} />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-black text-slate-900">Registrar Colheita</h3>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">{harvestingItem.bed} • {harvestingItem.crop}</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setHarvestingItem(null)}
+                  className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                
+                <div className="bg-slate-50 border border-slate-100 p-4 rounded-2xl flex items-center justify-between">
+                  <div>
+                    <p className="text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">Quantidade Inicial</p>
+                    <p className="text-xl font-black text-slate-800 mt-1">
+                      {harvestingItem.quantityPlanted} <span className="text-xs text-slate-400 font-bold uppercase">{harvestingItem.unit || 'un'}</span>
+                    </p>
+                  </div>
+                  <ChevronRight className="text-slate-300" size={20} />
+                  <div className="text-right">
+                    <p className="text-[10px] font-extrabold uppercase text-emerald-600 tracking-wider">Estocagem Final</p>
+                    <p className="text-xl font-black text-emerald-700 mt-1">
+                      {harvestQty || '0'} <span className="text-xs text-emerald-400 font-bold uppercase">{harvestingItem.unit || 'un'}</span>
+                    </p>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1.5">
+                    Quantidade Colhida ({harvestingItem.unit || 'un'})
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={harvestQty}
+                    onChange={(e) => setHarvestQty(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1.5">
+                    Data da Colheita
+                  </label>
+                  <input
+                    type="date"
+                    value={harvestDate}
+                    onChange={(e) => setHarvestDate(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-mono"
+                  />
+                </div>
+
+                {/* Sellable inventory linkage checkbox */}
+                <div className="bg-emerald-50/50 border border-emerald-100 p-4 rounded-2xl flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    id="addToInventory"
+                    checked={addToInventory}
+                    onChange={(e) => setAddToInventory(e.target.checked)}
+                    className="w-4 h-4 rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500 mt-0.5 cursor-pointer"
+                  />
+                  <div className="flex-1">
+                    <label htmlFor="addToInventory" className="block text-xs font-bold text-emerald-900 select-none cursor-pointer">
+                      Lançar no Estoque de Vendas (Expedição)
+                    </label>
+                    <p className="text-[10px] text-emerald-700/80 mt-1 leading-normal">
+                      Ao selecionar, o sistema adicionará esta quantidade colhida diretamente ao estoque de vendas, deixando o produto pronto para faturamento.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Subform for choosing or registering a product */}
+                {addToInventory && (
+                  <div className="bg-slate-50 border border-slate-200/60 p-4 rounded-2xl space-y-3.5 transition-all">
+                    <div className="flex items-center justify-between border-b border-slate-200/50 pb-2.5">
+                      <span className="text-[10px] font-extrabold uppercase text-slate-500 tracking-wider">
+                        Destino no Estoque
+                      </span>
+                      
+                      <div className="flex gap-1 bg-slate-200/60 p-0.5 rounded-lg">
+                        <button
+                          type="button"
+                          onClick={() => setHarvestProductMode('existing')}
+                          className={`px-2.5 py-1 rounded-md text-[10px] font-extrabold transition-all cursor-pointer ${
+                            harvestProductMode === 'existing'
+                              ? 'bg-white text-emerald-800 shadow-xs'
+                              : 'text-slate-500 hover:text-slate-800'
+                          }`}
+                        >
+                          Vincular Existente
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setHarvestProductMode('new')}
+                          className={`px-2.5 py-1 rounded-md text-[10px] font-extrabold transition-all cursor-pointer ${
+                            harvestProductMode === 'new'
+                              ? 'bg-white text-emerald-800 shadow-xs'
+                              : 'text-slate-500 hover:text-slate-800'
+                          }`}
+                        >
+                          Cadastrar Novo
+                        </button>
+                      </div>
+                    </div>
+
+                    {harvestProductMode === 'existing' ? (
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase text-slate-500 tracking-wider mb-1.5">
+                          Selecionar Produto Comercial
+                        </label>
+                        <select
+                          value={selectedInventoryItemId}
+                          onChange={(e) => setSelectedInventoryItemId(e.target.value)}
+                          className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                        >
+                          <option value="">-- Selecione um produto cadastrado --</option>
+                          {inventory
+                            .filter(item => item.type === 'dispatch')
+                            .map(item => (
+                              <option key={item.id} value={item.id}>
+                                {item.name} ({item.unit}) - Qtd atual: {item.quantity}
+                              </option>
+                            ))}
+                        </select>
+                        {inventory.filter(item => item.type === 'dispatch').length === 0 && (
+                          <p className="text-[10px] text-amber-600 font-medium mt-1">
+                            Nenhum produto de vendas encontrado. Selecione "Cadastrar Novo" ao lado para registrar um produto!
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-[10px] font-bold uppercase text-slate-500 tracking-wider mb-1.5">
+                            Nome do Novo Produto Comercial
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="Ex: Alface Crespa Orgânica"
+                            value={newProductName}
+                            onChange={(e) => setNewProductName(e.target.value)}
+                            className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2.5">
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-slate-500 tracking-wider mb-1.5">
+                              Preço de Venda (R$)
+                            </label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              placeholder="5.00"
+                              value={newProductPrice}
+                              onChange={(e) => setNewProductPrice(e.target.value)}
+                              className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-mono"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-slate-500 tracking-wider mb-1.5">
+                              Estoque Mínimo
+                            </label>
+                            <input
+                              type="number"
+                              placeholder="10"
+                              value={newProductMinStock}
+                              onChange={(e) => setNewProductMinStock(e.target.value)}
+                              className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-mono"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2.5">
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-slate-500 tracking-wider mb-1.5">
+                              Unidade de Venda
+                            </label>
+                            <select
+                              value={newProductUnit}
+                              onChange={(e) => setNewProductUnit(e.target.value)}
+                              className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                            >
+                              {STANDARD_UNITS.map(u => (
+                                <option key={u} value={u}>{u}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-slate-500 tracking-wider mb-1.5">
+                              Categoria
+                            </label>
+                            <select
+                              value={newProductCategory}
+                              onChange={(e) => setNewProductCategory(e.target.value)}
+                              className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                            >
+                              {dispatchCategories.map(cat => (
+                                <option key={cat} value={cat}>{cat}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+              </div>
+
+              <div className="flex gap-2.5 pt-6 mt-6 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setHarvestingItem(null)}
+                  className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-extrabold uppercase tracking-wider transition-colors cursor-pointer"
+                >
+                  Voltar
+                </button>
+                <button
+                  type="button"
+                  onClick={submitHarvest}
+                  className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-extrabold uppercase tracking-wider shadow-sm hover:shadow transition-colors cursor-pointer"
+                >
+                  Registrar Colheita
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Catalog Add/Edit Modal */}
+      <AnimatePresence>
+        {isAddingCatalogItem && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-md w-full p-6"
+            >
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+                <h3 className="text-base font-black text-slate-900 flex items-center gap-2">
+                  <Sprout className="text-emerald-600" size={18} />
+                  {editingCatalogItemId ? 'Editar Produto do Catálogo' : 'Cadastrar Novo Produto de Cultivo'}
+                </h3>
+                <button 
+                  onClick={() => setIsAddingCatalogItem(false)}
+                  className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <form onSubmit={handleAddOrUpdateCatalogItem} className="space-y-4">
+                <div>
+                  <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                    Nome do Cultivo / Produto
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: Alface Americana Orgânica, Cenoura Baby"
+                    value={catalogName}
+                    onChange={(e) => setCatalogName(e.target.value)}
+                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                      Categoria do Alimento
+                    </label>
+                    <select
+                      value={catalogCategory}
+                      onChange={(e) => setCatalogCategory(e.target.value)}
+                      className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                    >
+                      {dispatchCategories.map(cat => (
+                        <option key={cat} value={cat}>{cat}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                      Unidade Padrão
+                    </label>
+                    <select
+                      value={catalogUnit}
+                      onChange={(e) => setCatalogUnit(e.target.value)}
+                      className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                    >
+                      {STANDARD_UNITS.map(u => (
+                        <option key={u} value={u}>{u}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                      Ciclo de Cultivo (Dias)
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min="1"
+                      placeholder="Ex: 45"
+                      value={catalogDays}
+                      onChange={(e) => setCatalogDays(e.target.value)}
+                      className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                      Preço de Venda Sugerido (R$)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      placeholder="5.00"
+                      value={catalogPrice}
+                      onChange={(e) => setCatalogPrice(e.target.value)}
+                      className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 mt-4">
+                  <button
+                    type="button"
+                    onClick={() => setIsAddingCatalogItem(false)}
+                    className="px-4 py-2.5 rounded-xl text-xs font-extrabold uppercase tracking-wider text-slate-500 hover:bg-slate-100 transition-colors cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-extrabold uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
+                  >
+                    {editingCatalogItemId ? 'Salvar Alterações' : 'Cadastrar Produto'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Custom Confirmation Dialog */}
+      <AnimatePresence>
+        {confirmationModal?.isOpen && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-sm w-full p-6 text-center"
+            >
+              <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-rose-50 border border-rose-100 text-rose-600 mb-4">
+                <AlertTriangle size={24} />
+              </div>
+              <h3 className="text-sm font-black text-slate-900 mb-2">
+                {confirmationModal.title}
+              </h3>
+              <p className="text-xs text-slate-500 mb-5 leading-relaxed">
+                {confirmationModal.message}
+              </p>
+              <div className="flex items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setConfirmationModal(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-slate-500 hover:bg-slate-100 transition-colors cursor-pointer w-full"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmationModal.onConfirm}
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-sm transition-colors cursor-pointer w-full"
+                >
+                  {confirmationModal.actionLabel}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* 9. Extra Quick Gardening Information Callout */}
+      <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex items-start gap-3.5">
+          <div className="p-2.5 bg-amber-50 text-amber-700 border border-amber-100 rounded-xl shrink-0">
+            <Info size={20} />
+          </div>
+          <div>
+            <h4 className="text-sm font-bold text-slate-800">Dica de Lançamento em Planilha:</h4>
+            <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+              Você pode plantar rapidamente em qualquer canteiro livre clicando no botão verde <strong className="text-slate-700 font-bold">Plantar</strong>. O canteiro correspondente se transformará em campos de inserção direta de dados, agilizando sua rotina sem precisar preencher formulários extensos.
+            </p>
+          </div>
+        </div>
+      </div>
+
     </div>
   );
-}
-
-function getDaysSincePlanting(date: any) {
-  if (!date) return 0;
-  const planting = date.toDate ? date.toDate() : new Date(date);
-  const now = new Date();
-  const diffTime = Math.abs(now.getTime() - planting.getTime());
-  return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 }

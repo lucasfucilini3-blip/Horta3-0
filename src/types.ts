@@ -83,6 +83,16 @@ export interface Production {
   createdAt: any;
 }
 
+export interface ProduceCatalogItem {
+  id: string;
+  name: string;
+  category: string;
+  unit: string;
+  estimatedDaysToHarvest: number;
+  defaultPrice: number;
+  createdAt: any;
+}
+
 export type SaleStatus = 'ordered' | 'pending_delivery' | 'delivered' | 'paid' | 'cancelled' | 'pending' | 'confirmed';
 
 export interface SaleItem {

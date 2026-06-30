@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, onSnapshot, addDoc, updateDoc, doc, serverTimestamp, orderBy, getDoc, increment, where, deleteDoc, getDocs, limit, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Sale, SaleStatus, InventoryItem, SaleItem, Customer, Production, PaymentMethod } from '../types';
-import { Plus, Search, Filter, ShoppingCart, CheckCircle, XCircle, Clock, ChevronDown, Trash2, Package, X, Calendar, CreditCard, DollarSign, Edit2, Store, Truck, RotateCcw, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Sale, SaleStatus, InventoryItem, SaleItem, Customer, Production, PaymentMethod, ProduceCatalogItem } from '../types';
+import { Plus, Search, Filter, ShoppingCart, CheckCircle, XCircle, Clock, ChevronDown, Trash2, Package, X, Calendar, CreditCard, DollarSign, Edit2, Store, Truck, RotateCcw, AlertTriangle, RefreshCw, ClipboardList } from 'lucide-react';
+import HarvestReport from './HarvestReport';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth, handleFirestoreError, OperationType } from '../App';
 import { format } from 'date-fns';
@@ -107,6 +108,7 @@ export default function Sales() {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [harvestedProductions, setHarvestedProductions] = useState<Production[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [produceCatalog, setProduceCatalog] = useState<ProduceCatalogItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -131,7 +133,7 @@ export default function Sales() {
   const [editCustomerSearchTerm, setEditCustomerSearchTerm] = useState('');
 
   // New Fair (Modo Feira) States
-  const [activeTab, setActiveTab] = useState<'individual' | 'feira' | 'delivery'>('individual');
+  const [activeTab, setActiveTab] = useState<'individual' | 'feira' | 'delivery' | 'colheita'>('individual');
 
   // Venda Delivery States
   const [deliveryClientName, setDeliveryClientName] = useState('');
@@ -144,6 +146,29 @@ export default function Sales() {
   const [productSearchTerm, setProductSearchTerm] = useState('');
   const [customerSearchTerm, setCustomerSearchTerm] = useState('');
   const [showCustomerSuggestions, setShowCustomerSuggestions] = useState(false);
+
+  const [lastMatchingSaleForDelivery, setLastMatchingSaleForDelivery] = useState<Sale | null>(null);
+  const [lastMatchingSaleForEditing, setLastMatchingSaleForEditing] = useState<Sale | null>(null);
+
+  useEffect(() => {
+    const cleanPhone = deliveryClientPhone.replace(/\D/g, '');
+    if (cleanPhone.length >= 8) {
+      const match = sales.find(s => s.customerPhone && s.customerPhone.replace(/\D/g, '') === cleanPhone);
+      setLastMatchingSaleForDelivery(match || null);
+    } else {
+      setLastMatchingSaleForDelivery(null);
+    }
+  }, [deliveryClientPhone, sales]);
+
+  useEffect(() => {
+    const cleanPhone = deliveryClientPhoneEditing.replace(/\D/g, '');
+    if (cleanPhone.length >= 8) {
+      const match = sales.find(s => s.customerPhone && s.customerPhone.replace(/\D/g, '') === cleanPhone);
+      setLastMatchingSaleForEditing(match || null);
+    } else {
+      setLastMatchingSaleForEditing(null);
+    }
+  }, [deliveryClientPhoneEditing, sales]);
 
   const [fairs, setFairs] = useState<any[]>([]);
   const [activeFair, setActiveFair] = useState<any | null>(null);
@@ -184,6 +209,13 @@ export default function Sales() {
       setLoading(false);
     });
 
+    const catQ = query(collection(db, 'produce_catalog'), orderBy('name', 'asc'));
+    const catUnsubscribe = onSnapshot(catQ, (snapshot) => {
+      setProduceCatalog(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any)));
+    }, (error) => {
+      console.error("Erro ao carregar catálogo de produtos:", error);
+    });
+
     const fairsQ = query(collection(db, 'fairs'), orderBy('date', 'desc'));
     const fairsUnsubscribe = onSnapshot(fairsQ, (snapshot) => {
       const allFairs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -202,20 +234,34 @@ export default function Sales() {
       prodUnsubscribe(); 
       custUnsubscribe(); 
       fairsUnsubscribe();
+      catUnsubscribe();
     };
   }, []);
 
-  const handleAddItem = (id: string, type: 'inventory' | 'production') => {
-    const item = type === 'inventory' 
-      ? inventory.find(i => i.id === id)
-      : harvestedProductions.find(p => p.id === id);
-    
-    if (!item) return;
+  const handleAddItem = (id: string, type: 'inventory' | 'production' | 'catalog') => {
+    let name = '';
+    let price = 0;
 
-    const name = type === 'inventory' ? (item as InventoryItem).name : (item as Production).crop;
-    const price = type === 'inventory' ? ((item as InventoryItem).price || 0) : 0;
+    if (type === 'inventory') {
+      const item = inventory.find(i => i.id === id);
+      if (!item) return;
+      name = item.name;
+      price = item.price || 0;
+    } else if (type === 'production') {
+      const item = harvestedProductions.find(p => p.id === id);
+      if (!item) return;
+      name = item.crop;
+      price = 0;
+    } else if (type === 'catalog') {
+      const item = produceCatalog.find(c => c.id === id);
+      if (!item) return;
+      name = item.name;
+      price = item.defaultPrice || 0;
+    } else {
+      return;
+    }
+
     const existing = selectedItems.find(si => si.itemId === id);
-    
     if (existing) {
       setSelectedItems(selectedItems.map(si => 
         si.itemId === id ? { ...si, quantity: si.quantity + 1 } : si
@@ -375,17 +421,30 @@ export default function Sales() {
     }
   };
 
-  const handleAddDeliveryItem = (id: string, type: 'inventory' | 'production') => {
-    const item = type === 'inventory' 
-      ? inventory.find(i => i.id === id)
-      : harvestedProductions.find(p => p.id === id);
-    
-    if (!item) return;
+  const handleAddDeliveryItem = (id: string, type: 'inventory' | 'production' | 'catalog') => {
+    let name = '';
+    let price = 0;
 
-    const name = type === 'inventory' ? (item as InventoryItem).name : (item as Production).crop;
-    const price = type === 'inventory' ? ((item as InventoryItem).price || 0) : 0;
+    if (type === 'inventory') {
+      const item = inventory.find(i => i.id === id);
+      if (!item) return;
+      name = item.name;
+      price = item.price || 0;
+    } else if (type === 'production') {
+      const item = harvestedProductions.find(p => p.id === id);
+      if (!item) return;
+      name = item.crop;
+      price = 0;
+    } else if (type === 'catalog') {
+      const item = produceCatalog.find(c => c.id === id);
+      if (!item) return;
+      name = item.name;
+      price = item.defaultPrice || 0;
+    } else {
+      return;
+    }
+
     const existing = deliverySelectedItems.find(si => si.itemId === id);
-    
     if (existing) {
       setDeliverySelectedItems(deliverySelectedItems.map(si => 
         si.itemId === id ? { ...si, quantity: si.quantity + 1 } : si
@@ -495,12 +554,23 @@ export default function Sales() {
           let productionId = null;
 
           const invRef = doc(db, 'inventory', item.itemId);
-          const invSnap = await getDoc(invRef);
+          let invSnap = await getDoc(invRef);
+          let targetInvRef = invRef;
+
+          if (!invSnap.exists()) {
+            // Check if there is an inventory item with the same name
+            const invByNameQ = query(collection(db, 'inventory'), where('name', '==', item.name), limit(1));
+            const invByNameSnap = await getDocs(invByNameQ);
+            if (!invByNameSnap.empty) {
+              invSnap = invByNameSnap.docs[0];
+              targetInvRef = doc(db, 'inventory', invSnap.id);
+            }
+          }
           
           if (invSnap.exists()) {
             const invData = invSnap.data() as InventoryItem;
             itemCost = invData.costPrice || 0;
-            await updateDoc(invRef, {
+            await updateDoc(targetInvRef, {
               quantity: increment(-item.quantity),
               lastUpdated: serverTimestamp()
             });
@@ -523,12 +593,31 @@ export default function Sales() {
             }
           } else {
             const prodRef = doc(db, 'production', item.itemId);
-            const prodSnap = await getDoc(prodRef);
+            let prodSnap = await getDoc(prodRef);
+            let targetProdRef = prodRef;
+
+            if (!prodSnap.exists()) {
+              // Check if there is a production record with the same crop name
+              const prodByCropQ = query(
+                collection(db, 'production'),
+                where('crop', '==', item.name),
+                where('status', '==', 'harvested'),
+                where('remainingQuantity', '>', 0),
+                orderBy('harvestDate', 'asc'),
+                limit(1)
+              );
+              const prodByCropSnap = await getDocs(prodByCropQ);
+              if (!prodByCropSnap.empty) {
+                prodSnap = prodByCropSnap.docs[0];
+                targetProdRef = doc(db, 'production', prodSnap.id);
+              }
+            }
+
             if (prodSnap.exists()) {
               const prodData = prodSnap.data() as Production;
               itemCost = prodData.unitCost || 0;
               productionId = prodSnap.id;
-              await updateDoc(prodRef, {
+              await updateDoc(targetProdRef, {
                 remainingQuantity: increment(-item.quantity)
               });
             }
@@ -946,7 +1035,7 @@ export default function Sales() {
       </header>
 
       {/* Tabs Seletoras */}
-      <div className="flex bg-slate-100 p-1 rounded-2xl w-full max-w-2xl shadow-sm border border-slate-200">
+      <div className="flex bg-slate-100 p-1 rounded-2xl w-full max-w-3xl shadow-sm border border-slate-200">
         <button
           onClick={() => setActiveTab('individual')}
           className={cn(
@@ -987,6 +1076,20 @@ export default function Sales() {
           <Truck size={15} />
           <span className="text-[11px] sm:text-xs md:text-sm font-black">
             <span className="hidden md:inline">Venda </span>Delivery
+          </span>
+        </button>
+        <button
+          onClick={() => setActiveTab('colheita')}
+          className={cn(
+            "flex-1 flex items-center justify-center gap-1.5 md:gap-2 py-3 rounded-xl transition-all cursor-pointer",
+            activeTab === 'colheita' 
+              ? "bg-white text-emerald-700 shadow-md" 
+              : "text-slate-500 hover:text-slate-800"
+          )}
+        >
+          <ClipboardList size={15} />
+          <span className="text-[11px] sm:text-xs md:text-sm font-black">
+            Lista <span className="hidden md:inline">de Colheita</span>
           </span>
         </button>
       </div>
@@ -1306,6 +1409,42 @@ export default function Sales() {
                   onChange={(e) => setDeliveryClientPhone(e.target.value)}
                   className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-semibold"
                 />
+                
+                <AnimatePresence>
+                  {lastMatchingSaleForDelivery && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="bg-emerald-50 border border-emerald-150 p-3.5 rounded-xl space-y-2 mt-1.5 shadow-sm"
+                    >
+                      <div className="flex items-start gap-2 text-xs font-bold text-emerald-800">
+                        <AlertTriangle size={15} className="shrink-0 text-emerald-600 mt-0.5" />
+                        <div>
+                          <span>Encontramos dados de um pedido anterior de <b>{lastMatchingSaleForDelivery.customerName}</b> para este telefone.</span>
+                          {lastMatchingSaleForDelivery.deliveryAddress && (
+                            <span className="block text-[10px] text-emerald-600 mt-1 font-medium truncate">Endereço: {lastMatchingSaleForDelivery.deliveryAddress}</span>
+                          )}
+                          {lastMatchingSaleForDelivery.observations && (
+                            <span className="block text-[10px] text-emerald-600 font-medium truncate">Obs: {lastMatchingSaleForDelivery.observations}</span>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeliveryClientName(lastMatchingSaleForDelivery.customerName);
+                          if (lastMatchingSaleForDelivery.deliveryAddress) setDeliveryAddress(lastMatchingSaleForDelivery.deliveryAddress);
+                          if (lastMatchingSaleForDelivery.observations) setDeliveryObservations(lastMatchingSaleForDelivery.observations);
+                          setLastMatchingSaleForDelivery(null); // Clear suggestion after pulling
+                        }}
+                        className="w-full py-1.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[11px] rounded-lg transition-colors cursor-pointer"
+                      >
+                        Puxar Nome, Endereço e Observações
+                      </button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
 
               {/* Endereço */}
@@ -1378,7 +1517,7 @@ export default function Sales() {
                     2. Escolha os Produtos
                   </h4>
                   <span className="text-[10px] bg-slate-100 text-slate-600 px-2.5 py-0.5 rounded-full font-bold">
-                    Estoque de Expedição (Horta)
+                    Catálogo de Produtos
                   </span>
                 </div>
 
@@ -1394,43 +1533,46 @@ export default function Sales() {
                   />
                 </div>
 
-                {/* Lista de produtos clicáveis em formato de lista */}
-                <div className="flex flex-col gap-2 max-h-64 overflow-y-auto p-1.5 border border-slate-100 rounded-2xl bg-slate-50/50 scrollbar-thin">
-                  {inventory
-                    .filter(item => item.type === 'dispatch' && !isPeUnitOrName(item) && !isMuda(item) && item.name.toLowerCase().includes(productSearchTerm.toLowerCase()))
-                    .map(item => (
-                      <div
-                        key={item.id}
-                        className="flex items-center justify-between p-2.5 sm:p-3 rounded-xl bg-white hover:bg-emerald-50/20 border border-slate-100/90 shadow-sm gap-3 transition-colors"
-                      >
-                        <div className="flex-1 min-w-0">
-                          <span className="text-xs sm:text-sm font-black text-slate-800 block truncate">{item.name}</span>
-                          <div className="flex flex-wrap items-center gap-x-2 text-[10px] text-slate-500 mt-0.5">
-                            <span className="font-semibold">Estoque: <b className="text-slate-700">{item.quantity} {formatUnit(item.unit, item.quantity)}</b></span>
-                            <span className="text-slate-300">•</span>
-                            {item.price !== undefined ? (
-                              <span className="font-extrabold text-emerald-600">R$ {item.price.toFixed(2)}/{formatUnit(item.unit)}</span>
-                            ) : (
-                              <span className="text-slate-400 font-medium">Sem preço</span>
-                            )}
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleAddDeliveryItem(item.id, 'inventory')}
-                          className="shrink-0 px-3 py-1.5 sm:py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-extrabold text-xs rounded-xl transition-all flex items-center gap-1 cursor-pointer active:scale-95 border border-emerald-100/50"
+                {/* Lista de produtos do catálogo */}
+                <div className="space-y-2">
+                  <span className="text-xs font-black uppercase text-slate-400 tracking-wider">Produtos do Catálogo de Produção</span>
+                  <div className="flex flex-col gap-2 max-h-96 overflow-y-auto p-1.5 border border-slate-100 rounded-2xl bg-slate-50/50 scrollbar-thin">
+                    {produceCatalog
+                      .filter(item => item.name.toLowerCase().includes(productSearchTerm.toLowerCase()))
+                      .map(item => (
+                        <div
+                          key={item.id}
+                          className="flex items-center justify-between p-2.5 sm:p-3 rounded-xl bg-white hover:bg-emerald-50/20 border border-slate-100/90 shadow-sm gap-3 transition-colors"
                         >
-                          <Plus size={13} className="stroke-[3]" />
-                          <span className="hidden sm:inline">Adicionar</span>
-                          <span className="sm:hidden">Add</span>
-                        </button>
+                          <div className="flex-1 min-w-0">
+                            <span className="text-xs sm:text-sm font-black text-slate-800 block truncate">{item.name}</span>
+                            <div className="flex flex-wrap items-center gap-x-2 text-[10px] text-slate-500 mt-0.5">
+                              <span className="font-semibold text-slate-400">Unidade: <b className="text-slate-600">{formatUnit(item.unit)}</b></span>
+                              <span className="text-slate-300">•</span>
+                              {item.defaultPrice !== undefined ? (
+                                <span className="font-extrabold text-emerald-600">R$ {item.defaultPrice.toFixed(2)}/{formatUnit(item.unit)}</span>
+                              ) : (
+                                <span className="text-slate-400 font-medium">Sem preço padrão</span>
+                              )}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleAddDeliveryItem(item.id, 'catalog')}
+                            className="shrink-0 px-3 py-1.5 sm:py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-extrabold text-xs rounded-xl transition-all flex items-center gap-1 cursor-pointer active:scale-95 border border-emerald-100/50"
+                          >
+                            <Plus size={13} className="stroke-[3]" />
+                            <span className="hidden sm:inline">Adicionar</span>
+                            <span className="sm:hidden">Add</span>
+                          </button>
+                        </div>
+                      ))}
+                    {produceCatalog.filter(item => item.name.toLowerCase().includes(productSearchTerm.toLowerCase())).length === 0 && (
+                      <div className="col-span-full py-6 text-center text-slate-400 text-xs font-medium">
+                        Nenhum produto cadastrado no catálogo de produção com este nome.
                       </div>
-                    ))}
-                  {inventory.filter(item => item.type === 'dispatch' && !isPeUnitOrName(item) && !isMuda(item) && item.name.toLowerCase().includes(productSearchTerm.toLowerCase())).length === 0 && (
-                    <div className="col-span-full py-8 text-center text-slate-400 text-xs font-medium">
-                      Nenhum produto cadastrado com este nome na Horta (Expedição).
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -1535,6 +1677,14 @@ export default function Sales() {
             </div>
           </div>
         </div>
+      )}
+
+      {activeTab === 'colheita' && (
+        <HarvestReport
+          sales={sales}
+          produceCatalog={produceCatalog}
+          inventory={inventory}
+        />
       )}
 
       {activeTab === 'feira' && (
@@ -2046,6 +2196,42 @@ export default function Sales() {
                           onChange={(e) => setDeliveryClientPhoneEditing(e.target.value)}
                           className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-semibold text-slate-800"
                         />
+                        
+                        <AnimatePresence>
+                          {lastMatchingSaleForEditing && (
+                            <motion.div
+                              initial={{ opacity: 0, y: -10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: -10 }}
+                              className="bg-emerald-50 border border-emerald-150 p-3.5 rounded-xl space-y-2 mt-1.5 shadow-sm"
+                            >
+                              <div className="flex items-start gap-2 text-xs font-bold text-emerald-800">
+                                <AlertTriangle size={15} className="shrink-0 text-emerald-600 mt-0.5" />
+                                <div>
+                                  <span>Encontramos dados de um pedido anterior de <b>{lastMatchingSaleForEditing.customerName}</b> para este telefone.</span>
+                                  {lastMatchingSaleForEditing.deliveryAddress && (
+                                    <span className="block text-[10px] text-emerald-600 mt-1 font-medium truncate">Endereço: {lastMatchingSaleForEditing.deliveryAddress}</span>
+                                  )}
+                                  {lastMatchingSaleForEditing.observations && (
+                                    <span className="block text-[10px] text-emerald-600 font-medium truncate">Obs: {lastMatchingSaleForEditing.observations}</span>
+                                  )}
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setCustomCustomerNameEditing(lastMatchingSaleForEditing.customerName);
+                                  if (lastMatchingSaleForEditing.deliveryAddress) setDeliveryAddressEditing(lastMatchingSaleForEditing.deliveryAddress);
+                                  if (lastMatchingSaleForEditing.observations) setDeliveryObservationsEditing(lastMatchingSaleForEditing.observations);
+                                  setLastMatchingSaleForEditing(null); // Clear suggestion after pulling
+                                }}
+                                className="w-full py-1.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[11px] rounded-lg transition-colors cursor-pointer"
+                              >
+                                Puxar Nome, Endereço e Observações
+                              </button>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
                       </div>
 
                       {/* Delivery Date */}
@@ -2113,22 +2299,44 @@ export default function Sales() {
                   )}
 
                   <div className="space-y-4">
-                    <label className="text-sm font-bold text-slate-700 ml-1">Produtos da Horta (Estoque de Expedição)</label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto p-2 border border-slate-100 rounded-xl">
-                      {inventory.filter(item => item.type === 'dispatch' && !isPeUnitOrName(item) && !isMuda(item)).map(item => (
-                        <button
-                          key={item.id}
-                          type="button"
-                          onClick={() => handleAddItem(item.id, 'inventory')}
-                          className="flex items-center justify-between p-3 rounded-xl bg-slate-50 hover:bg-emerald-50 hover:border-emerald-200 border border-transparent transition-all text-left"
-                        >
-                          <div className="flex flex-col">
-                            <span className="text-sm font-semibold text-slate-700">{item.name}</span>
-                            <span className="text-[10px] text-slate-400">Qtd: {item.quantity} {formatUnit(item.unit, item.quantity)}</span>
-                          </div>
-                          <Plus size={16} className="text-emerald-600" />
-                        </button>
-                      ))}
+                    <div className="space-y-2">
+                      <label className="text-sm font-bold text-slate-700 ml-1 block">Produtos da Horta (Estoque de Expedição)</label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto p-2 border border-slate-100 rounded-xl bg-slate-50/50">
+                        {inventory.filter(item => item.type === 'dispatch' && !isPeUnitOrName(item) && !isMuda(item)).map(item => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => handleAddItem(item.id, 'inventory')}
+                            className="flex items-center justify-between p-2.5 rounded-xl bg-white hover:bg-emerald-50 hover:border-emerald-200 border border-slate-200 transition-all text-left"
+                          >
+                            <div className="flex flex-col min-w-0">
+                              <span className="text-xs font-bold text-slate-800 truncate">{item.name}</span>
+                              <span className="text-[10px] text-slate-400">Qtd: {item.quantity} {formatUnit(item.unit, item.quantity)}</span>
+                            </div>
+                            <Plus size={14} className="text-emerald-600 shrink-0" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-sm font-bold text-slate-700 ml-1 block">Catálogo de Produtos (Produção)</label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto p-2 border border-slate-100 rounded-xl bg-slate-50/50">
+                        {produceCatalog.map(item => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => handleAddItem(item.id, 'catalog')}
+                            className="flex items-center justify-between p-2.5 rounded-xl bg-white hover:bg-emerald-50 hover:border-emerald-200 border border-slate-200 transition-all text-left"
+                          >
+                            <div className="flex flex-col min-w-0">
+                              <span className="text-xs font-bold text-slate-800 truncate">{item.name}</span>
+                              <span className="text-[10px] text-slate-400">Preço: R$ {(item.defaultPrice || 0).toFixed(2)}/{formatUnit(item.unit)}</span>
+                            </div>
+                            <Plus size={14} className="text-emerald-600 shrink-0" />
+                          </button>
+                        ))}
+                      </div>
                     </div>
 
                     <div className="space-y-2">

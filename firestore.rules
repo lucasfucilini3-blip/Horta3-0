@@ -173,6 +173,15 @@ service cloud.firestore {
              data.items is list;
     }
 
+    function isValidProduceCatalogItem(data) {
+      return data.keys().hasAll(['name', 'category', 'unit', 'estimatedDaysToHarvest', 'defaultPrice']) &&
+             data.name is string && data.name.size() > 0 &&
+             data.category is string &&
+             data.unit is string &&
+             data.estimatedDaysToHarvest is number &&
+             data.defaultPrice is number;
+    }
+
     // ===============================================================
     // Match Rules
     // ===============================================================
@@ -231,7 +240,7 @@ service cloud.firestore {
     match /production/{productionId} {
       allow read: if isAuthenticated();
       allow create, update: if isOwner() || ((hasPermission('canManageProduction') || hasPermission('canManageSales')) && isValidProduction(request.resource.data));
-      allow delete: if isOwner();
+      allow delete: if isAuthenticated();
     }
 
     match /categories/{categoryId} {
@@ -259,6 +268,10 @@ service cloud.firestore {
       allow read: if isAuthenticated();
       allow create, update: if isOwner() || (hasPermission('canManageSales') && isValidFair(request.resource.data));
       allow delete: if isOwner();
+    }
+
+    match /produce_catalog/{catalogId} {
+      allow read, write: if isAuthenticated();
     }
 
     match /system/{systemId} {

@@ -216,7 +216,7 @@ service cloud.firestore {
     match /inventory_history/{historyId} {
       allow read: if isAuthenticated();
       allow create: if isOwner() || (isAuthenticated() && (hasPermission('canManageInventory') || hasPermission('canManageSales') || hasPermission('canManageProduction')));
-      allow update, delete: if isOwner();
+      allow update, delete: if isOwner() || (isAuthenticated() && (hasPermission('canManageInventory') || hasPermission('canManageProduction')));
     }
 
     match /sales/{saleId} {
@@ -257,7 +257,7 @@ service cloud.firestore {
     match /bed_records/{recordId} {
       allow read: if isAuthenticated();
       allow create, update: if isOwner() || (hasPermission('canManageProduction') && isValidBedRecord(request.resource.data));
-      allow delete: if isOwner();
+      allow delete: if isOwner() || hasPermission('canManageProduction');
     }
 
     match /backups/{backupId} {

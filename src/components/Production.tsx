@@ -669,11 +669,10 @@ export default function ProductionComponent() {
 
     if (matchingCatalogItem) {
       setSelectedCatalogItemId(matchingCatalogItem.id);
-      setHarvestProductMode('existing');
     } else {
       setSelectedCatalogItemId('');
-      setHarvestProductMode('new');
     }
+    setHarvestProductMode('existing');
   };
 
   // Handle harvest submission
@@ -737,6 +736,8 @@ export default function ProductionComponent() {
 
       // Integrate into inventory if requested
       if (addToInventory) {
+        const incrementQty = pkgs > 0 ? pkgs : qty;
+
         if (harvestProductMode === 'existing') {
           if (!selectedCatalogItemId) {
             alert('Por favor, selecione um produto do catálogo!');
@@ -756,27 +757,45 @@ export default function ProductionComponent() {
             item => item.type === 'dispatch' && item.name.toLowerCase() === catalogItem.name.toLowerCase()
           );
 
+          let targetItemId = '';
+
           if (existingInventoryItem) {
             // Increment quantity of existing inventory item
             const itemRef = doc(db, 'inventory', existingInventoryItem.id);
             await updateDoc(itemRef, {
-              quantity: increment(qty),
+              quantity: increment(incrementQty),
               lastUpdated: serverTimestamp()
             });
+            targetItemId = existingInventoryItem.id;
           } else {
             // Create a new inventory item for this catalog product
-            await addDoc(collection(db, 'inventory'), {
+            const docRef = await addDoc(collection(db, 'inventory'), {
               name: catalogItem.name,
               type: 'dispatch',
               category: catalogItem.category || 'Hortaliças',
-              quantity: qty,
+              quantity: incrementQty,
               unit: catalogItem.unit || 'un',
               price: catalogItem.defaultPrice || 0,
               costPrice: 0,
               minStock: 10,
               lastUpdated: serverTimestamp()
             });
+            targetItemId = docRef.id;
           }
+
+          // Register in inventory history
+          await addDoc(collection(db, 'inventory_history'), {
+            itemId: targetItemId,
+            itemName: catalogItem.name,
+            quantity: incrementQty,
+            unit: catalogItem.unit || 'un',
+            costPrice: 0,
+            price: catalogItem.defaultPrice || 0,
+            type: 'harvest',
+            description: `Colheita no canteiro ${harvestingItem.bed}: ${qty} ${harvestingItem.unit || 'un'} colhidos${pkgs > 0 ? `, rendendo ${pkgs} pacotes no estoque.` : ''}`,
+            date: serverTimestamp()
+          });
+
         } else {
           // Create new dispatch item in inventory on the fly
           if (!newProductName.trim()) {
@@ -785,16 +804,29 @@ export default function ProductionComponent() {
             return;
           }
           
-          await addDoc(collection(db, 'inventory'), {
+          const docRef = await addDoc(collection(db, 'inventory'), {
             name: newProductName.trim(),
             type: 'dispatch',
             category: newProductCategory.trim() || 'Hortaliças',
-            quantity: qty,
+            quantity: incrementQty,
             unit: newProductUnit,
             price: Number(newProductPrice) || 0,
             costPrice: Number(newProductCostPrice) || 0,
             minStock: Number(newProductMinStock) || 0,
             lastUpdated: serverTimestamp()
+          });
+
+          // Register in inventory history
+          await addDoc(collection(db, 'inventory_history'), {
+            itemId: docRef.id,
+            itemName: newProductName.trim(),
+            quantity: incrementQty,
+            unit: newProductUnit,
+            costPrice: Number(newProductCostPrice) || 0,
+            price: Number(newProductPrice) || 0,
+            type: 'harvest',
+            description: `Colheita no canteiro ${harvestingItem.bed}: ${qty} ${harvestingItem.unit || 'un'} colhidos${pkgs > 0 ? `, rendendo ${pkgs} pacotes no estoque.` : ''}`,
+            date: serverTimestamp()
           });
         }
       }

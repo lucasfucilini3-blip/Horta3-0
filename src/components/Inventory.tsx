@@ -534,6 +534,15 @@ export default function Inventory() {
     }
   };
 
+  const handleDeleteHistory = async (id: string) => {
+    if (!confirm('Deseja realmente excluir permanentemente este lançamento do histórico de movimentações?')) return;
+    try {
+      await firestoreDeleteDoc(doc(db, 'inventory_history', id));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'inventory_history');
+    }
+  };
+
   const handleAddCategory = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
@@ -1191,12 +1200,13 @@ export default function Inventory() {
                     <th className="px-6 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">Preço Ref.</th>
                     <th className="px-6 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">Valor Total</th>
                     <th className="px-6 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider">Detalhamento / Histórico</th>
+                    <th className="px-6 py-3.5 text-xs font-bold text-slate-500 uppercase tracking-wider text-center">Ações</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {loadingHistory ? (
                     <tr>
-                      <td colSpan={7} className="text-center py-12">
+                      <td colSpan={8} className="text-center py-12">
                         <div className="flex flex-col items-center justify-center gap-3">
                           <div className="w-8 h-8 rounded-full border-4 border-emerald-500 border-t-transparent animate-spin" />
                           <span className="text-sm font-semibold text-slate-500">Buscando histórico na nuvem...</span>
@@ -1205,7 +1215,7 @@ export default function Inventory() {
                     </tr>
                   ) : filteredHistory.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-6 py-12 text-center text-slate-400 italic font-semibold">
+                      <td colSpan={8} className="px-6 py-12 text-center text-slate-400 italic font-semibold">
                         Nenhuma movimentação de estoque encontrada para os filtros ativos.
                       </td>
                     </tr>
@@ -1292,6 +1302,20 @@ export default function Inventory() {
                                 </span>
                               )}
                             </div>
+                          </td>
+                          <td className="px-6 py-4 text-center whitespace-nowrap">
+                            {!log.id.startsWith('trans-') && !log.id.startsWith('prod-') ? (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteHistory(log.id)}
+                                className="p-1.5 text-rose-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer inline-flex items-center justify-center"
+                                title="Excluir Lançamento"
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            ) : (
+                              <span className="text-slate-300 text-xs">-</span>
+                            )}
                           </td>
                         </tr>
                       );

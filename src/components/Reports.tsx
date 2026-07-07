@@ -3,9 +3,9 @@ import { collection, query, onSnapshot, orderBy, limit } from 'firebase/firestor
 import { db } from '../firebase';
 import { Sale, Transaction, Production, Customer } from '../types';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Cell, PieChart, Pie, Legend } from 'recharts';
-import { format, subDays, startOfDay, endOfDay, isWithinInterval } from 'date-fns';
+import { format, subDays, startOfDay, endOfDay, isWithinInterval, startOfWeek, endOfWeek, startOfMonth, endOfMonth } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import { BarChart3, TrendingUp, TrendingDown, DollarSign, ShoppingBag, PieChart as PieChartIcon, Activity, Filter, Calendar, Search, Printer, User, Package, Sprout, Clock, Target, ClipboardList } from 'lucide-react';
+import { BarChart3, TrendingUp, TrendingDown, DollarSign, ShoppingBag, PieChart as PieChartIcon, Activity, Filter, Calendar, Search, Printer, User, Package, Sprout, Clock, Target, ClipboardList, Tag } from 'lucide-react';
 import { useAuth, handleFirestoreError, OperationType, cn } from '../App';
 
 export default function Reports() {
@@ -14,7 +14,14 @@ export default function Reports() {
   const [productions, setProductions] = useState<Production[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeReport, setActiveReport] = useState<'general' | 'operational' | 'customer' | 'product' | 'pending_deliveries' | 'receivables'>('general');
+  const [activeReport, setActiveReport] = useState<'general' | 'operational' | 'customer' | 'product' | 'pending_deliveries' | 'receivables' | 'expenses'>('general');
+
+  // Filters for Expense report
+  const [expenseFilterPreset, setExpenseFilterPreset] = useState<'week' | 'month' | 'custom'>('month');
+  const [expenseDateStart, setExpenseDateStart] = useState(format(subDays(new Date(), 30), 'yyyy-MM-dd'));
+  const [expenseDateEnd, setExpenseDateEnd] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [expenseSearchQuery, setExpenseSearchQuery] = useState('');
+  const [expenseSelectedCategory, setExpenseSelectedCategory] = useState<string>('all');
 
   // Filters for detailed report
   const [dateStart, setDateStart] = useState(format(subDays(new Date(), 30), 'yyyy-MM-dd'));
@@ -567,6 +574,116 @@ export default function Reports() {
     .sort((a, b) => b.value - a.value)
     .slice(0, 5);
 
+  // Calculation block for the Expense Report
+  const filteredExpenses = transactions.filter(t => {
+    if (t.type !== 'expense') return false;
+    const tDate = parseFirebaseDate(t.date);
+    if (!tDate) return false;
+
+    // Filter by Date Preset
+    const today = new Date();
+    let matchesDate = false;
+    if (expenseFilterPreset === 'week') {
+      const start = startOfWeek(today, { weekStartsOn: 1 }); // 1 is Monday in BR
+      const end = endOfWeek(today, { weekStartsOn: 1 });
+      matchesDate = tDate >= start && tDate <= end;
+    } else if (expenseFilterPreset === 'month') {
+      const start = startOfMonth(today);
+      const end = endOfMonth(today);
+      matchesDate = tDate >= start && tDate <= end;
+    } else if (expenseFilterPreset === 'custom') {
+      let isAfterStart = true;
+      let isBeforeEnd = true;
+      if (expenseDateStart) {
+        const start = startOfDay(new Date(expenseDateStart + 'T00:00:00'));
+        isAfterStart = tDate >= start;
+      }
+      if (expenseDateEnd) {
+        const end = endOfDay(new Date(expenseDateEnd + 'T23:59:59'));
+        isBeforeEnd = tDate <= end;
+      }
+      matchesDate = isAfterStart && isBeforeEnd;
+    }
+
+    // Filter by category
+    const matchesCategory = expenseSelectedCategory === 'all' || t.category === expenseSelectedCategory;
+
+    // Filter by search query
+    const searchLower = expenseSearchQuery.trim().toLowerCase();
+    const matchesSearch = !searchLower || 
+      (t.description || '').toLowerCase().includes(searchLower) ||
+      (t.category || '').toLowerCase().includes(searchLower);
+
+    return matchesDate && matchesCategory && matchesSearch;
+  });
+
+  // Calculate dynamic list of categories present in the current filter selection or general
+  const expenseCategoriesList = Array.from(new Set(
+    transactions
+      .filter(t => t.type === 'expense' && t.category)
+      .map(t => t.category)
+  )).sort();
+
+  // Sort filtered expenses chronologically (or reverse for table list)
+  const sortedExpensesTable = [...filteredExpenses].sort((a, b) => {
+    const d1 = parseFirebaseDate(a.date) || new Date(0);
+    const d2 = parseFirebaseDate(b.date) || new Date(0);
+    return d2.getTime() - d1.getTime(); // newest first for listing
+  });
+
+  // Calculate stats
+  const totalExpenseFiltered = filteredExpenses.reduce((acc, t) => acc + t.amount, 0);
+
+  // Daily Average
+  let expenseDiffDays = 1;
+  const todayVal = new Date();
+  if (expenseFilterPreset === 'week') {
+    expenseDiffDays = 7;
+  } else if (expenseFilterPreset === 'month') {
+    expenseDiffDays = new Date(todayVal.getFullYear(), todayVal.getMonth() + 1, 0).getDate();
+  } else if (expenseFilterPreset === 'custom') {
+    const start = new Date(expenseDateStart + 'T00:00:00');
+    const end = new Date(expenseDateEnd + 'T00:00:00');
+    const diffTime = Math.abs(end.getTime() - start.getTime());
+    expenseDiffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+  }
+  const expenseDailyAvg = totalExpenseFiltered / (expenseDiffDays || 1);
+
+  // Top Category
+  const expenseFilteredByCategoryMap = filteredExpenses.reduce((acc: { [key: string]: number }, t) => {
+    acc[t.category] = (acc[t.category] || 0) + t.amount;
+    return acc;
+  }, {});
+
+  const expenseCategoryChartData = Object.entries(expenseFilteredByCategoryMap)
+    .map(([name, value]) => ({ name, value: value as number }))
+    .sort((a, b) => b.value - a.value);
+
+  const topExpenseCategoryFiltered = expenseCategoryChartData[0] || { name: 'Nenhuma', value: 0 };
+
+  // Highest Single Expense
+  const maxExpenseFiltered = filteredExpenses.length > 0 
+    ? Math.max(...filteredExpenses.map(t => t.amount))
+    : 0;
+  const maxExpenseFilteredItem = filteredExpenses.find(t => t.amount === maxExpenseFiltered);
+
+  // Timeline grouping (Day by Day)
+  const expenseTimelineGrouped = filteredExpenses.reduce((acc: any[], t) => {
+    const d = parseFirebaseDate(t.date);
+    if (!d) return acc;
+    const dateStr = format(d, 'yyyy-MM-dd');
+    const displayStr = format(d, 'dd/MM');
+    const existing = acc.find(item => item.rawDate === dateStr);
+    if (existing) {
+      existing.amount += t.amount;
+    } else {
+      acc.push({ rawDate: dateStr, name: displayStr, amount: t.amount });
+    }
+    return acc;
+  }, []);
+
+  const expenseTimelineSorted = expenseTimelineGrouped.sort((a, b) => a.rawDate.localeCompare(b.rawDate));
+
   return (
     <>
       {/* Visualização de Tela (Oculta na impressão para layout limpo) */}
@@ -590,6 +707,7 @@ export default function Reports() {
         {[
           { id: 'general', label: 'Visão Geral', icon: Activity },
           { id: 'operational', label: 'Operacional', icon: Target },
+          { id: 'expenses', label: 'Despesas', icon: TrendingDown },
           { id: 'pending_deliveries', label: 'Entregas Pendentes', icon: ShoppingBag },
           { id: 'receivables', label: 'Valores a Receber', icon: DollarSign },
           { id: 'customer', label: 'Vendas por Cliente', icon: User },
@@ -1704,6 +1822,355 @@ export default function Reports() {
                 </tr>
               </tfoot>
             </table>
+          </div>
+        </div>
+      )}
+
+      {activeReport === 'expenses' && (
+        <div className="space-y-6">
+          {/* Header & Controls */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-6 border-b border-slate-100">
+              <div>
+                <h3 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+                  <TrendingDown className="text-rose-600" size={24} />
+                  Relatório de Despesas
+                </h3>
+                <p className="text-sm text-slate-500 mt-1">
+                  Análise de fluxo de despesas com filtros customizados de período.
+                </p>
+              </div>
+
+              {/* PDF Print Button */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => window.print()}
+                  className="flex items-center gap-2 bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-sm cursor-pointer"
+                >
+                  <Printer size={15} />
+                  Imprimir Despesas
+                </button>
+              </div>
+            </div>
+
+            {/* Filter controls row */}
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-4 pt-6">
+              {/* Preset Buttons */}
+              <div className="md:col-span-4 flex flex-col gap-1.5">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                  Período do Relatório
+                </label>
+                <div className="flex items-center gap-1.5 bg-slate-50 p-1 rounded-xl border border-slate-200">
+                  {[
+                    { id: 'week', label: 'Esta Semana' },
+                    { id: 'month', label: 'Este Mês' },
+                    { id: 'custom', label: 'Personalizado' },
+                  ].map((preset) => (
+                    <button
+                      key={preset.id}
+                      onClick={() => setExpenseFilterPreset(preset.id as any)}
+                      className={cn(
+                        "flex-1 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer text-center",
+                        expenseFilterPreset === preset.id
+                          ? "bg-white text-slate-900 shadow-xs border border-slate-200/50"
+                          : "text-slate-500 hover:text-slate-800"
+                      )}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Custom Date Inputs */}
+              {expenseFilterPreset === 'custom' && (
+                <div className="md:col-span-4 flex flex-col gap-1.5">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                    Intervalo Personalizado
+                  </label>
+                  <div className="flex items-center gap-1.5 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
+                    <input
+                      type="date"
+                      value={expenseDateStart}
+                      onChange={(e) => setExpenseDateStart(e.target.value)}
+                      className="bg-transparent text-xs font-bold text-slate-700 focus:outline-none border-0 p-0 pl-1 w-full"
+                    />
+                    <span className="text-slate-300 text-xs px-1">Até</span>
+                    <input
+                      type="date"
+                      value={expenseDateEnd}
+                      onChange={(e) => setExpenseDateEnd(e.target.value)}
+                      className="bg-transparent text-xs font-bold text-slate-700 focus:outline-none border-0 p-0 pl-1 w-full"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Category Dropdown */}
+              <div className={cn(
+                "flex flex-col gap-1.5",
+                expenseFilterPreset === 'custom' ? "md:col-span-2" : "md:col-span-4"
+              )}>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                  Filtrar Categoria
+                </label>
+                <select
+                  value={expenseSelectedCategory}
+                  onChange={(e) => setExpenseSelectedCategory(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-1 focus:ring-rose-500/20 focus:border-rose-500 h-[38px] cursor-pointer"
+                >
+                  <option value="all">Todas as Categorias</option>
+                  {expenseCategoriesList.map(cat => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Search input */}
+              <div className="md:col-span-4 flex flex-col gap-1.5">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                  Buscar por Palavra-chave
+                </label>
+                <div className="relative">
+                  <Search className="absolute left-3 top-2.5 text-slate-400" size={16} />
+                  <input
+                    type="text"
+                    placeholder="Buscar em descrição ou categoria..."
+                    value={expenseSearchQuery}
+                    onChange={(e) => setExpenseSearchQuery(e.target.value)}
+                    className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-1 focus:ring-rose-500/20 focus:border-rose-500 h-[38px]"
+                  />
+                  {expenseSearchQuery && (
+                    <button
+                      onClick={() => setExpenseSearchQuery('')}
+                      className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600"
+                    >
+                      X
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* KPI Dashboard */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* Total Expense KPI */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-start gap-4">
+              <div className="p-3 bg-rose-50 text-rose-600 rounded-xl">
+                <TrendingDown size={22} />
+              </div>
+              <div>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Total de Despesas</p>
+                <h4 className="text-xl font-black text-slate-900 mt-1 font-mono">
+                  R$ {totalExpenseFiltered.toFixed(2)}
+                </h4>
+                <p className="text-[9px] text-slate-400 mt-0.5">
+                  {filteredExpenses.length} lançamentos efetuados
+                </p>
+              </div>
+            </div>
+
+            {/* Daily Average KPI */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-start gap-4">
+              <div className="p-3 bg-amber-50 text-amber-600 rounded-xl">
+                <Clock size={22} />
+              </div>
+              <div>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Média Diária</p>
+                <h4 className="text-xl font-black text-slate-900 mt-1 font-mono">
+                  R$ {expenseDailyAvg.toFixed(2)}
+                </h4>
+                <p className="text-[9px] text-slate-400 mt-0.5">
+                  Distribuído em {expenseDiffDays} dias
+                </p>
+              </div>
+            </div>
+
+            {/* Top Category KPI */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-start gap-4">
+              <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
+                <Tag size={22} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Maior Categoria</p>
+                <h4 className="text-base font-black text-slate-900 mt-1 truncate" title={topExpenseCategoryFiltered.name}>
+                  {topExpenseCategoryFiltered.name}
+                </h4>
+                <p className="text-[9px] text-indigo-600 font-extrabold mt-0.5 font-mono">
+                  R$ {((topExpenseCategoryFiltered.value) as number).toFixed(2)}
+                </p>
+              </div>
+            </div>
+
+            {/* Highest Expense KPI */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-start gap-4">
+              <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
+                <DollarSign size={22} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Maior Despesa Única</p>
+                <h4 className="text-base font-black text-slate-900 mt-1 truncate" title={maxExpenseFilteredItem?.description}>
+                  {maxExpenseFilteredItem?.description || 'Nenhuma'}
+                </h4>
+                <p className="text-[9px] text-blue-600 font-extrabold mt-0.5 font-mono">
+                  R$ {maxExpenseFiltered.toFixed(2)}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Charts section */}
+          {filteredExpenses.length > 0 ? (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Evolution Chart */}
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                <h4 className="text-sm font-black text-slate-900 mb-4 uppercase tracking-wider flex items-center gap-1.5">
+                  <Activity size={16} className="text-rose-600" />
+                  Evolução das Despesas (Linha do Tempo)
+                </h4>
+                <div className="h-64 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={expenseTimelineSorted}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                      <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 10 }} />
+                      <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} />
+                      <Tooltip
+                        contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                        formatter={(val) => [`R$ ${Number(val).toFixed(2)}`, 'Despesa']}
+                      />
+                      <Bar dataKey="amount" name="Despesa" fill="#f43f5e" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              {/* Share Pie Chart */}
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col">
+                <h4 className="text-sm font-black text-slate-900 mb-4 uppercase tracking-wider flex items-center gap-1.5">
+                  <PieChartIcon size={16} className="text-indigo-600" />
+                  Divisão por Categoria
+                </h4>
+                <div className="h-64 w-full flex items-center justify-center relative">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={expenseCategoryChartData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={60}
+                        outerRadius={90}
+                        paddingAngle={5}
+                        dataKey="value"
+                      >
+                        {expenseCategoryChartData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                        formatter={(val) => `R$ ${Number(val).toFixed(2)}`}
+                      />
+                      <Legend verticalAlign="bottom" height={36} iconType="circle" iconSize={8} wrapperStyle={{ fontSize: '10px', fontWeight: 'bold' }} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-slate-50 border border-slate-150 p-12 text-center rounded-2xl">
+              <p className="text-slate-400 text-sm font-semibold italic">Sem dados suficientes de despesas para gerar gráficos.</p>
+            </div>
+          )}
+
+          {/* Details Table */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between flex-wrap gap-2">
+              <div>
+                <h4 className="text-sm font-black text-slate-900 uppercase tracking-wider">Lançamentos de Despesas</h4>
+                <p className="text-xs text-slate-500 mt-0.5">Lista discriminada das despesas correspondentes aos filtros aplicados.</p>
+              </div>
+
+              {/* CSV Export Button */}
+              {filteredExpenses.length > 0 && (
+                <button
+                  onClick={() => {
+                    const headers = 'Data,Descrição,Categoria,Valor (R$)\n';
+                    const rows = sortedExpensesTable.map(t => {
+                      const dStr = format(parseFirebaseDate(t.date) || new Date(), 'dd/MM/yyyy');
+                      const desc = `"${t.description.replace(/"/g, '""')}"`;
+                      const cat = `"${t.category.replace(/"/g, '""')}"`;
+                      const val = t.amount.toFixed(2);
+                      return `${dStr},${desc},${cat},${val}`;
+                    }).join('\n');
+                    const blob = new Blob([headers + rows], { type: 'text/csv;charset=utf-8;' });
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.setAttribute('href', url);
+                    link.setAttribute('download', `relatorio_despesas_${expenseFilterPreset}_${format(new Date(), 'yyyyMMdd')}.csv`);
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 rounded-xl text-[10px] font-bold uppercase transition-all cursor-pointer"
+                >
+                  Exportar CSV
+                </button>
+              )}
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-100 text-[10px] font-black uppercase tracking-wider text-slate-400">
+                    <th className="py-3 px-6">Data</th>
+                    <th className="py-3 px-6">Descrição</th>
+                    <th className="py-3 px-6">Categoria</th>
+                    <th className="py-3 px-6 text-right">Valor</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-xs">
+                  {sortedExpensesTable.map((t) => {
+                    const expDate = parseFirebaseDate(t.date);
+                    return (
+                      <tr key={t.id} className="hover:bg-slate-50/50 transition-colors">
+                        <td className="py-3.5 px-6 font-semibold text-slate-500 whitespace-nowrap">
+                          {expDate ? format(expDate, "dd/MM/yyyy") : 'Sem data'}
+                        </td>
+                        <td className="py-3.5 px-6 font-black text-slate-800">
+                          {t.description}
+                        </td>
+                        <td className="py-3.5 px-6">
+                          <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-bold text-[10px]">
+                            {t.category}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-6 text-right font-bold text-rose-600 font-mono">
+                          R$ {t.amount.toFixed(2)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {sortedExpensesTable.length === 0 && (
+                    <tr>
+                      <td colSpan={4} className="py-12 text-center text-slate-400 italic">
+                        Nenhuma despesa localizada para este período e filtros selecionados.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+                {sortedExpensesTable.length > 0 && (
+                  <tfoot className="bg-slate-900 text-white">
+                    <tr className="font-bold text-sm">
+                      <td colSpan={3} className="py-3 px-6 uppercase tracking-wider text-xs">Total Filtrado</td>
+                      <td className="py-3 px-6 text-right font-black font-mono text-emerald-400">
+                        R$ {totalExpenseFiltered.toFixed(2)}
+                      </td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </div>
           </div>
         </div>
       )}

@@ -173,13 +173,15 @@ export default function ProductionComponent() {
   // Harvest modal state
   const [harvestingItem, setHarvestingItem] = useState<Production | null>(null);
   const [harvestQty, setHarvestQty] = useState('');
+  const [harvestPackages, setHarvestPackages] = useState('');
   const [harvestDate, setHarvestDate] = useState(new Date().toISOString().split('T')[0]);
-  const [harvestType, setHarvestType] = useState<'partial' | 'final'>('final');
+  const [harvestType, setHarvestType] = useState<'partial' | 'final'>('partial');
   const [addToInventory, setAddToInventory] = useState(true);
 
   // States for matching or registering inventory products
   const [harvestProductMode, setHarvestProductMode] = useState<'existing' | 'new'>('existing');
   const [selectedInventoryItemId, setSelectedInventoryItemId] = useState<string>('');
+  const [selectedCatalogItemId, setSelectedCatalogItemId] = useState<string>('');
   const [newProductName, setNewProductName] = useState('');
   const [newProductPrice, setNewProductPrice] = useState('5.00');
   const [newProductCostPrice, setNewProductCostPrice] = useState('0.00');
@@ -639,8 +641,9 @@ export default function ProductionComponent() {
   const openHarvestDialog = (prod: Production) => {
     setHarvestingItem(prod);
     setHarvestQty(String(prod.quantityPlanted));
+    setHarvestPackages('');
     setHarvestDate(new Date().toISOString().split('T')[0]);
-    setHarvestType('final');
+    setHarvestType('partial');
     setAddToInventory(true);
     
     // Initialize product integration states
@@ -651,15 +654,24 @@ export default function ProductionComponent() {
     setNewProductMinStock('10');
     setNewProductCategory('Hortaliças');
 
-    // Find if there is an existing sellable item with the same name as the crop
-    const existingSellable = inventory.find(
-      item => item.type === 'dispatch' && item.name.toLowerCase() === prod.crop.toLowerCase()
+    // Find if there is a catalog product with the same name as the crop
+    let matchingCatalogItem = produceCatalog.find(
+      item => item.name.toLowerCase() === prod.crop.toLowerCase()
     );
-    if (existingSellable) {
-      setSelectedInventoryItemId(existingSellable.id);
+
+    // If not found and crop or bed has "alface roxa" (case-insensitive), try to find any catalog product containing "alface roxa"
+    const isAlfaceRoxa = prod.crop.toLowerCase().includes('alface roxa') || prod.bed.toLowerCase().includes('alface roxa');
+    if (!matchingCatalogItem && isAlfaceRoxa) {
+      matchingCatalogItem = produceCatalog.find(
+        item => item.name.toLowerCase().includes('alface roxa')
+      );
+    }
+
+    if (matchingCatalogItem) {
+      setSelectedCatalogItemId(matchingCatalogItem.id);
       setHarvestProductMode('existing');
     } else {
-      setSelectedInventoryItemId('');
+      setSelectedCatalogItemId('');
       setHarvestProductMode('new');
     }
   };
@@ -673,44 +685,98 @@ export default function ProductionComponent() {
       return;
     }
 
+    const pkgs = Number(harvestPackages) || 0;
+
     try {
       setLoading(true);
 
       const isFinal = harvestType === 'final';
       const newStatus = isFinal ? 'harvested' : 'growing';
+      const packagesText = pkgs > 0 ? ` (${pkgs} pacotes)` : '';
 
       const harvestLog = {
         date: Timestamp.fromDate(new Date(harvestDate)),
         description: isFinal 
-          ? `Colheita Final realizada: ${qty} ${harvestingItem.unit || 'unidades'}. Lote finalizado.` 
-          : `Colheita Parcial realizada: ${qty} ${harvestingItem.unit || 'unidades'}. Lote continua ativo para mais colheitas.`,
-        products: []
+          ? `Colheita Final realizada: ${qty} ${harvestingItem.unit || 'unidades'}${packagesText}. Lote finalizado.` 
+          : `Colheita Parcial realizada: ${qty} ${harvestingItem.unit || 'unidades'}${packagesText}. Lote continua ativo para mais colheitas.`,
+        products: [],
+        packages: pkgs > 0 ? pkgs : undefined
       };
 
       // Update production cycle in Firestore
       const prodRef = doc(db, 'production', harvestingItem.id);
-      await updateDoc(prodRef, {
+      const updatePayload: any = {
         status: newStatus,
         harvestDate: Timestamp.fromDate(new Date(harvestDate)),
         harvestQuantity: increment(qty),
         remainingQuantity: increment(qty),
         logs: [...(harvestingItem.logs || []), harvestLog]
+      };
+      
+      if (pkgs > 0) {
+        updatePayload.harvestPackages = increment(pkgs);
+      }
+
+      await updateDoc(prodRef, updatePayload);
+
+      // Register activity in bed records for clinical history sync
+      await addDoc(collection(db, 'bed_records'), {
+        bedId: harvestingItem.bed,
+        date: Timestamp.fromDate(new Date(harvestDate)),
+        crop: harvestingItem.crop,
+        activityType: 'harvest',
+        employeeName: profile?.displayName || 'Dono',
+        notes: `Colheita registrada na planilha de canteiros.${pkgs > 0 ? ` Rendimento: ${pkgs} pacotes.` : ''}`,
+        syncedToProduction: true,
+        harvestQuantity: qty,
+        harvestUnit: harvestingItem.unit || 'un',
+        harvestPackages: pkgs > 0 ? pkgs : undefined,
+        productionId: harvestingItem.id,
+        createdAt: serverTimestamp()
       });
 
       // Integrate into inventory if requested
       if (addToInventory) {
         if (harvestProductMode === 'existing') {
-          if (!selectedInventoryItemId) {
-            alert('Por favor, selecione um produto do estoque ou escolha cadastrar um novo!');
+          if (!selectedCatalogItemId) {
+            alert('Por favor, selecione um produto do catálogo!');
             setLoading(false);
             return;
           }
-          // Increment quantity of existing item
-          const itemRef = doc(db, 'inventory', selectedInventoryItemId);
-          await updateDoc(itemRef, {
-            quantity: increment(qty),
-            lastUpdated: serverTimestamp()
-          });
+
+          const catalogItem = produceCatalog.find(item => item.id === selectedCatalogItemId);
+          if (!catalogItem) {
+            alert('Produto do catálogo não encontrado!');
+            setLoading(false);
+            return;
+          }
+
+          // Check if this product already exists in inventory (type === 'dispatch')
+          const existingInventoryItem = inventory.find(
+            item => item.type === 'dispatch' && item.name.toLowerCase() === catalogItem.name.toLowerCase()
+          );
+
+          if (existingInventoryItem) {
+            // Increment quantity of existing inventory item
+            const itemRef = doc(db, 'inventory', existingInventoryItem.id);
+            await updateDoc(itemRef, {
+              quantity: increment(qty),
+              lastUpdated: serverTimestamp()
+            });
+          } else {
+            // Create a new inventory item for this catalog product
+            await addDoc(collection(db, 'inventory'), {
+              name: catalogItem.name,
+              type: 'dispatch',
+              category: catalogItem.category || 'Hortaliças',
+              quantity: qty,
+              unit: catalogItem.unit || 'un',
+              price: catalogItem.defaultPrice || 0,
+              costPrice: 0,
+              minStock: 10,
+              lastUpdated: serverTimestamp()
+            });
+          }
         } else {
           // Create new dispatch item in inventory on the fly
           if (!newProductName.trim()) {
@@ -1962,17 +2028,33 @@ export default function ProductionComponent() {
                   </p>
                 </div>
 
-                <div>
-                  <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1.5">
-                    Quantidade Colhida ({harvestingItem.unit || 'un'})
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={harvestQty}
-                    onChange={(e) => setHarvestQty(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-mono"
-                  />
+                <div className="grid grid-cols-2 gap-3.5">
+                  <div>
+                    <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1.5">
+                      Quantidade Colhida ({harvestingItem.unit || 'un'}) *
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={harvestQty}
+                      onChange={(e) => setHarvestQty(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1.5">
+                      Rendimento (Pacotes)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      placeholder="Ex: 100"
+                      value={harvestPackages}
+                      onChange={(e) => setHarvestPackages(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-mono"
+                    />
+                  </div>
                 </div>
 
                 <div>
@@ -2043,25 +2125,26 @@ export default function ProductionComponent() {
                     {harvestProductMode === 'existing' ? (
                       <div>
                         <label className="block text-[10px] font-bold uppercase text-slate-500 tracking-wider mb-1.5">
-                          Selecionar Produto Comercial
+                          Selecionar Produto do Catálogo
                         </label>
                         <select
-                          value={selectedInventoryItemId}
-                          onChange={(e) => setSelectedInventoryItemId(e.target.value)}
+                          value={selectedCatalogItemId}
+                          onChange={(e) => setSelectedCatalogItemId(e.target.value)}
                           className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
                         >
-                          <option value="">-- Selecione um produto cadastrado --</option>
-                          {inventory
-                            .filter(item => item.type === 'dispatch')
-                            .map(item => (
+                          <option value="">-- Selecione um produto do catálogo --</option>
+                          {produceCatalog.map(item => {
+                            const inInv = inventory.find(i => i.type === 'dispatch' && i.name.toLowerCase() === item.name.toLowerCase());
+                            return (
                               <option key={item.id} value={item.id}>
-                                {item.name} ({item.unit}) - Qtd atual: {item.quantity}
+                                {item.name} ({item.unit}) {inInv ? `- Estoque atual: ${inInv.quantity}` : '- Sem estoque'}
                               </option>
-                            ))}
+                            );
+                          })}
                         </select>
-                        {inventory.filter(item => item.type === 'dispatch').length === 0 && (
+                        {produceCatalog.length === 0 && (
                           <p className="text-[10px] text-amber-600 font-medium mt-1">
-                            Nenhum produto de vendas encontrado. Selecione "Cadastrar Novo" ao lado para registrar um produto!
+                            Nenhum produto cadastrado no catálogo. Vá até a aba "Catálogo de Cultivos" para cadastrar os produtos de venda!
                           </p>
                         )}
                       </div>

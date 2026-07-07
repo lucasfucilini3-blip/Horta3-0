@@ -58,6 +58,7 @@ export interface ProductionLog {
   date: any;
   description: string;
   products?: LogProduct[];
+  packages?: number;
 }
 
 export interface Production {
@@ -77,6 +78,7 @@ export interface Production {
   isContinuousHarvest?: boolean;
   harvestDate?: any;
   harvestQuantity?: number;
+  harvestPackages?: number;
   remainingQuantity?: number;
   totalCost?: number; // Custo total acumulado (insumos + outros)
   unitCost?: number; // Custo por unidade (totalCost / harvestQuantity)
@@ -161,6 +163,7 @@ export interface BedRecord {
   fertilizerDescription?: string; // Adubação realizada
   harvestQuantity?: number; // Quantidade colhida
   harvestUnit?: string; // Unidade da colheita (kg, mç, un, etc)
+  harvestPackages?: number; // Quantidade de pacotes da colheita
   quantityPlanted?: number; // Quantidade plantada
   unitPlanted?: string; // Unidade do plantio (mudas, sementes, etc)
   

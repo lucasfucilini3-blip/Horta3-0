@@ -81,7 +81,7 @@ export default function BedRecordsComponent() {
   const [fertilizerDescription, setFertilizerDescription] = useState('');
   const [quantity, setQuantity] = useState('');
   const [unit, setUnit] = useState('unidades');
-  const [bedHarvestType, setBedHarvestType] = useState<'partial' | 'final'>('final');
+  const [bedHarvestType, setBedHarvestType] = useState<'partial' | 'final'>('partial');
 
   const [employeeName, setEmployeeName] = useState(profile?.displayName || '');
   const [notes, setNotes] = useState('');
@@ -190,7 +190,7 @@ export default function BedRecordsComponent() {
     setFertilizerDescription('');
     setQuantity('');
     setUnit('unidades');
-    setBedHarvestType('final');
+    setBedHarvestType('partial');
     setNotes('');
     setSyncStatusMsg(null);
   };

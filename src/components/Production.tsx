@@ -1679,7 +1679,7 @@ export default function ProductionComponent() {
     <div className="min-h-screen bg-slate-50/70 p-4 md:p-8 font-sans text-slate-800">
       
       {/* 1. Header with Horta Brand Vibe */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6 no-print">
         <div>
           <span className="text-[10px] bg-emerald-100 text-emerald-800 border border-emerald-200 px-3 py-1 rounded-full font-extrabold uppercase tracking-widest">
             Horta & Produção
@@ -2597,7 +2597,7 @@ export default function ProductionComponent() {
       </AnimatePresence>
 
       {/* 4. Excel-Style Sheet Tabs & Controls */}
-      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden mb-6">
+      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden mb-6 no-print">
         
         {/* Excel style ribbon toolbar */}
         <div className="bg-slate-50 border-b border-slate-200 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -3470,32 +3470,62 @@ export default function ProductionComponent() {
                   @media print {
                     @page {
                       size: A4 ${sheetOrientation === 'landscape' ? 'landscape' : 'portrait'};
-                      margin: ${sheetOrientation === 'landscape' ? '0.8cm' : '1.2cm'} !important;
+                      margin: ${sheetOrientation === 'landscape' ? '0.6cm' : '1cm'} !important;
                     }
-                    /* Hide everything except the print-area container */
-                    body * {
-                      visibility: hidden !important;
-                      height: 0 !important;
-                      overflow: hidden !important;
-                      margin: 0 !important;
-                      padding: 0 !important;
+                    
+                    /* Hide sidebars, headers, navigation elements, configurators, buttons, etc. */
+                    .no-print,
+                    .print\\:hidden,
+                    aside,
+                    header,
+                    button,
+                    nav,
+                    .no-print-header {
+                      display: none !important;
                     }
-                    #print-area, #print-area * {
-                      visibility: visible !important;
-                      height: auto !important;
+
+                    /* Release layout/height boundaries on printing */
+                    html, body, #root, .min-h-screen, main, [class*="overflow-"], [class*="max-h-"], [class*="p-"] {
                       overflow: visible !important;
-                      display: block !important;
-                    }
-                    #print-area {
-                      position: absolute !important;
-                      left: 0 !important;
-                      top: 0 !important;
+                      height: auto !important;
+                      min-height: 0 !important;
+                      max-height: none !important;
                       width: 100% !important;
                       margin: 0 !important;
-                      padding: 1cm !important;
+                      padding: 0 !important;
+                      position: static !important;
                       background: white !important;
                       color: black !important;
+                      display: block !important;
+                      box-shadow: none !important;
                     }
+
+                    /* Make sure parent container of the paper preview has no background, margin or border on paper */
+                    .flex-1.bg-slate-200 {
+                      background: transparent !important;
+                      border: none !important;
+                      padding: 0 !important;
+                      margin: 0 !important;
+                      box-shadow: none !important;
+                      display: block !important;
+                    }
+
+                    /* Style the print sheet of paper to occupy full width and have no border/shadow on paper */
+                    #print-area {
+                      display: block !important;
+                      visibility: visible !important;
+                      background: white !important;
+                      color: black !important;
+                      width: 100% !important;
+                      max-width: 100% !important;
+                      min-height: 0 !important;
+                      position: relative !important;
+                      border: none !important;
+                      box-shadow: none !important;
+                      padding: 0 !important;
+                      margin: 0 !important;
+                    }
+
                     /* Ensure table borders and headers look correct on paper */
                     table {
                       border-collapse: collapse !important;
@@ -3522,12 +3552,18 @@ export default function ProductionComponent() {
                       margin-bottom: 20px !important;
                       padding-bottom: 10px !important;
                     }
+
+                    /* Avoid page break within a row */
+                    tr {
+                      break-inside: avoid !important;
+                      page-break-inside: avoid !important;
+                    }
                   }
                 `}</style>
 
-                <div className="flex flex-col lg:flex-row gap-6 no-print">
+                <div className="flex flex-col lg:flex-row gap-6">
                   {/* LEFT: Configurator Panel */}
-                  <div className="w-full lg:w-96 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-5">
+                  <div className="w-full lg:w-96 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-5 no-print">
                     <div>
                       <h3 className="text-sm font-extrabold uppercase text-slate-700 tracking-wider flex items-center gap-2">
                         <Printer size={18} className="text-emerald-600" />
@@ -3712,8 +3748,8 @@ export default function ProductionComponent() {
                   </div>
 
                   {/* RIGHT: Visual Preview on Screen */}
-                  <div className="flex-1 bg-slate-200 p-4 md:p-8 rounded-2xl border border-slate-300 flex flex-col items-center justify-start overflow-y-auto">
-                    <div className="text-[10px] font-extrabold uppercase text-slate-500 tracking-wider mb-3 flex items-center gap-1.5 self-start">
+                  <div className="flex-1 bg-slate-200 p-4 md:p-8 rounded-2xl border border-slate-300 flex flex-col items-center justify-start overflow-y-auto print:bg-transparent print:p-0 print:border-none print:shadow-none">
+                    <div className="text-[10px] font-extrabold uppercase text-slate-500 tracking-wider mb-3 flex items-center gap-1.5 self-start no-print">
                       <FileText size={14} className="text-slate-500" />
                       Visualização Prévia da Folha de Papel (A4)
                     </div>

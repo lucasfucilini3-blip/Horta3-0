@@ -12,10 +12,11 @@ import {
   Timestamp,
   getDocs,
   where,
-  orderBy
+  orderBy,
+  deleteField
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Production, InventoryItem, ProduceCatalogItem } from '../types';
+import { Production, InventoryItem, ProduceCatalogItem, NurserySeedling } from '../types';
 import { 
   Sprout, 
   Plus, 
@@ -38,7 +39,11 @@ import {
   Filter, 
   ChevronDown, 
   Info,
-  DollarSign
+  DollarSign,
+  Droplet,
+  Scissors,
+  Printer,
+  FileText
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth, handleFirestoreError, OperationType } from '../App';
@@ -68,14 +73,43 @@ const STANDARD_UNITS = ['un', 'mç', 'kg', 'g', 'bandeja'];
 export default function ProductionComponent() {
   const { profile } = useAuth();
   
-  // Tab control: 'spreadsheet' (Mapa de Canteiros), 'history' (Todos os Lançamentos) ou 'catalog' (Catálogo de Cultivos)
-  const [activeTab, setActiveTab] = useState<'spreadsheet' | 'history' | 'catalog'>('spreadsheet');
+  // Tab control: 'spreadsheet' (Mapa de Canteiros), 'nursery' (Viveiro de Mudas), 'history' (Todos os Lançamentos), 'catalog' (Catálogo de Cultivos) ou 'sheets' (Fichas de Campo)
+  const [activeTab, setActiveTab] = useState<'spreadsheet' | 'nursery' | 'history' | 'catalog' | 'sheets'>('spreadsheet');
 
   // Core data states
   const [productions, setProductions] = useState<Production[]>([]);
+  const [nurserySeedlings, setNurserySeedlings] = useState<NurserySeedling[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [produceCatalog, setProduceCatalog] = useState<ProduceCatalogItem[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Nursery (Viveiro) Seeding States
+  const [isSeedingModalOpen, setIsSeedingModalOpen] = useState(false);
+  const [seedingCrop, setSeedingCrop] = useState('');
+  const [seedingDate, setSeedingDate] = useState(new Date().toISOString().split('T')[0]);
+  const [seedingTrayCount, setSeedingTrayCount] = useState('10');
+  const [seedingCellCount, setSeedingCellCount] = useState('200');
+  const [seedingNotes, setSeedingNotes] = useState('');
+
+  // Nursery Manejo (Tratamentos) States
+  const [isNurseryManejoOpen, setIsNurseryManejoOpen] = useState(false);
+  const [nurseryManejoDate, setNurseryManejoDate] = useState(new Date().toISOString().split('T')[0]);
+  const [nurseryManejoProducts, setNurseryManejoProducts] = useState<Array<{
+    type: 'insecticide' | 'fungicide' | 'foliar' | 'general';
+    name: string;
+    dosage: string;
+  }>>([{ type: 'insecticide', name: '', dosage: '' }]);
+  const [nurseryManejoEmployee, setNurseryManejoEmployee] = useState('');
+  const [nurseryManejoNotes, setNurseryManejoNotes] = useState('');
+  const [nurseryManejoSelectedIds, setNurseryManejoSelectedIds] = useState<string[]>([]);
+
+  // Nursery Transplant (Ir para o campo) States
+  const [isTransplantModalOpen, setIsTransplantModalOpen] = useState(false);
+  const [transplantTargetSeedling, setTransplantTargetSeedling] = useState<NurserySeedling | null>(null);
+  const [transplantDate, setTransplantDate] = useState(new Date().toISOString().split('T')[0]);
+  const [transplantBed, setTransplantBed] = useState('');
+  const [transplantQty, setTransplantQty] = useState('');
+  const [transplantAutoCreateBedProduction, setTransplantAutoCreateBedProduction] = useState(true);
 
   // Catalog item creation and edit states
   const [isAddingCatalogItem, setIsAddingCatalogItem] = useState(false);
@@ -85,6 +119,32 @@ export default function ProductionComponent() {
   const [catalogDays, setCatalogDays] = useState('45');
   const [catalogPrice, setCatalogPrice] = useState('5.00');
   const [editingCatalogItemId, setEditingCatalogItemId] = useState<string | null>(null);
+
+  // Edit nursery seedling states
+  const [editingSeedling, setEditingSeedling] = useState<any | null>(null);
+  const [editSeedlingCrop, setEditSeedlingCrop] = useState('');
+  const [editSeedlingDate, setEditSeedlingDate] = useState('');
+  const [editSeedlingTrayCount, setEditSeedlingTrayCount] = useState('');
+  const [editSeedlingCellCount, setEditSeedlingCellCount] = useState('200');
+  const [editSeedlingNotes, setEditSeedlingNotes] = useState('');
+  const [editSeedlingStatus, setEditSeedlingStatus] = useState<'nursery' | 'transplanted' | 'lost'>('nursery');
+  const [editSeedlingTransplantedQty, setEditSeedlingTransplantedQty] = useState('');
+  const [editSeedlingTransplantedBed, setEditSeedlingTransplantedBed] = useState('');
+  const [editSeedlingLogs, setEditSeedlingLogs] = useState<any[]>([]);
+  const [editSeedlingTransplantDate, setEditSeedlingTransplantDate] = useState('');
+
+  // Temporary state for adding a new log inside edit modal
+  const [newLogDate, setNewLogDate] = useState(new Date().toISOString().split('T')[0]);
+  const [newLogDesc, setNewLogDesc] = useState('');
+
+
+  // Printable field sheets (Fichas de Campo) States
+  const [sheetType, setSheetType] = useState<'semeadura' | 'plantio' | 'tratamento' | 'colheita'>('semeadura');
+  const [sheetOrientation, setSheetOrientation] = useState<'portrait' | 'landscape'>('landscape');
+  const [sheetBlankRows, setSheetBlankRows] = useState(12);
+  const [sheetPrefillData, setSheetPrefillData] = useState(true);
+  const [sheetResponsavel, setSheetResponsavel] = useState('');
+  const [sheetNotes, setSheetNotes] = useState('');
 
   // Custom confirmation modal state
   const [confirmationModal, setConfirmationModal] = useState<{
@@ -196,6 +256,39 @@ export default function ProductionComponent() {
     { bed: '', crop: '', quantity: '', unit: 'un' }
   ]);
 
+  // Collective Manejo Modal States
+  const [isCollectiveManejoOpen, setIsCollectiveManejoOpen] = useState(false);
+  const [collectiveManejoDate, setCollectiveManejoDate] = useState(new Date().toISOString().split('T')[0]);
+  interface CollectiveManejoProduct {
+    type: 'insecticide' | 'fungicide' | 'foliar' | 'general';
+    name: string;
+    dosage: string;
+  }
+  const [collectiveManejoProducts, setCollectiveManejoProducts] = useState<CollectiveManejoProduct[]>([
+    { type: 'insecticide', name: '', dosage: '' }
+  ]);
+  const [collectiveManejoEmployee, setCollectiveManejoEmployee] = useState('');
+  const [collectiveManejoNotes, setCollectiveManejoNotes] = useState('');
+  const [collectiveManejoRows, setCollectiveManejoRows] = useState<Array<{ bed: string }>>([{ bed: '' }]);
+
+  // Collective Harvest Modal States
+  const [isCollectiveHarvestOpen, setIsCollectiveHarvestOpen] = useState(false);
+  const [collectiveHarvestDate, setCollectiveHarvestDate] = useState(new Date().toISOString().split('T')[0]);
+  interface CollectiveHarvestRow {
+    bed: string;
+    productionId: string;
+    crop: string;
+    availableQty: number;
+    harvestQty: string;
+    harvestPackages: string;
+    harvestType: 'partial' | 'final';
+    unit: string;
+    addToInventory: boolean;
+  }
+  const [collectiveHarvestRows, setCollectiveHarvestRows] = useState<CollectiveHarvestRow[]>([
+    { bed: '', productionId: '', crop: '', availableQty: 0, harvestQty: '', harvestPackages: '', harvestType: 'partial', unit: 'un', addToInventory: true }
+  ]);
+
   const dispatchCategories = useMemo(() => {
     const categories = inventory
       .filter(item => item.type === 'dispatch' && item.category)
@@ -215,6 +308,14 @@ export default function ProductionComponent() {
       handleFirestoreError(error, OperationType.LIST, 'production');
     });
 
+    const nurseryQ = query(collection(db, 'nursery_seedlings'), orderBy('plantingDate', 'desc'));
+    const unsubscribeNursery = onSnapshot(nurseryQ, (snapshot) => {
+      const fetchedNursery = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as NurserySeedling));
+      setNurserySeedlings(fetchedNursery);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'nursery_seedlings');
+    });
+
     const invQ = query(collection(db, 'inventory'), orderBy('name', 'asc'));
     const unsubscribeInv = onSnapshot(invQ, (snapshot) => {
       const fetchedInv = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as InventoryItem));
@@ -232,6 +333,7 @@ export default function ProductionComponent() {
 
     return () => {
       unsubscribe();
+      unsubscribeNursery();
       unsubscribeInv();
       unsubscribeCat();
     };
@@ -535,6 +637,597 @@ export default function ProductionComponent() {
 
       setIsCollectivePlantingOpen(false);
       setCollectiveRows([{ bed: '', crop: '', quantity: '', unit: 'un' }]);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'production');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle saving of Collective Manejo
+  const handleSaveCollectiveManejo = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    const appliedProducts = collectiveManejoProducts.filter(p => p.name.trim() !== '');
+    if (appliedProducts.length === 0) {
+      alert('Por favor, informe pelo menos um produto utilizado na aplicação!');
+      return;
+    }
+    
+    const selectedBeds = collectiveManejoRows.map(r => r.bed.trim()).filter(Boolean);
+    if (selectedBeds.length === 0) {
+      alert('Selecione pelo menos um canteiro!');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const recordDateVal = new Date(collectiveManejoDate + 'T12:00:00');
+      const recordTimestamp = Timestamp.fromDate(recordDateVal);
+      const employee = collectiveManejoEmployee.trim() || profile?.displayName || 'Dono';
+      const notes = collectiveManejoNotes.trim();
+
+      const typeLabels: Record<string, string> = {
+        insecticide: 'Inseticida',
+        fungicide: 'Fungicida',
+        foliar: 'Adubo Foliar',
+        general: 'Manejo Geral/Outro'
+      };
+
+      const productDescriptions = appliedProducts.map(p => {
+        const typeLabel = typeLabels[p.type] || p.type;
+        return `${typeLabel}: ${p.name.trim()}${p.dosage.trim() ? ` (${p.dosage.trim()})` : ''}`;
+      });
+
+      const appliedItemsText = productDescriptions.join(', ');
+      
+      let descTemplate = `Aplicação de Mistura Coletiva: ${appliedItemsText}.`;
+      if (notes) {
+        descTemplate += ` Obs: ${notes}.`;
+      }
+      descTemplate += ` Realizado por ${employee}.`;
+
+      const productNamesList = appliedProducts.map(p => p.name.trim());
+
+      for (const bed of selectedBeds) {
+        const activeCycles = productions.filter(
+          p => p.bed === bed && p.status === 'growing'
+        );
+
+        let lastCrop = '';
+        if (activeCycles.length > 0) {
+          lastCrop = activeCycles[0].crop;
+          for (const cycle of activeCycles) {
+            const originalLogs = [...(cycle.logs || [])];
+            const newLog = {
+              date: recordTimestamp,
+              description: descTemplate,
+              products: productNamesList
+            };
+            await updateDoc(doc(db, 'production', cycle.id), {
+              logs: [...originalLogs, newLog]
+            });
+          }
+        }
+
+        // Add records to bed_records for each product in the mixture
+        for (const p of appliedProducts) {
+          let activityTypeVal: 'treatment' | 'fertilization' | 'general' = 'general';
+          if (p.type === 'insecticide' || p.type === 'fungicide') {
+            activityTypeVal = 'treatment';
+          } else if (p.type === 'foliar') {
+            activityTypeVal = 'fertilization';
+          }
+
+          const recordData: any = {
+            bedId: bed,
+            date: recordTimestamp,
+            crop: lastCrop || 'Canteiro Vazio',
+            activityType: activityTypeVal,
+            employeeName: employee,
+            notes: notes ? `Mistura Coletiva: ${notes}` : 'Mistura Coletiva.',
+            syncedToProduction: activeCycles.length > 0,
+            createdAt: serverTimestamp()
+          };
+
+          if (activityTypeVal === 'treatment') {
+            recordData.treatmentDescription = `${p.name.trim()}${p.dosage.trim() ? ` (${p.dosage.trim()})` : ''}`;
+          } else if (activityTypeVal === 'fertilization') {
+            recordData.fertilizerDescription = `${p.name.trim()}${p.dosage.trim() ? ` (${p.dosage.trim()})` : ''}`;
+          } else {
+            recordData.notes = `${p.name.trim()}${p.dosage.trim() ? ` (${p.dosage.trim()})` : ''}. ${notes ? `Obs: ${notes}` : ''}`;
+          }
+
+          await addDoc(collection(db, 'bed_records'), recordData);
+        }
+      }
+
+      setIsCollectiveManejoOpen(false);
+      setCollectiveManejoProducts([{ type: 'insecticide', name: '', dosage: '' }]);
+      setCollectiveManejoNotes('');
+      setCollectiveManejoEmployee('');
+      setCollectiveManejoRows([{ bed: '' }]);
+      alert('✓ Manejo Coletivo registrado com sucesso para todos os canteiros selecionados!');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'bed_records');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle saving of Nursery Seeding
+  const handleSaveSeeding = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!seedingCrop.trim()) {
+      alert('Por favor, informe a cultura!');
+      return;
+    }
+    const tCount = parseInt(seedingTrayCount) || 0;
+    const cCount = parseInt(seedingCellCount) || 0;
+    if (tCount <= 0 || cCount <= 0) {
+      alert('A quantidade de bandejas e células deve ser maior que zero!');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const parts = seedingDate.split('-');
+      const recordDateVal = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]), 12, 0, 0);
+      const recordTimestamp = Timestamp.fromDate(recordDateVal);
+
+      const newSeeding = {
+        crop: seedingCrop.trim(),
+        plantingDate: recordTimestamp,
+        trayCount: tCount,
+        cellCount: cCount,
+        totalCells: tCount * cCount,
+        status: 'nursery',
+        notes: seedingNotes.trim(),
+        logs: [],
+        createdAt: serverTimestamp()
+      };
+
+      await addDoc(collection(db, 'nursery_seedlings'), newSeeding);
+      setIsSeedingModalOpen(false);
+      setSeedingCrop('');
+      setSeedingNotes('');
+      alert('✓ Semeadura em viveiro registrada com sucesso!');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'nursery_seedlings');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const startEditingSeedling = (seedling: any) => {
+    setEditingSeedling(seedling);
+    setEditSeedlingCrop(seedling.crop || '');
+    setEditSeedlingTrayCount(String(seedling.trayCount || ''));
+    setEditSeedlingCellCount(String(seedling.cellCount || '200'));
+    setEditSeedlingNotes(seedling.notes || '');
+    setEditSeedlingStatus(seedling.status || 'nursery');
+    setEditSeedlingTransplantedQty(String(seedling.transplantedQty || ''));
+    setEditSeedlingTransplantedBed(seedling.transplantedBed || '');
+    setEditSeedlingLogs(seedling.logs ? [...seedling.logs] : []);
+    
+    // Format timestamp to YYYY-MM-DD
+    const dateObj = seedling.plantingDate?.toDate ? seedling.plantingDate.toDate() : new Date(seedling.plantingDate);
+    const year = dateObj.getFullYear();
+    const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const day = String(dateObj.getDate()).padStart(2, '0');
+    setEditSeedlingDate(`${year}-${month}-${day}`);
+
+    if (seedling.transplantDate) {
+      const transDateObj = seedling.transplantDate?.toDate ? seedling.transplantDate.toDate() : new Date(seedling.transplantDate);
+      const tYear = transDateObj.getFullYear();
+      const tMonth = String(transDateObj.getMonth() + 1).padStart(2, '0');
+      const tDay = String(transDateObj.getDate()).padStart(2, '0');
+      setEditSeedlingTransplantDate(`${tYear}-${tMonth}-${tDay}`);
+    } else {
+      setEditSeedlingTransplantDate(new Date().toISOString().split('T')[0]);
+    }
+    
+    // Reset add log temporary states
+    setNewLogDate(new Date().toISOString().split('T')[0]);
+    setNewLogDesc('');
+  };
+
+  const handleAddEditSeedlingLog = () => {
+    if (!newLogDesc.trim()) {
+      alert('Por favor, informe a descrição do tratamento!');
+      return;
+    }
+    const logParts = newLogDate.split('-');
+    const logDateObj = new Date(parseInt(logParts[0]), parseInt(logParts[1]) - 1, parseInt(logParts[2]), 12, 0, 0);
+    const newLogObj = {
+      date: Timestamp.fromDate(logDateObj),
+      description: newLogDesc.trim()
+    };
+    setEditSeedlingLogs([...editSeedlingLogs, newLogObj]);
+    setNewLogDesc('');
+  };
+
+  const handleUpdateSeedling = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingSeedling) return;
+    if (!editSeedlingCrop.trim()) {
+      alert('Por favor, informe a cultura!');
+      return;
+    }
+    const tCount = parseInt(editSeedlingTrayCount) || 0;
+    const cCount = parseInt(editSeedlingCellCount) || 0;
+    if (tCount <= 0 || cCount <= 0) {
+      alert('A quantidade de bandejas e células deve ser maior que zero!');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const parts = editSeedlingDate.split('-');
+      const recordDateVal = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]), 12, 0, 0);
+      const recordTimestamp = Timestamp.fromDate(recordDateVal);
+
+      const updatedData: any = {
+        crop: editSeedlingCrop.trim(),
+        plantingDate: recordTimestamp,
+        trayCount: tCount,
+        cellCount: cCount,
+        totalCells: tCount * cCount,
+        status: editSeedlingStatus,
+        notes: editSeedlingNotes.trim(),
+        logs: editSeedlingLogs
+      };
+
+      if (editSeedlingStatus === 'transplanted') {
+        updatedData.transplantedBed = editSeedlingTransplantedBed.trim();
+        updatedData.transplantedQty = parseInt(editSeedlingTransplantedQty) || tCount * cCount;
+        
+        const transParts = editSeedlingTransplantDate.split('-');
+        const transDateVal = new Date(parseInt(transParts[0]), parseInt(transParts[1]) - 1, parseInt(transParts[2]), 12, 0, 0);
+        updatedData.transplantDate = Timestamp.fromDate(transDateVal);
+      } else {
+        updatedData.transplantedBed = '';
+        updatedData.transplantedQty = 0;
+        updatedData.transplantDate = deleteField ? deleteField() : null; // Safe fallback if deleteField is imported or just null
+      }
+
+      await updateDoc(doc(db, 'nursery_seedlings', editingSeedling.id), updatedData);
+      setEditingSeedling(null);
+      alert('✓ Lançamento do viveiro atualizado com sucesso!');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'nursery_seedlings');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle deletion of Nursery Seeding
+  const handleDeleteSeeding = async (id: string) => {
+    confirmAction(
+      'Confirmar Exclusão',
+      'Tem certeza que deseja excluir esta semeadura de bandeja? Esta ação não pode ser desfeita.',
+      'Excluir',
+      async () => {
+        try {
+          setLoading(true);
+          await deleteDoc(doc(db, 'nursery_seedlings', id));
+          alert('✓ Semeadura excluída com sucesso!');
+        } catch (err) {
+          handleFirestoreError(err, OperationType.DELETE, 'nursery_seedlings');
+        } finally {
+          setLoading(false);
+        }
+      }
+    );
+  };
+
+  // Handle saving of Nursery Treatment
+  const handleSaveNurseryManejo = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const appliedProducts = nurseryManejoProducts.filter(p => p.name.trim() !== '');
+    if (appliedProducts.length === 0) {
+      alert('Por favor, informe pelo menos um produto!');
+      return;
+    }
+    if (nurseryManejoSelectedIds.length === 0) {
+      alert('Por favor, selecione pelo menos um lote de bandeja do viveiro!');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const parts = nurseryManejoDate.split('-');
+      const recordDateVal = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]), 12, 0, 0);
+      const recordTimestamp = Timestamp.fromDate(recordDateVal);
+      const employee = nurseryManejoEmployee.trim() || profile?.displayName || 'Dono';
+      const notes = nurseryManejoNotes.trim();
+
+      const typeLabels: Record<string, string> = {
+        insecticide: 'Inseticida',
+        fungicide: 'Fungicida',
+        foliar: 'Adubo Foliar',
+        general: 'Manejo Geral/Outro'
+      };
+
+      const productDescriptions = appliedProducts.map(p => {
+        const typeLabel = typeLabels[p.type] || p.type;
+        return `${typeLabel}: ${p.name.trim()}${p.dosage.trim() ? ` (${p.dosage.trim()})` : ''}`;
+      });
+
+      const appliedItemsText = productDescriptions.join(', ');
+      let descTemplate = `Tratamento em Viveiro: ${appliedItemsText}.`;
+      if (notes) {
+        descTemplate += ` Obs: ${notes}.`;
+      }
+      descTemplate += ` Realizado por ${employee}.`;
+
+      for (const id of nurseryManejoSelectedIds) {
+        const seedling = nurserySeedlings.find(s => s.id === id);
+        if (seedling) {
+          const originalLogs = seedling.logs || [];
+          const newLog = {
+            date: recordTimestamp,
+            description: descTemplate,
+            products: appliedProducts.map(p => p.name.trim())
+          };
+          await updateDoc(doc(db, 'nursery_seedlings', id), {
+            logs: [...originalLogs, newLog]
+          });
+        }
+      }
+
+      setIsNurseryManejoOpen(false);
+      setNurseryManejoProducts([{ type: 'insecticide', name: '', dosage: '' }]);
+      setNurseryManejoNotes('');
+      setNurseryManejoEmployee('');
+      setNurseryManejoSelectedIds([]);
+      alert('✓ Tratamento de viveiro registrado com sucesso!');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'nursery_seedlings');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle Transplanting to field
+  const handleSaveTransplant = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!transplantTargetSeedling) return;
+    if (!transplantBed) {
+      alert('Por favor, informe o canteiro de destino!');
+      return;
+    }
+    const qty = parseInt(transplantQty) || 0;
+    if (qty <= 0) {
+      alert('A quantidade transplantada deve ser maior que zero!');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const parts = transplantDate.split('-');
+      const recordDateVal = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]), 12, 0, 0);
+      const recordTimestamp = Timestamp.fromDate(recordDateVal);
+
+      // Update seedling status to transplanted
+      await updateDoc(doc(db, 'nursery_seedlings', transplantTargetSeedling.id), {
+        status: 'transplanted',
+        transplantDate: recordTimestamp,
+        transplantedQty: qty,
+        transplantedBed: transplantBed
+      });
+
+      // Auto-create a bed production record
+      if (transplantAutoCreateBedProduction) {
+        const newPlanting = {
+          crop: transplantTargetSeedling.crop,
+          bed: transplantBed,
+          plantingDate: recordTimestamp,
+          quantityPlanted: qty,
+          unit: 'un',
+          inputsUsed: [],
+          status: 'growing',
+          plantingSource: 'internal_seedlings',
+          logs: [
+            {
+              date: recordTimestamp,
+              description: `Plantio de mudas próprias vindas do Viveiro. Semeado em: ${formatDate(transplantTargetSeedling.plantingDate)}. Qtd: ${qty} mudas.`
+            }
+          ],
+          createdAt: serverTimestamp()
+        };
+
+        await addDoc(collection(db, 'production'), newPlanting);
+
+        // Add a BedRecord in bed_records
+        const bedRecordData = {
+          bedId: transplantBed,
+          date: recordTimestamp,
+          crop: transplantTargetSeedling.crop,
+          activityType: 'planting',
+          employeeName: profile?.displayName || 'Dono',
+          notes: `Plantio de mudas próprias vindas do Viveiro (Lote semeado em ${formatDate(transplantTargetSeedling.plantingDate)}).`,
+          quantityPlanted: qty,
+          unitPlanted: 'mudas',
+          syncedToProduction: true,
+          createdAt: serverTimestamp()
+        };
+        await addDoc(collection(db, 'bed_records'), bedRecordData);
+      }
+
+      setIsTransplantModalOpen(false);
+      setTransplantTargetSeedling(null);
+      setTransplantBed('');
+      setTransplantQty('');
+      alert('✓ Transplante para o campo registrado com sucesso!');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'nursery_seedlings');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle saving of Collective Harvest
+  const handleSaveCollectiveHarvest = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    for (let i = 0; i < collectiveHarvestRows.length; i++) {
+      const row = collectiveHarvestRows[i];
+      if (!row.bed) {
+        alert(`Por favor, selecione o canteiro na linha ${i + 1}!`);
+        return;
+      }
+      if (!row.productionId) {
+        alert(`Não há cultivo ativo selecionado para o canteiro ${row.bed} na linha ${i + 1}!`);
+        return;
+      }
+      const qty = Number(row.harvestQty);
+      if (isNaN(qty) || qty <= 0) {
+        alert(`Insira uma quantidade colhida válida para o canteiro ${row.bed} na linha ${i + 1}!`);
+        return;
+      }
+    }
+
+    try {
+      setLoading(true);
+      const hDate = new Date(collectiveHarvestDate + 'T12:00:00');
+      const hTimestamp = Timestamp.fromDate(hDate);
+
+      for (const row of collectiveHarvestRows) {
+        const qty = Number(row.harvestQty);
+        const pkgs = Number(row.harvestPackages) || 0;
+        const isFinal = row.harvestType === 'final';
+        const newStatus = isFinal ? 'harvested' : 'growing';
+        const packagesText = pkgs > 0 ? ` (${pkgs} pacotes)` : '';
+
+        const originalItem = productions.find(p => p.id === row.productionId);
+        if (!originalItem) continue;
+
+        const harvestLog = {
+          date: hTimestamp,
+          description: isFinal 
+            ? `Colheita Coletiva - Final realizada: ${qty} ${row.unit || 'unidades'}${packagesText}. Lote finalizado.` 
+            : `Colheita Coletiva - Parcial realizada: ${qty} ${row.unit || 'unidades'}${packagesText}. Lote continua ativo.`,
+          products: [],
+          packages: pkgs > 0 ? pkgs : undefined
+        };
+
+        const prodRef = doc(db, 'production', row.productionId);
+        const updatePayload: any = {
+          status: newStatus,
+          harvestDate: hTimestamp,
+          harvestQuantity: increment(qty),
+          remainingQuantity: increment(qty),
+          logs: [...(originalItem.logs || []), harvestLog]
+        };
+        if (pkgs > 0) {
+          updatePayload.harvestPackages = increment(pkgs);
+        }
+        await updateDoc(prodRef, updatePayload);
+
+        await addDoc(collection(db, 'bed_records'), {
+          bedId: row.bed,
+          date: hTimestamp,
+          crop: row.crop,
+          activityType: 'harvest',
+          employeeName: profile?.displayName || 'Dono',
+          notes: `Colheita coletiva registrada na planilha de canteiros.${pkgs > 0 ? ` Rendimento: ${pkgs} pacotes.` : ''}`,
+          syncedToProduction: true,
+          harvestQuantity: qty,
+          harvestUnit: row.unit || 'un',
+          harvestPackages: pkgs > 0 ? pkgs : undefined,
+          productionId: row.productionId,
+          createdAt: serverTimestamp()
+        });
+
+        if (row.addToInventory) {
+          const incrementQty = pkgs > 0 ? pkgs : qty;
+          const catalogItem = produceCatalog.find(item => item.name.toLowerCase() === row.crop.toLowerCase());
+
+          let targetItemId = '';
+          if (catalogItem) {
+            const existingInventoryItem = inventory.find(
+              item => item.type === 'dispatch' && item.name.toLowerCase() === catalogItem.name.toLowerCase()
+            );
+
+            if (existingInventoryItem) {
+              const itemRef = doc(db, 'inventory', existingInventoryItem.id);
+              await updateDoc(itemRef, {
+                quantity: increment(incrementQty),
+                lastUpdated: serverTimestamp()
+              });
+              targetItemId = existingInventoryItem.id;
+            } else {
+              const docRef = await addDoc(collection(db, 'inventory'), {
+                name: catalogItem.name,
+                type: 'dispatch',
+                category: catalogItem.category || 'Hortaliças',
+                quantity: incrementQty,
+                unit: catalogItem.unit || 'un',
+                price: catalogItem.defaultPrice || 0,
+                costPrice: 0,
+                minStock: 10,
+                lastUpdated: serverTimestamp()
+              });
+              targetItemId = docRef.id;
+            }
+
+            await addDoc(collection(db, 'inventory_history'), {
+              itemId: targetItemId,
+              itemName: catalogItem.name,
+              quantity: incrementQty,
+              unit: catalogItem.unit || 'un',
+              costPrice: 0,
+              price: catalogItem.defaultPrice || 0,
+              type: 'harvest',
+              description: `Colheita Coletiva no canteiro ${row.bed}: ${qty} ${row.unit || 'un'} colhidos${pkgs > 0 ? `, rendendo ${pkgs} pacotes no estoque.` : ''}`,
+              date: serverTimestamp()
+            });
+          } else {
+            const existingInventoryItem = inventory.find(
+              item => item.type === 'dispatch' && item.name.toLowerCase() === row.crop.toLowerCase()
+            );
+
+            if (existingInventoryItem) {
+              const itemRef = doc(db, 'inventory', existingInventoryItem.id);
+              await updateDoc(itemRef, {
+                quantity: increment(incrementQty),
+                lastUpdated: serverTimestamp()
+              });
+              targetItemId = existingInventoryItem.id;
+            } else {
+              const docRef = await addDoc(collection(db, 'inventory'), {
+                name: row.crop,
+                type: 'dispatch',
+                category: 'Hortaliças',
+                quantity: incrementQty,
+                unit: row.unit || 'un',
+                price: 0,
+                costPrice: 0,
+                minStock: 10,
+                lastUpdated: serverTimestamp()
+              });
+              targetItemId = docRef.id;
+            }
+
+            await addDoc(collection(db, 'inventory_history'), {
+              itemId: targetItemId,
+              itemName: row.crop,
+              quantity: incrementQty,
+              unit: row.unit || 'un',
+              costPrice: 0,
+              price: 0,
+              type: 'harvest',
+              description: `Colheita Coletiva no canteiro ${row.bed}: ${qty} ${row.unit || 'un'} colhidos${pkgs > 0 ? `, rendendo ${pkgs} pacotes no estoque.` : ''}`,
+              date: serverTimestamp()
+            });
+          }
+        }
+      }
+
+      setIsCollectiveHarvestOpen(false);
+      setCollectiveHarvestRows([{ bed: '', productionId: '', crop: '', availableQty: 0, harvestQty: '', harvestPackages: '', harvestType: 'partial', unit: 'un', addToInventory: true }]);
+      alert('✓ Colheita Coletiva registrada com sucesso!');
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, 'production');
     } finally {
@@ -863,6 +1556,15 @@ export default function ProductionComponent() {
     });
   }, [productions, searchTerm, statusFilter]);
 
+  const filteredNursery = useMemo(() => {
+    return nurserySeedlings.filter(s => {
+      const matchesSearch = s.crop.toLowerCase().includes(searchTerm.toLowerCase()) || 
+        (s.notes && s.notes.toLowerCase().includes(searchTerm.toLowerCase())) ||
+        (s.transplantedBed && s.transplantedBed.toLowerCase().includes(searchTerm.toLowerCase()));
+      return matchesSearch;
+    });
+  }, [nurserySeedlings, searchTerm]);
+
   const filteredCatalog = useMemo(() => {
     return produceCatalog.filter(item => {
       return item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -943,6 +1645,15 @@ export default function ProductionComponent() {
         title: selectedRowId,
         desc: `Sem cultivos ativos registrados (Vazio). Prontos para realizar novo plantio.`
       };
+    } else if (activeTab === 'nursery') {
+      const seedling = nurserySeedlings.find(s => s.id === selectedRowId);
+      if (seedling) {
+        const statusText = seedling.status === 'nursery' ? 'No Viveiro' : seedling.status === 'transplanted' ? 'Transplantado para o Campo' : 'Perdido';
+        return {
+          title: `Lote Viveiro ${seedling.id.slice(0, 6)}`,
+          desc: `Cultura: ${seedling.crop} | Semeadura: ${formatDate(seedling.plantingDate)} | Bandejas: ${seedling.trayCount} (${seedling.cellCount} cel.) | Total: ${seedling.totalCells} mudas | Status: ${statusText}${seedling.transplantedBed ? ` | Transplantado p/: Canteiro ${seedling.transplantedBed} (${seedling.transplantedQty} mudas)` : ''}`
+        };
+      }
     } else if (activeTab === 'history') {
       const item = productions.find(p => p.id === selectedRowId);
       if (item) {
@@ -983,7 +1694,7 @@ export default function ProductionComponent() {
         </div>
 
         {/* Excel style export & add buttons */}
-        <div className="flex items-center gap-2.5 flex-wrap sm:flex-nowrap">
+        <div className="flex items-center gap-2.5 flex-wrap">
           <button
             onClick={() => {
               setCollectiveRows([{ bed: '', crop: '', quantity: '', unit: 'un' }]);
@@ -993,6 +1704,28 @@ export default function ProductionComponent() {
           >
             <Sprout size={16} />
             + Plantio Coletivo
+          </button>
+
+          <button
+            onClick={() => {
+              setCollectiveManejoRows([{ bed: '' }]);
+              setIsCollectiveManejoOpen(true);
+            }}
+            className="flex items-center gap-2 bg-amber-600 hover:bg-amber-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-sm hover:shadow cursor-pointer"
+          >
+            <Droplet size={16} />
+            + Manejo Coletivo
+          </button>
+
+          <button
+            onClick={() => {
+              setCollectiveHarvestRows([{ bed: '', productionId: '', crop: '', availableQty: 0, harvestQty: '', harvestPackages: '', harvestType: 'partial', unit: 'un', addToInventory: true }]);
+              setIsCollectiveHarvestOpen(true);
+            }}
+            className="flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-sm hover:shadow cursor-pointer"
+          >
+            <Scissors size={16} />
+            + Colheita Coletiva
           </button>
 
           <button
@@ -1324,6 +2057,545 @@ export default function ProductionComponent() {
         )}
       </AnimatePresence>
 
+      {/* Collective Manejo Modal */}
+      <AnimatePresence>
+        {isCollectiveManejoOpen && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-4xl w-full p-6 flex flex-col max-h-[90vh]"
+            >
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+                <div className="flex items-center gap-2">
+                  <Droplet className="text-amber-600 animate-bounce" size={22} />
+                  <div>
+                    <h3 className="text-lg font-black text-slate-900">Manejo Coletivo</h3>
+                    <p className="text-xs text-slate-500">Registre pulverização de inseticidas, fungicidas ou adubação foliar em múltiplos canteiros</p>
+                  </div>
+                </div>
+                <button 
+                  type="button"
+                  onClick={() => setIsCollectiveManejoOpen(false)}
+                  className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveCollectiveManejo} className="space-y-4 flex-1 flex flex-col overflow-hidden">
+                {/* Top Inputs: Date, Employee */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200/60">
+                  <div>
+                     <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1">Data de Aplicação</label>
+                     <input 
+                       type="date"
+                       required
+                       value={collectiveManejoDate}
+                       onChange={(e) => setCollectiveManejoDate(e.target.value)}
+                       className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-amber-500"
+                     />
+                  </div>
+
+                  <div>
+                     <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1">Responsável</label>
+                     <input 
+                       type="text"
+                       placeholder="Ex: Nome do funcionário"
+                       value={collectiveManejoEmployee}
+                       onChange={(e) => setCollectiveManejoEmployee(e.target.value)}
+                       className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-amber-500"
+                     />
+                  </div>
+                </div>
+
+                {/* Mixture Products List */}
+                <div className="bg-slate-50/50 p-4 rounded-xl border border-slate-200/80 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-extrabold uppercase text-slate-500 tracking-wider flex items-center gap-1.5">
+                      <Droplet className="text-amber-500 animate-pulse" size={14} />
+                      Produtos na Calda / Mistura
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCollectiveManejoProducts([...collectiveManejoProducts, { type: 'insecticide', name: '', dosage: '' }]);
+                      }}
+                      className="text-xs bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 px-2.5 py-1 rounded-lg font-bold transition-all flex items-center gap-1 cursor-pointer"
+                    >
+                      <PlusCircle size={13} />
+                      + Adicionar Produto à Calda
+                    </button>
+                  </div>
+
+                  <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1">
+                    {collectiveManejoProducts.map((p, idx) => (
+                      <div key={idx} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center bg-white p-2 rounded-lg border border-slate-200">
+                        <div className="col-span-3">
+                          <label className="block md:hidden text-[9px] font-bold text-slate-400 uppercase mb-0.5">Tipo de Produto</label>
+                          <select
+                            value={p.type}
+                            onChange={(e) => {
+                              const updated = [...collectiveManejoProducts];
+                              updated[idx].type = e.target.value as any;
+                              setCollectiveManejoProducts(updated);
+                            }}
+                            className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none"
+                          >
+                            <option value="insecticide">Inseticida</option>
+                            <option value="fungicide">Fungicida</option>
+                            <option value="foliar">Adubo Foliar</option>
+                            <option value="general">Outros / Geral</option>
+                          </select>
+                        </div>
+
+                        <div className="col-span-5">
+                          <label className="block md:hidden text-[9px] font-bold text-slate-400 uppercase mb-0.5">Nome do Produto</label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="Nome do produto (ex: K-Othrine, Cercobin)"
+                            value={p.name}
+                            onChange={(e) => {
+                              const updated = [...collectiveManejoProducts];
+                              updated[idx].name = e.target.value;
+                              setCollectiveManejoProducts(updated);
+                            }}
+                            className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none"
+                          />
+                        </div>
+
+                        <div className="col-span-3">
+                          <label className="block md:hidden text-[9px] font-bold text-slate-400 uppercase mb-0.5">Dosagem (Op.)</label>
+                          <input
+                            type="text"
+                            placeholder="Dosagem (ex: 2ml/L, 10g/10L)"
+                            value={p.dosage}
+                            onChange={(e) => {
+                              const updated = [...collectiveManejoProducts];
+                              updated[idx].dosage = e.target.value;
+                              setCollectiveManejoProducts(updated);
+                            }}
+                            className="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none"
+                          />
+                        </div>
+
+                        <div className="col-span-1 text-center">
+                          {collectiveManejoProducts.length > 1 ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCollectiveManejoProducts(collectiveManejoProducts.filter((_, i) => i !== idx));
+                              }}
+                              className="text-rose-500 hover:bg-rose-50 p-1.5 rounded-lg transition-colors cursor-pointer"
+                              title="Remover produto"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          ) : (
+                            <span className="text-slate-300 text-xs">-</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Observações */}
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1">Observações / Detalhes de Dosagem Geral</label>
+                  <textarea
+                    rows={2}
+                    placeholder="Insira detalhes adicionais sobre a aplicação (dosagem por litro, condições, etc.)"
+                    value={collectiveManejoNotes}
+                    onChange={(e) => setCollectiveManejoNotes(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+
+                {/* Canteiros Rows */}
+                <div className="flex-1 flex flex-col overflow-hidden">
+                  <h4 className="text-xs font-bold text-slate-700 mb-2 flex items-center gap-1.5">
+                    <ClipboardList size={14} className="text-amber-500" />
+                    Selecione os canteiros que receberam o manejo:
+                  </h4>
+
+                  <div className="flex-1 overflow-y-auto pr-2 space-y-3 min-h-[150px]">
+                    <div className="hidden sm:grid sm:grid-cols-12 gap-3 px-2 text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">
+                      <div className="col-span-5">Canteiro</div>
+                      <div className="col-span-5">Cultivo Ativo Detectado</div>
+                      <div className="col-span-2 text-center">Ação</div>
+                    </div>
+
+                    {collectiveManejoRows.map((row, index) => {
+                      const activeCrops = productions.filter(p => p.bed === row.bed && p.status === 'growing');
+                      const activeCropsText = activeCrops.length > 0 
+                        ? activeCrops.map(p => `${p.crop} (${p.quantityPlanted} ${p.unit})`).join(', ') 
+                        : row.bed ? 'Nenhum ativo (Nota no prontuário do canteiro)' : 'Aguardando canteiro...';
+
+                      return (
+                        <div 
+                          key={index} 
+                          className="grid grid-cols-1 sm:grid-cols-12 gap-2 p-3 sm:p-2 bg-slate-50 sm:bg-transparent rounded-xl border border-slate-100 sm:border-none items-center"
+                        >
+                          {/* Canteiro */}
+                          <div className="col-span-5">
+                            <label className="block sm:hidden text-[9px] font-bold text-slate-400 uppercase mb-1">Canteiro</label>
+                            <select
+                              required
+                              value={row.bed}
+                              onChange={(e) => {
+                                const updated = [...collectiveManejoRows];
+                                updated[index].bed = e.target.value;
+                                setCollectiveManejoRows(updated);
+                              }}
+                              className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-amber-500"
+                            >
+                              <option value="">Selecione o canteiro...</option>
+                              {allBedsList.map(bed => (
+                                <option key={bed} value={bed}>{bed}</option>
+                              ))}
+                            </select>
+                          </div>
+
+                          {/* Cultivo Ativo */}
+                          <div className="col-span-5">
+                            <label className="block sm:hidden text-[9px] font-bold text-slate-400 uppercase mb-1">Cultivo Ativo</label>
+                            <div className="px-2.5 py-2 bg-white sm:bg-slate-50/50 border border-slate-150 sm:border-transparent rounded-xl text-xs font-medium text-slate-600 italic">
+                              {activeCropsText}
+                            </div>
+                          </div>
+
+                          {/* Delete Action */}
+                          <div className="col-span-2 text-center pt-2 sm:pt-0">
+                            {collectiveManejoRows.length > 1 ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setCollectiveManejoRows(collectiveManejoRows.filter((_, i) => i !== index));
+                                }}
+                                className="text-rose-500 hover:bg-rose-50 p-2 rounded-xl transition-all w-full sm:w-auto flex items-center justify-center gap-1.5 text-xs font-bold uppercase sm:normal-case border border-transparent hover:border-rose-100 sm:border-none cursor-pointer"
+                              >
+                                <Trash2 size={15} />
+                                <span className="sm:hidden">Remover Linha</span>
+                              </button>
+                            ) : (
+                              <span className="text-slate-300 text-xs hidden sm:inline">-</span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Add Row and Save Controls */}
+                <div className="border-t border-slate-100 pt-4 flex flex-col sm:flex-row justify-between items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCollectiveManejoRows([...collectiveManejoRows, { bed: '' }]);
+                    }}
+                    className="w-full sm:w-auto px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer border border-slate-200"
+                  >
+                    <PlusCircle size={15} />
+                    + Adicionar outro Canteiro
+                  </button>
+
+                  <div className="w-full sm:w-auto flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsCollectiveManejoOpen(false)}
+                      className="flex-1 sm:flex-initial px-5 py-2.5 rounded-xl text-xs font-extrabold uppercase tracking-wider text-slate-500 hover:bg-slate-100 transition-colors cursor-pointer text-center"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={loading}
+                      className="flex-1 sm:flex-initial px-5 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-extrabold uppercase tracking-wider shadow-sm hover:shadow transition-colors cursor-pointer text-center disabled:opacity-50 font-black"
+                    >
+                      {loading ? 'Registrando...' : 'Registrar Manejo'}
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Collective Harvest Modal */}
+      <AnimatePresence>
+        {isCollectiveHarvestOpen && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-6xl w-full p-6 flex flex-col max-h-[90vh]"
+            >
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+                <div className="flex items-center gap-2">
+                  <Scissors className="text-teal-600 animate-pulse" size={22} />
+                  <div>
+                    <h3 className="text-lg font-black text-slate-900">Colheita Coletiva</h3>
+                    <p className="text-xs text-slate-500">Informe os canteiros colhidos e as quantidades. O sistema puxa automaticamente os cultivos ativos e integra ao Estoque de Expedição.</p>
+                  </div>
+                </div>
+                <button 
+                  type="button"
+                  onClick={() => setIsCollectiveHarvestOpen(false)}
+                  className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveCollectiveHarvest} className="space-y-4 flex-1 flex flex-col overflow-hidden">
+                {/* Top Inputs: Date */}
+                <div className="flex items-center gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200/60 max-w-sm">
+                  <div className="w-full">
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1">Data da Colheita</label>
+                    <input 
+                      type="date"
+                      required
+                      value={collectiveHarvestDate}
+                      onChange={(e) => setCollectiveHarvestDate(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-teal-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Canteiros Harvest Rows */}
+                <div className="flex-1 flex flex-col overflow-hidden">
+                  <div className="flex-1 overflow-y-auto pr-2 space-y-3 min-h-[250px]">
+                    <div className="hidden lg:grid lg:grid-cols-12 gap-3 px-2 text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">
+                      <div className="col-span-2">Canteiro [A]</div>
+                      <div className="col-span-3">Cultivar / Lote Ativo [B]</div>
+                      <div className="col-span-1 text-center">Disp. [C]</div>
+                      <div className="col-span-2">Qtd Colhida [D]</div>
+                      <div className="col-span-1">Rend. Pacotes [E]</div>
+                      <div className="col-span-2">Destino / Tipo [F]</div>
+                      <div className="col-span-1 text-center font-sans">Estoque? [G]</div>
+                    </div>
+
+                    {collectiveHarvestRows.map((row, index) => {
+                      const activeCrops = productions.filter(p => p.bed === row.bed && p.status === 'growing');
+
+                      return (
+                        <div 
+                          key={index} 
+                          className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 p-3 lg:p-2 bg-slate-50 lg:bg-transparent rounded-xl border border-slate-100 lg:border-none items-center"
+                        >
+                          {/* Canteiro */}
+                          <div className="col-span-2">
+                            <label className="block lg:hidden text-[9px] font-bold text-slate-400 uppercase mb-1">Canteiro</label>
+                            <select
+                              required
+                              value={row.bed}
+                              onChange={(e) => {
+                                const selectedBed = e.target.value;
+                                const updated = [...collectiveHarvestRows];
+                                updated[index].bed = selectedBed;
+                                 
+                                const actives = productions.filter(p => p.bed === selectedBed && p.status === 'growing');
+                                if (actives.length > 0) {
+                                  const p = actives[0];
+                                  updated[index].productionId = p.id;
+                                  updated[index].crop = p.crop;
+                                  updated[index].unit = p.unit || 'un';
+                                  updated[index].availableQty = p.quantityPlanted - (p.harvestQuantity || 0);
+                                } else {
+                                  updated[index].productionId = '';
+                                  updated[index].crop = '';
+                                  updated[index].unit = 'un';
+                                  updated[index].availableQty = 0;
+                                }
+                                setCollectiveHarvestRows(updated);
+                              }}
+                              className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-teal-500"
+                            >
+                              <option value="">Selecione...</option>
+                              {allBedsList.map(bed => (
+                                <option key={bed} value={bed}>{bed}</option>
+                              ))}
+                            </select>
+                          </div>
+
+                          {/* Cultivar / Lote Ativo */}
+                          <div className="col-span-3">
+                            <label className="block lg:hidden text-[9px] font-bold text-slate-400 uppercase mb-1">Cultivar / Lote Ativo</label>
+                            {activeCrops.length > 0 ? (
+                              <select
+                                required
+                                value={row.productionId}
+                                onChange={(e) => {
+                                  const pId = e.target.value;
+                                  const matched = activeCrops.find(item => item.id === pId);
+                                  if (matched) {
+                                    const updated = [...collectiveHarvestRows];
+                                    updated[index].productionId = matched.id;
+                                    updated[index].crop = matched.crop;
+                                    updated[index].unit = matched.unit || 'un';
+                                    updated[index].availableQty = matched.quantityPlanted - (matched.harvestQuantity || 0);
+                                    setCollectiveHarvestRows(updated);
+                                  }
+                                }}
+                                className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-teal-500"
+                              >
+                                {activeCrops.map(p => (
+                                  <option key={p.id} value={p.id}>
+                                    {p.crop} ({p.quantityPlanted - (p.harvestQuantity || 0)} {p.unit || 'un'} disp)
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <div className="px-2.5 py-2 bg-slate-100 rounded-xl text-xs font-semibold text-slate-400 italic">
+                                {row.bed ? 'Nenhum cultivo ativo' : 'Selecione o canteiro'}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Quantidade Disponível */}
+                          <div className="col-span-1 text-center">
+                            <label className="block lg:hidden text-[9px] font-bold text-slate-400 uppercase mb-1">Qtd Disponível</label>
+                            <span className="text-xs font-black text-slate-600 bg-slate-100 px-2.5 py-1 rounded-lg">
+                              {row.productionId ? `${row.availableQty} ${row.unit}` : '-'}
+                            </span>
+                          </div>
+
+                          {/* Quantidade Colhida */}
+                          <div className="col-span-2">
+                            <label className="block lg:hidden text-[9px] font-bold text-slate-400 uppercase mb-1">Quantidade Colhida</label>
+                            <div className="relative">
+                              <input
+                                required
+                                type="number"
+                                min="0.01"
+                                step="any"
+                                placeholder="Ex: 50"
+                                value={row.harvestQty}
+                                onChange={(e) => {
+                                  const updated = [...collectiveHarvestRows];
+                                  updated[index].harvestQty = e.target.value;
+                                  setCollectiveHarvestRows(updated);
+                                }}
+                                className="w-full pl-2.5 pr-8 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-teal-500"
+                              />
+                              <span className="absolute right-3 top-2.5 text-[10px] font-extrabold text-slate-400 uppercase">{row.unit}</span>
+                            </div>
+                          </div>
+
+                          {/* Pacotes produzidos (Rendimento) */}
+                          <div className="col-span-1">
+                            <label className="block lg:hidden text-[9px] font-bold text-slate-400 uppercase mb-1">Pacotes (Op.)</label>
+                            <input
+                              type="number"
+                              min="0"
+                              placeholder="Ex: 10"
+                              value={row.harvestPackages}
+                              onChange={(e) => {
+                                const updated = [...collectiveHarvestRows];
+                                updated[index].harvestPackages = e.target.value;
+                                setCollectiveHarvestRows(updated);
+                              }}
+                              className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-teal-500"
+                            />
+                          </div>
+
+                          {/* Tipo de Colheita (Destino) */}
+                          <div className="col-span-2">
+                            <label className="block lg:hidden text-[9px] font-bold text-slate-400 uppercase mb-1">Tipo de Colheita</label>
+                            <select
+                              value={row.harvestType}
+                              onChange={(e) => {
+                                const updated = [...collectiveHarvestRows];
+                                updated[index].harvestType = e.target.value as 'partial' | 'final';
+                                setCollectiveHarvestRows(updated);
+                              }}
+                              className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-teal-500"
+                            >
+                              <option value="final">Final (Lote Concluído)</option>
+                              <option value="partial">Parcial (Mantém Lote)</option>
+                            </select>
+                          </div>
+
+                          {/* Lançar no Estoque */}
+                          <div className="col-span-1 text-center flex flex-row lg:justify-center items-center gap-1.5 pt-1 lg:pt-0">
+                            <label className="block lg:hidden text-[9px] font-bold text-slate-400 uppercase">Enviar ao Estoque?</label>
+                            <input
+                              type="checkbox"
+                              checked={row.addToInventory}
+                              onChange={(e) => {
+                                const updated = [...collectiveHarvestRows];
+                                updated[index].addToInventory = e.target.checked;
+                                setCollectiveHarvestRows(updated);
+                              }}
+                              className="w-4 h-4 text-teal-600 focus:ring-teal-500 border-slate-300 rounded cursor-pointer"
+                            />
+                          </div>
+
+                          {/* Delete row button */}
+                          <div className="col-span-1 text-center pt-2 lg:pt-0">
+                            {collectiveHarvestRows.length > 1 ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setCollectiveHarvestRows(collectiveHarvestRows.filter((_, i) => i !== index));
+                                }}
+                                className="text-rose-500 hover:bg-rose-50 p-2 rounded-xl transition-all w-full lg:w-auto flex items-center justify-center gap-1.5 text-xs font-bold uppercase lg:normal-case border border-transparent hover:border-rose-100 lg:border-none cursor-pointer"
+                              >
+                                <Trash2 size={15} />
+                                <span className="lg:hidden">Remover Linha</span>
+                              </button>
+                            ) : (
+                              <span className="text-slate-300 text-xs hidden lg:inline">-</span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Add Row and Save Controls */}
+                <div className="border-t border-slate-100 pt-4 flex flex-col sm:flex-row justify-between items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCollectiveHarvestRows([...collectiveHarvestRows, { bed: '', productionId: '', crop: '', availableQty: 0, harvestQty: '', harvestPackages: '', harvestType: 'partial', unit: 'un', addToInventory: true }]);
+                    }}
+                    className="w-full sm:w-auto px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer border border-slate-200"
+                  >
+                    <PlusCircle size={15} />
+                    + Adicionar outro Canteiro
+                  </button>
+
+                  <div className="w-full sm:w-auto flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsCollectiveHarvestOpen(false)}
+                      className="flex-1 sm:flex-initial px-5 py-2.5 rounded-xl text-xs font-extrabold uppercase tracking-wider text-slate-500 hover:bg-slate-100 transition-colors cursor-pointer text-center"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={loading}
+                      className="flex-1 sm:flex-initial px-5 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-extrabold uppercase tracking-wider shadow-sm hover:shadow transition-colors cursor-pointer text-center disabled:opacity-50 font-black"
+                    >
+                      {loading ? 'Registrando...' : 'Registrar Colheitas'}
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* 4. Excel-Style Sheet Tabs & Controls */}
       <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden mb-6">
         
@@ -1346,6 +2618,22 @@ export default function ProductionComponent() {
             >
               <FileSpreadsheet size={15} />
               Planilha de Canteiros (Ativos)
+            </button>
+            
+            <button
+              onClick={() => {
+                setActiveTab('nursery');
+                setSelectedRowId(null);
+                cancelEditing();
+              }}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                activeTab === 'nursery' 
+                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200 shadow-xs' 
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-800'
+              }`}
+            >
+              <Layers size={15} className="text-emerald-600" />
+              Viveiro de Mudas (Bandejas)
             </button>
             
             <button
@@ -1378,6 +2666,22 @@ export default function ProductionComponent() {
             >
               <Sprout size={15} />
               Catálogo de Cultivos (Produtos)
+            </button>
+
+            <button
+              onClick={() => {
+                setActiveTab('sheets');
+                setSelectedRowId(null);
+                cancelEditing();
+              }}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                activeTab === 'sheets' 
+                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200 shadow-xs' 
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-800'
+              }`}
+            >
+              <Printer size={15} className="text-emerald-600" />
+              Fichas de Campo (Impressão)
             </button>
           </div>
 
@@ -1731,6 +3035,218 @@ export default function ProductionComponent() {
               </table>
             )}
 
+            {/* TAB 1.5: Nursery/Viveiro View */}
+            {activeTab === 'nursery' && (
+              <div className="p-4 space-y-4">
+                {/* Control bar inside nursery */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                  <div>
+                    <h3 className="text-sm font-extrabold uppercase text-slate-700 tracking-wider flex items-center gap-2">
+                      <Layers className="text-emerald-600 animate-pulse" size={18} />
+                      Controle do Viveiro de Mudas
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Acompanhe o semeio, controle de tratamentos e transplante para os canteiros da horta.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsSeedingModalOpen(true)}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+                    >
+                      <Plus size={15} />
+                      Nova Semeadura
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNurseryManejoSelectedIds([]);
+                        setIsNurseryManejoOpen(true);
+                      }}
+                      className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+                    >
+                      <Droplet size={15} />
+                      Registrar Tratamento (Calda)
+                    </button>
+                  </div>
+                </div>
+
+                {/* Grid layout or table of seedlings */}
+                <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
+                  <table className="w-full text-left border-collapse select-none">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        <th className="py-2.5 px-4 w-12 text-center border-r border-slate-200 bg-slate-100 font-mono text-slate-400 select-none">#</th>
+                        <th className="py-2.5 px-4 border-r border-slate-200 w-52 font-black text-slate-700">Cultura / Verdura [A]</th>
+                        <th className="py-2.5 px-4 border-r border-slate-200 w-36 font-black text-slate-700">Semeadura [B]</th>
+                        <th className="py-2.5 px-4 border-r border-slate-200 w-28 font-black text-slate-700">Dias no Viv. [C]</th>
+                        <th className="py-2.5 px-4 border-r border-slate-200 w-48 font-black text-slate-700">Bandejas & Células [D]</th>
+                        <th className="py-2.5 px-4 border-r border-slate-200 w-40 font-black text-slate-700">Status [E]</th>
+                        <th className="py-2.5 px-4 border-r border-slate-200 font-black text-slate-700">Histórico de Tratamentos [F]</th>
+                        <th className="py-2.5 px-4 text-center font-black text-slate-700 w-48">Ações [G]</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-150 text-xs">
+                      {filteredNursery.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} className="py-12 text-center text-slate-400 font-medium">
+                            Nenhuma semeadura de bandeja registrada ou encontrada no viveiro.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredNursery.map((seedling, idx) => {
+                          const isSelected = selectedRowId === seedling.id;
+                          const ageInDays = getDaysInField(seedling.plantingDate);
+                          
+                          let statusBadge = null;
+                          if (seedling.status === 'nursery') {
+                            statusBadge = (
+                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-50 text-amber-700 border border-amber-200 animate-pulse">
+                                🌱 No Viveiro
+                              </span>
+                            );
+                          } else if (seedling.status === 'transplanted') {
+                            statusBadge = (
+                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                🚜 Transplantada
+                              </span>
+                            );
+                          } else {
+                            statusBadge = (
+                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-rose-50 text-rose-700 border border-rose-200">
+                                ❌ Perda
+                              </span>
+                            );
+                          }
+
+                          return (
+                            <tr
+                              key={seedling.id}
+                              onClick={() => setSelectedRowId(seedling.id)}
+                              className={`hover:bg-slate-50 transition-colors cursor-pointer border-l-2 ${
+                                isSelected 
+                                  ? 'bg-emerald-50/40 border-l-emerald-500' 
+                                  : 'border-l-transparent'
+                              }`}
+                            >
+                              <td className="py-3 px-4 text-center border-r border-slate-150 bg-slate-50/50 font-mono text-[10px] text-slate-400 select-none">
+                                {idx + 1}
+                              </td>
+                              <td className="py-3 px-4 border-r border-slate-150 font-extrabold text-slate-800">
+                                {seedling.crop}
+                              </td>
+                              <td className="py-3 px-4 border-r border-slate-150 font-bold text-slate-600">
+                                {formatDate(seedling.plantingDate)}
+                              </td>
+                              <td className="py-3 px-4 border-r border-slate-150 font-mono font-extrabold text-slate-700 text-center">
+                                {seedling.status === 'nursery' ? `${ageInDays} dias` : '-'}
+                              </td>
+                              <td className="py-3 px-4 border-r border-slate-150 font-semibold text-slate-600">
+                                <div className="flex flex-col">
+                                  <span className="font-extrabold text-slate-800">
+                                    {seedling.trayCount} {seedling.trayCount === 1 ? 'bandeja' : 'bandejas'}
+                                  </span>
+                                  <span className="text-[10px] text-slate-400">
+                                    {seedling.cellCount} células / total: {seedling.totalCells} mudas
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="py-3 px-4 border-r border-slate-150 font-semibold">
+                                <div className="flex flex-col gap-1">
+                                  {statusBadge}
+                                  {seedling.status === 'transplanted' && seedling.transplantedBed && (
+                                    <span className="text-[10px] text-slate-500 font-bold">
+                                      Canteiro: {seedling.transplantedBed} ({seedling.transplantedQty} mudas)
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="py-3 px-4 border-r border-slate-150 text-slate-600 max-w-xs truncate">
+                                {seedling.logs && seedling.logs.length > 0 ? (
+                                  <div className="space-y-1">
+                                    {seedling.logs.map((log: any, lIdx: number) => (
+                                      <div key={lIdx} className="text-[10px] bg-slate-50 p-1 rounded border border-slate-100 flex flex-col">
+                                        <span className="font-black text-slate-500">{formatDate(log.date)}</span>
+                                        <span className="text-slate-600 font-medium truncate" title={log.description}>{log.description}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <span className="text-slate-400 italic text-[10px]">Sem tratamentos registrados</span>
+                                )}
+                              </td>
+                              <td className="py-3 px-4 text-center" onClick={(e) => e.stopPropagation()}>
+                                <div className="flex items-center justify-center gap-1.5">
+                                  {seedling.status === 'nursery' && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setTransplantTargetSeedling(seedling);
+                                          setTransplantQty(String(seedling.totalCells));
+                                          setIsTransplantModalOpen(true);
+                                        }}
+                                        className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-extrabold uppercase tracking-wider transition-all cursor-pointer shadow-xs"
+                                        title="Transplantar para o Campo"
+                                      >
+                                        <Sprout size={11} />
+                                        Ir p/ Campo
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={async () => {
+                                          confirmAction(
+                                            'Confirmar Perda Total',
+                                            'Tem certeza que deseja marcar este lote de bandejas do viveiro como perda total?',
+                                            'Confirmar',
+                                            async () => {
+                                              try {
+                                                await updateDoc(doc(db, 'nursery_seedlings', seedling.id), {
+                                                  status: 'lost'
+                                                });
+                                                alert('✓ Lote marcado como perda.');
+                                              } catch (err) {
+                                                console.error(err);
+                                              }
+                                            }
+                                          );
+                                        }}
+                                        className="p-1.5 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
+                                        title="Registrar Perda"
+                                      >
+                                        <AlertTriangle size={14} />
+                                      </button>
+                                    </>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => startEditingSeedling(seedling)}
+                                    className="p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-800 rounded-lg transition-colors cursor-pointer"
+                                    title="Editar Lançamento"
+                                  >
+                                    <Edit2 size={14} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteSeeding(seedling.id)}
+                                    className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                    title="Excluir Semeadura"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
             {/* TAB 2: History View (Full Listing of past cycles) */}
             {activeTab === 'history' && (
               <table className="w-full text-left border-collapse select-none">
@@ -1942,6 +3458,504 @@ export default function ProductionComponent() {
                       )}
                     </tbody>
                   </table>
+                </div>
+              </div>
+            )}
+
+            {/* TAB 4: Printable Field Sheets / Fichas de Campo */}
+            {activeTab === 'sheets' && (
+              <div className="p-4 bg-slate-100 min-h-screen">
+                {/* Print styles injected dynamically when tab is open */}
+                <style>{`
+                  @media print {
+                    @page {
+                      size: A4 ${sheetOrientation === 'landscape' ? 'landscape' : 'portrait'};
+                      margin: ${sheetOrientation === 'landscape' ? '0.8cm' : '1.2cm'} !important;
+                    }
+                    /* Hide everything except the print-area container */
+                    body * {
+                      visibility: hidden !important;
+                      height: 0 !important;
+                      overflow: hidden !important;
+                      margin: 0 !important;
+                      padding: 0 !important;
+                    }
+                    #print-area, #print-area * {
+                      visibility: visible !important;
+                      height: auto !important;
+                      overflow: visible !important;
+                      display: block !important;
+                    }
+                    #print-area {
+                      position: absolute !important;
+                      left: 0 !important;
+                      top: 0 !important;
+                      width: 100% !important;
+                      margin: 0 !important;
+                      padding: 1cm !important;
+                      background: white !important;
+                      color: black !important;
+                    }
+                    /* Ensure table borders and headers look correct on paper */
+                    table {
+                      border-collapse: collapse !important;
+                      width: 100% !important;
+                      margin-top: 15px !important;
+                      margin-bottom: 15px !important;
+                    }
+                    th, td {
+                      border: 1px solid #000000 !important;
+                      padding: 8px 6px !important;
+                      text-align: left !important;
+                      font-size: 11px !important;
+                      color: #000000 !important;
+                      line-height: 1.2 !important;
+                    }
+                    th {
+                      background-color: #f1f5f9 !important;
+                      font-weight: bold !important;
+                      -webkit-print-color-adjust: exact !important;
+                      print-color-adjust: exact !important;
+                    }
+                    .print-header {
+                      border-bottom: 2px solid #000000 !important;
+                      margin-bottom: 20px !important;
+                      padding-bottom: 10px !important;
+                    }
+                  }
+                `}</style>
+
+                <div className="flex flex-col lg:flex-row gap-6 no-print">
+                  {/* LEFT: Configurator Panel */}
+                  <div className="w-full lg:w-96 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-5">
+                    <div>
+                      <h3 className="text-sm font-extrabold uppercase text-slate-700 tracking-wider flex items-center gap-2">
+                        <Printer size={18} className="text-emerald-600" />
+                        Imprimir Fichas de Campo
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Configure e imprima fichas organizadas em papel para preenchimento manual no campo e posterior digitação.
+                      </p>
+                    </div>
+
+                    <div className="space-y-4">
+                      {/* Select Sheet Type */}
+                      <div>
+                        <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1.5">
+                          Tipo de Ficha
+                        </label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setSheetType('semeadura')}
+                            className={`px-3 py-2.5 rounded-xl text-xs font-bold text-center border cursor-pointer transition-all ${
+                              sheetType === 'semeadura'
+                                ? 'bg-emerald-600 border-emerald-600 text-white shadow-xs font-black'
+                                : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                            }`}
+                          >
+                            Semeadura (Viveiro)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSheetType('plantio')}
+                            className={`px-3 py-2.5 rounded-xl text-xs font-bold text-center border cursor-pointer transition-all ${
+                              sheetType === 'plantio'
+                                ? 'bg-emerald-600 border-emerald-600 text-white shadow-xs font-black'
+                                : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                            }`}
+                          >
+                            Plantio / Canteiro
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSheetType('tratamento')}
+                            className={`px-3 py-2.5 rounded-xl text-xs font-bold text-center border cursor-pointer transition-all ${
+                              sheetType === 'tratamento'
+                                ? 'bg-emerald-600 border-emerald-600 text-white shadow-xs font-black'
+                                : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                            }`}
+                          >
+                            Tratamentos
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSheetType('colheita')}
+                            className={`px-3 py-2.5 rounded-xl text-xs font-bold text-center border cursor-pointer transition-all ${
+                              sheetType === 'colheita'
+                                ? 'bg-emerald-600 border-emerald-600 text-white shadow-xs font-black'
+                                : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                            }`}
+                          >
+                            Colheita / Rendimento
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Select Sheet Orientation */}
+                      <div>
+                        <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1.5">
+                          Orientação da Página
+                        </label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setSheetOrientation('landscape')}
+                            className={`px-3 py-2 rounded-xl text-xs font-bold text-center border cursor-pointer transition-all flex items-center justify-center gap-1.5 ${
+                              sheetOrientation === 'landscape'
+                                ? 'bg-emerald-600 border-emerald-600 text-white shadow-xs font-black'
+                                : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                            }`}
+                          >
+                            <span className="rotate-90 inline-block font-mono text-[10px]">▤</span> Paisagem
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSheetOrientation('portrait')}
+                            className={`px-3 py-2 rounded-xl text-xs font-bold text-center border cursor-pointer transition-all flex items-center justify-center gap-1.5 ${
+                              sheetOrientation === 'portrait'
+                                ? 'bg-emerald-600 border-emerald-600 text-white shadow-xs font-black'
+                                : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                            }`}
+                          >
+                            <span className="inline-block font-mono text-[10px]">▤</span> Retrato
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Responsible Field */}
+                      <div>
+                        <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                          Responsável na Impressão
+                        </label>
+                        <input
+                          type="text"
+                          value={sheetResponsavel}
+                          onChange={(e) => setSheetResponsavel(e.target.value)}
+                          placeholder="Ex: Lucas Fucilini"
+                          className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 bg-slate-50 focus:bg-white focus:outline-none focus:border-emerald-500 transition-colors"
+                        />
+                      </div>
+
+                      {/* Number of empty/blank rows */}
+                      <div>
+                        <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                          Linhas Vazias Adicionais (para anotação livre)
+                        </label>
+                        <select
+                          value={sheetBlankRows}
+                          onChange={(e) => setSheetBlankRows(parseInt(e.target.value) || 0)}
+                          className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 bg-slate-50 focus:bg-white focus:outline-none focus:border-emerald-500 transition-colors"
+                        >
+                          <option value="5">5 linhas pautadas</option>
+                          <option value="10">10 linhas pautadas</option>
+                          <option value="12">12 linhas pautadas</option>
+                          <option value="15">15 linhas pautadas</option>
+                          <option value="20">20 linhas pautadas</option>
+                          <option value="30">30 linhas pautadas</option>
+                        </select>
+                      </div>
+
+                      {/* Prefill Toggle */}
+                      <div className="bg-slate-50 border border-slate-200/80 p-3 rounded-xl flex items-center justify-between">
+                        <div>
+                          <span className="block text-xs font-bold text-slate-700">Preencher com dados atuais?</span>
+                          <span className="block text-[10px] text-slate-500 mt-0.5">
+                            {sheetType === 'semeadura' && 'Exibe produtos do catálogo como sugestão.'}
+                            {sheetType === 'plantio' && 'Exibe lotes de mudas prontos no viveiro.'}
+                            {sheetType === 'tratamento' && 'Exibe canteiros com plantio em andamento.'}
+                            {sheetType === 'colheita' && 'Exibe culturas ativas esperando colheita.'}
+                          </span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={sheetPrefillData}
+                          onChange={(e) => setSheetPrefillData(e.target.checked)}
+                          className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                        />
+                      </div>
+
+                      {/* Custom Title / Subtitle Notes */}
+                      <div>
+                        <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                          Observações / Instruções de Rodapé
+                        </label>
+                        <textarea
+                          rows={3}
+                          value={sheetNotes}
+                          onChange={(e) => setSheetNotes(e.target.value)}
+                          placeholder="Ex: Retornar esta ficha preenchida ao escritório no final da tarde de sexta-feira."
+                          className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 bg-slate-50 focus:bg-white focus:outline-none focus:border-emerald-500 transition-colors"
+                        />
+                      </div>
+
+                      {/* Print Trigger Button */}
+                      <button
+                        type="button"
+                        onClick={() => window.print()}
+                        className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-emerald-600/10 active:scale-[0.98]"
+                      >
+                        <Printer size={16} />
+                        Imprimir Ficha (A4)
+                      </button>
+                    </div>
+
+                    <div className="bg-amber-50 border border-amber-100 rounded-xl p-3 text-[11px] text-amber-800 space-y-1">
+                      <span className="font-bold flex items-center gap-1">
+                        <Info size={12} className="text-amber-600" />
+                        Dica de Impressão:
+                      </span>
+                      <p>
+                        Na janela de impressão do seu navegador, marque a opção <strong>"Imprimir gráficos de fundo"</strong> (Background graphics) e defina as margens como <strong>"Padrão"</strong> ou <strong>"Nenhuma"</strong> para obter o melhor resultado visual.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* RIGHT: Visual Preview on Screen */}
+                  <div className="flex-1 bg-slate-200 p-4 md:p-8 rounded-2xl border border-slate-300 flex flex-col items-center justify-start overflow-y-auto">
+                    <div className="text-[10px] font-extrabold uppercase text-slate-500 tracking-wider mb-3 flex items-center gap-1.5 self-start">
+                      <FileText size={14} className="text-slate-500" />
+                      Visualização Prévia da Folha de Papel (A4)
+                    </div>
+
+                    {/* This div is what gets printed */}
+                    <div 
+                      id="print-area" 
+                      className={sheetOrientation === 'landscape' ? "w-full max-w-[29.7cm] bg-white p-8 md:p-10 shadow-xl border border-slate-300 text-slate-800 rounded-md font-sans" : "w-full max-w-[21cm] bg-white p-10 md:p-14 shadow-xl border border-slate-300 text-slate-800 rounded-md font-sans"}
+                      style={{ minHeight: sheetOrientation === 'landscape' ? '21cm' : '29.7cm' }}
+                    >
+                      {/* Paper Header */}
+                      <div className="print-header flex items-center justify-between border-b-2 border-slate-800 pb-4 mb-6">
+                        <div className="space-y-1">
+                          <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest font-mono">SISTEMA AGROECOLÓGICO - FICHA DE CAMPO</span>
+                          <h1 className="text-lg font-black text-slate-900 uppercase tracking-tight">
+                            {sheetType === 'semeadura' && 'Ficha de Semeadura e Viveiro'}
+                            {sheetType === 'plantio' && 'Ficha de Plantio e Transplante'}
+                            {sheetType === 'tratamento' && 'Ficha de Tratamento e Manejo'}
+                            {sheetType === 'colheita' && 'Ficha de Colheita e Rendimento'}
+                          </h1>
+                          <p className="text-[10px] text-slate-500 font-medium">
+                            {sheetType === 'semeadura' && 'Registro diário de semeio de sementes e preparação de bandejas para produção de mudas.'}
+                            {sheetType === 'plantio' && 'Controle de transplante de mudas do viveiro para os canteiros da horta.'}
+                            {sheetType === 'tratamento' && 'Aplicação de defensivos orgânicos, caldas protetoras e adubações no viveiro ou campo.'}
+                            {sheetType === 'colheita' && 'Apuração de pesagem, volumes colhidos por canteiro e controle de desperdício.'}
+                          </p>
+                        </div>
+                        <div className="text-right flex flex-col items-end">
+                          <div className="h-10 w-10 rounded-lg bg-emerald-100 flex items-center justify-center border border-emerald-200">
+                            <Sprout className="text-emerald-700" size={24} />
+                          </div>
+                          <span className="text-[8px] font-mono font-bold text-slate-400 mt-1 uppercase">Horta Orgânica</span>
+                        </div>
+                      </div>
+
+                      {/* Metadata Header Table */}
+                      <div className="grid grid-cols-2 gap-6 border border-slate-300 p-3.5 rounded-lg bg-slate-50/50 mb-6 text-xs">
+                        <div>
+                          <span className="font-extrabold text-[9px] uppercase text-slate-400 block tracking-wider">Responsável de Campo:</span>
+                          <span className="font-bold text-slate-800 text-sm">{sheetResponsavel || '______________________________________'}</span>
+                        </div>
+                        <div className="border-l border-slate-200 pl-6">
+                          <span className="font-extrabold text-[9px] uppercase text-slate-400 block tracking-wider">Assinatura do Responsável:</span>
+                          <span className="font-bold text-slate-400 block pt-1">______________________________________</span>
+                        </div>
+                      </div>
+
+                      {/* Main Data Table */}
+                      <table className="w-full border-collapse border border-slate-300 text-xs">
+                        <thead>
+                          <tr className="bg-slate-100 text-slate-700 font-bold uppercase tracking-wider text-[10px] border-b border-slate-300">
+                            <th className="py-2 px-3 border border-slate-300 text-center w-10">#</th>
+                            <th className="py-2 px-3 border border-slate-300 w-24 text-center">Data</th>
+                            {sheetType === 'semeadura' && (
+                              <>
+                                <th className="py-2 px-3 border border-slate-300">Variedade / Cultura</th>
+                                <th className="py-2 px-3 border border-slate-300 w-24">Qtd. Bandejas</th>
+                                <th className="py-2 px-3 border border-slate-300 w-28">Furos por Bandeja</th>
+                                <th className="py-2 px-3 border border-slate-300 w-36">Marca/Lote Semente</th>
+                                <th className="py-2 px-3 border border-slate-300">Substrato / Observações</th>
+                              </>
+                            )}
+                            {sheetType === 'plantio' && (
+                              <>
+                                <th className="py-2 px-3 border border-slate-300">Cultura (Planta)</th>
+                                <th className="py-2 px-3 border border-slate-300 w-36">Origem (Lote Viveiro)</th>
+                                <th className="py-2 px-3 border border-slate-300 w-28">Canteiro Destino</th>
+                                <th className="py-2 px-3 border border-slate-300 w-28">Qtd. Mudas</th>
+                                <th className="py-2 px-3 border border-slate-300">Anotações / Obs. Solo</th>
+                              </>
+                            )}
+                            {sheetType === 'tratamento' && (
+                              <>
+                                <th className="py-2 px-3 border border-slate-300 w-24">Canteiro (Nº)</th>
+                                <th className="py-2 px-3 border border-slate-300">Cultura Local</th>
+                                <th className="py-2 px-3 border border-slate-300 w-44">Produto / Calda Aplicada</th>
+                                <th className="py-2 px-3 border border-slate-300 w-28">Dosagem</th>
+                                <th className="py-2 px-3 border border-slate-300">Carência / Praga Detetada</th>
+                              </>
+                            )}
+                            {sheetType === 'colheita' && (
+                              <>
+                                <th className="py-2 px-3 border border-slate-300 w-24">Canteiro</th>
+                                <th className="py-2 px-3 border border-slate-300">Cultura (Produto)</th>
+                                <th className="py-2 px-3 border border-slate-300 w-32">Qtd. Colhida (Valor)</th>
+                                <th className="py-2 px-3 border border-slate-300 w-20">Unidade</th>
+                                <th className="py-2 px-3 border border-slate-300">Qualidade / Destino / Perda</th>
+                              </>
+                            )}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {/* Prefilled Rows (if option is checked) */}
+                          {sheetPrefillData ? (
+                            <>
+                              {sheetType === 'semeadura' && (
+                                <>
+                                  {/* List catalog items to prefill varieties */}
+                                  {(produceCatalog.length > 0 ? produceCatalog.slice(0, 10) : STANDARD_CROPS.slice(0, 10).map((crop) => ({ name: crop }))).map((item: any, idx) => (
+                                    <tr key={`pref-sem-${idx}`} className="border-b border-slate-200">
+                                      <td className="py-2 px-3 text-center border border-slate-300 font-mono text-slate-400 font-bold">{idx + 1}</td>
+                                      <td className="py-2 px-3 border border-slate-300 text-center font-mono text-slate-300">___/___/26</td>
+                                      <td className="py-2 px-3 border border-slate-300 font-bold text-slate-800">{item.name}</td>
+                                      <td className="py-2 px-3 border border-slate-300 bg-slate-50/50"></td>
+                                      <td className="py-2 px-3 border border-slate-300 bg-slate-50/50"></td>
+                                      <td className="py-2 px-3 border border-slate-300 bg-slate-50/50"></td>
+                                      <td className="py-2 px-3 border border-slate-300 bg-slate-50/50"></td>
+                                    </tr>
+                                  ))}
+                                </>
+                              )}
+
+                              {sheetType === 'plantio' && (
+                                <>
+                                  {/* List seedlings active in nursery to prefill nursery source */}
+                                  {nurserySeedlings.filter(s => s.status === 'nursery').slice(0, 10).map((seedling, idx) => (
+                                    <tr key={`pref-plant-${idx}`} className="border-b border-slate-200">
+                                      <td className="py-2 px-3 text-center border border-slate-300 font-mono text-slate-400 font-bold">{idx + 1}</td>
+                                      <td className="py-2 px-3 border border-slate-300 text-center font-mono text-slate-300">___/___/26</td>
+                                      <td className="py-2 px-3 border border-slate-300 font-bold text-slate-800">{seedling.crop}</td>
+                                      <td className="py-2 px-3 border border-slate-300 text-slate-600">
+                                        Viveiro (Semeado em {new Date(seedling.plantingDate?.toDate ? seedling.plantingDate.toDate() : seedling.plantingDate).toLocaleDateString('pt-BR')})
+                                      </td>
+                                      <td className="py-2 px-3 border border-slate-300 bg-slate-50/50"></td>
+                                      <td className="py-2 px-3 border border-slate-300 bg-slate-50/50"></td>
+                                      <td className="py-2 px-3 border border-slate-300 bg-slate-50/50"></td>
+                                    </tr>
+                                  ))}
+                                  {/* If no nursery seedlings, add some common ones */}
+                                  {nurserySeedlings.filter(s => s.status === 'nursery').length === 0 && (
+                                    ['Alface Crespa', 'Rúcula Folha Larga', 'Couve Manteiga', 'Brócolis Ramoso'].map((crop, idx) => (
+                                      <tr key={`pref-plant-fallback-${idx}`} className="border-b border-slate-200">
+                                        <td className="py-2 px-3 text-center border border-slate-300 font-mono text-slate-400 font-bold">{idx + 1}</td>
+                                        <td className="py-2 px-3 border border-slate-300 text-center font-mono text-slate-300">___/___/26</td>
+                                        <td className="py-2 px-3 border border-slate-300 font-bold text-slate-800">{crop}</td>
+                                        <td className="py-2 px-3 border border-slate-300 text-slate-400">Mudário / Bandejas</td>
+                                        <td className="py-2 px-3 border border-slate-300 bg-slate-50/50"></td>
+                                        <td className="py-2 px-3 border border-slate-300 bg-slate-50/50"></td>
+                                        <td className="py-2 px-3 border border-slate-300 bg-slate-50/50"></td>
+                                      </tr>
+                                    ))
+                                  )}
+                                </>
+                              )}
+
+                              {sheetType === 'tratamento' && (
+                                <>
+                                  {/* List active field productions with crops */}
+                                  {productions.filter(p => p.status === 'growing' || p.status === 'harvesting').slice(0, 10).map((prod, idx) => (
+                                    <tr key={`pref-trat-${idx}`} className="border-b border-slate-200">
+                                      <td className="py-2 px-3 text-center border border-slate-300 font-mono text-slate-400 font-bold">{idx + 1}</td>
+                                      <td className="py-2 px-3 border border-slate-300 text-center font-mono text-slate-300">___/___/26</td>
+                                      <td className="py-2 px-3 border border-slate-300 font-bold text-slate-800 text-center">Canteiro {prod.bed}</td>
+                                      <td className="py-2 px-3 border border-slate-300 text-slate-600">{prod.crop} ({prod.quantityPlanted} {prod.unit || 'un'})</td>
+                                      <td className="py-2 px-3 border border-slate-300 bg-slate-50/50"></td>
+                                      <td className="py-2 px-3 border border-slate-300 bg-slate-50/50"></td>
+                                      <td className="py-2 px-3 border border-slate-300 bg-slate-50/50"></td>
+                                    </tr>
+                                  ))}
+                                  {/* If no productions, list some canteiro lines */}
+                                  {productions.filter(p => p.status === 'growing' || p.status === 'harvesting').length === 0 && (
+                                    ['Canteiro 1-A', 'Canteiro 2-B', 'Canteiro 3-C'].map((bed, idx) => (
+                                      <tr key={`pref-trat-fallback-${idx}`} className="border-b border-slate-200">
+                                        <td className="py-2 px-3 text-center border border-slate-300 font-mono text-slate-400 font-bold">{idx + 1}</td>
+                                        <td className="py-2 px-3 border border-slate-300 text-center font-mono text-slate-300">___/___/26</td>
+                                        <td className="py-2 px-3 border border-slate-300 font-bold text-slate-800 text-center">{bed}</td>
+                                        <td className="py-2 px-3 border border-slate-300 text-slate-400 font-bold">Preencher Cultura...</td>
+                                        <td className="py-2 px-3 border border-slate-300 bg-slate-50/50"></td>
+                                        <td className="py-2 px-3 border border-slate-300 bg-slate-50/50"></td>
+                                        <td className="py-2 px-3 border border-slate-300 bg-slate-50/50"></td>
+                                      </tr>
+                                    ))
+                                  )}
+                                </>
+                              )}
+
+                              {sheetType === 'colheita' && (
+                                <>
+                                  {/* List active field productions ready/growing */}
+                                  {productions.filter(p => p.status === 'growing' || p.status === 'harvesting').slice(0, 10).map((prod, idx) => (
+                                    <tr key={`pref-colh-${idx}`} className="border-b border-slate-200">
+                                      <td className="py-2 px-3 text-center border border-slate-300 font-mono text-slate-400 font-bold">{idx + 1}</td>
+                                      <td className="py-2 px-3 border border-slate-300 text-center font-mono text-slate-300">___/___/26</td>
+                                      <td className="py-2 px-3 border border-slate-300 text-slate-800 text-center font-bold">Canteiro {prod.bed}</td>
+                                      <td className="py-2 px-3 border border-slate-300 font-bold text-slate-800">{prod.crop}</td>
+                                      <td className="py-2 px-3 border border-slate-300 bg-slate-50/50 text-center font-mono text-slate-400">_____________</td>
+                                      <td className="py-2 px-3 border border-slate-300 font-bold text-slate-600 text-center">{prod.unit || 'un'}</td>
+                                      <td className="py-2 px-3 border border-slate-300 bg-slate-50/50"></td>
+                                    </tr>
+                                  ))}
+                                  {/* If no productions, list fallbacks */}
+                                  {productions.filter(p => p.status === 'growing' || p.status === 'harvesting').length === 0 && (
+                                    ['Alface Crespa', 'Rúcula', 'Cebolinha', 'Coentro'].map((crop, idx) => (
+                                      <tr key={`pref-colh-fallback-${idx}`} className="border-b border-slate-200">
+                                        <td className="py-2 px-3 text-center border border-slate-300 font-mono text-slate-400 font-bold">{idx + 1}</td>
+                                        <td className="py-2 px-3 border border-slate-300 text-center font-mono text-slate-300">___/___/26</td>
+                                        <td className="py-2 px-3 border border-slate-300 text-slate-400 text-center">_____________</td>
+                                        <td className="py-2 px-3 border border-slate-300 font-bold text-slate-800">{crop}</td>
+                                        <td className="py-2 px-3 border border-slate-300 bg-slate-50/50 text-center font-mono text-slate-400">_____________</td>
+                                        <td className="py-2 px-3 border border-slate-300 text-slate-400 text-center font-bold">un</td>
+                                        <td className="py-2 px-3 border border-slate-300 bg-slate-50/50"></td>
+                                      </tr>
+                                    ))
+                                  )}
+                                </>
+                              )}
+                            </>
+                          ) : null}
+
+                          {/* Empty Blank Rows for writing */}
+                          {Array.from({ length: sheetBlankRows }).map((_, i) => {
+                            const rowNum = (sheetPrefillData ? (
+                              sheetType === 'semeadura' ? (produceCatalog.length > 0 ? Math.min(10, produceCatalog.length) : 10) :
+                              sheetType === 'plantio' ? Math.max(4, nurserySeedlings.filter(s => s.status === 'nursery').slice(0, 10).length) :
+                              sheetType === 'tratamento' ? Math.max(3, productions.filter(p => p.status === 'growing' || p.status === 'harvesting').slice(0, 10).length) :
+                              Math.max(4, productions.filter(p => p.status === 'growing' || p.status === 'harvesting').slice(0, 10).length)
+                            ) : 0) + i + 1;
+
+                            return (
+                              <tr key={`blank-${i}`} className="border-b border-slate-200 h-10">
+                                <td className="py-2 px-3 text-center border border-slate-300 font-mono text-slate-300 font-bold">{rowNum}</td>
+                                <td className="py-2 px-3 border border-slate-300 text-center font-mono text-slate-300">___/___/26</td>
+                                <td className="py-2 px-3 border border-slate-300"></td>
+                                <td className="py-2 px-3 border border-slate-300"></td>
+                                <td className="py-2 px-3 border border-slate-300"></td>
+                                <td className="py-2 px-3 border border-slate-300"></td>
+                                <td className="py-2 px-3 border border-slate-300"></td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+
+                      {/* Instructions / Footer Notes */}
+                      {(sheetNotes || profile?.name) && (
+                        <div className="mt-8 border-t border-slate-200 pt-4 text-[10px] text-slate-500 italic space-y-1">
+                          {sheetNotes && <p><strong>Instruções de Preenchimento:</strong> {sheetNotes}</p>}
+                          <p className="text-[8px] font-mono text-right text-slate-400 uppercase">Ficha gerada eletronicamente pelo usuário {profile?.name || 'Operador'} em {new Date().toLocaleDateString('pt-BR')}</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -2396,6 +4410,800 @@ export default function ProductionComponent() {
                     className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-extrabold uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
                   >
                     {editingCatalogItemId ? 'Salvar Alterações' : 'Cadastrar Produto'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Nursery Seeding Modal */}
+      <AnimatePresence>
+        {isSeedingModalOpen && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-lg w-full p-6 flex flex-col max-h-[90vh]"
+            >
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+                <div className="flex items-center gap-2">
+                  <Layers className="text-emerald-600 animate-pulse" size={22} />
+                  <div>
+                    <h3 className="text-lg font-black text-slate-900">Registrar Semeadura em Viveiro</h3>
+                    <p className="text-xs text-slate-500">Semeie novas bandejas para o viveiro de mudas</p>
+                  </div>
+                </div>
+                <button 
+                  type="button"
+                  onClick={() => setIsSeedingModalOpen(false)}
+                  className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveSeeding} className="space-y-4 overflow-y-auto pr-1">
+                {/* Cultura / Verdura */}
+                <div>
+                  <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                    Cultura / Verdura
+                  </label>
+                  <select
+                    value={seedingCrop}
+                    onChange={(e) => setSeedingCrop(e.target.value)}
+                    required
+                    className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                  >
+                    <option value="">Selecione um cultivo do catálogo...</option>
+                    {produceCatalog.map(item => (
+                      <option key={item.id} value={item.name}>{item.name} ({item.category})</option>
+                    ))}
+                    {/* Fallback to let them type if catalog is empty or missing something */}
+                  </select>
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <span className="text-[10px] text-slate-400">Ou digite um nome personalizado:</span>
+                    <input
+                      type="text"
+                      value={seedingCrop}
+                      onChange={(e) => setSeedingCrop(e.target.value)}
+                      placeholder="Ex: Alface Crespa Roxa"
+                      className="flex-1 px-2.5 py-1 border border-slate-200 rounded-lg text-[10px] font-medium focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Data de Semeio */}
+                <div>
+                  <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                    Data da Semeadura
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={seedingDate}
+                    onChange={(e) => setSeedingDate(e.target.value)}
+                    className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                  />
+                </div>
+
+                {/* Tray Count and Cell Count (2 columns) */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                      Qtd. de Bandejas
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min="1"
+                      placeholder="Ex: 10"
+                      value={seedingTrayCount}
+                      onChange={(e) => setSeedingTrayCount(e.target.value)}
+                      className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                      Células por Bandeja
+                    </label>
+                    <select
+                      value={seedingCellCount}
+                      onChange={(e) => setSeedingCellCount(e.target.value)}
+                      className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                    >
+                      <option value="200">200 células</option>
+                      <option value="128">128 células</option>
+                      <option value="72">72 células</option>
+                      <option value="50">50 células</option>
+                      <option value="288">288 células</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Observações */}
+                <div>
+                  <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                    Notas / Observações (Opcional)
+                  </label>
+                  <textarea
+                    placeholder="Ex: Substrato classe A, sementes peletizadas lote #9823..."
+                    value={seedingNotes}
+                    onChange={(e) => setSeedingNotes(e.target.value)}
+                    className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white h-20 resize-none"
+                  />
+                </div>
+
+                {/* Footer Buttons */}
+                <div className="flex items-center justify-end gap-2 border-t border-slate-100 pt-3 mt-4">
+                  <button
+                    type="button"
+                    onClick={() => setIsSeedingModalOpen(false)}
+                    className="px-4 py-2.5 rounded-xl text-xs font-extrabold uppercase tracking-wider text-slate-500 hover:bg-slate-100 transition-colors cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-extrabold uppercase tracking-wider shadow-sm transition-colors cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Plus size={14} />
+                    Confirmar Semeio
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Nursery Edit Seedling Modal */}
+      <AnimatePresence>
+        {editingSeedling && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-2xl w-full p-6 flex flex-col max-h-[90vh]"
+            >
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+                <div className="flex items-center gap-2">
+                  <Edit2 className="text-emerald-600 animate-pulse" size={22} />
+                  <div>
+                    <h3 className="text-lg font-black text-slate-900">Editar Lançamento do Viveiro</h3>
+                    <p className="text-xs text-slate-500">Corrija informações de semeadura, status ou tratamentos do lote</p>
+                  </div>
+                </div>
+                <button 
+                  type="button"
+                  onClick={() => setEditingSeedling(null)}
+                  className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <form onSubmit={handleUpdateSeedling} className="space-y-4 overflow-y-auto pr-1 flex-1">
+                {/* Two columns for basic details */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Cultura / Verdura */}
+                  <div>
+                    <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                      Cultura / Verdura
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={editSeedlingCrop}
+                      onChange={(e) => setEditSeedlingCrop(e.target.value)}
+                      placeholder="Ex: Alface Crespa Roxa"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                    />
+                  </div>
+
+                  {/* Data de Semeio */}
+                  <div>
+                    <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                      Data da Semeadura
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={editSeedlingDate}
+                      onChange={(e) => setEditSeedlingDate(e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                    />
+                  </div>
+                </div>
+
+                {/* Tray Count, Cell Count, and Status (3 columns) */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                      Qtd. de Bandejas
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min="1"
+                      placeholder="Ex: 10"
+                      value={editSeedlingTrayCount}
+                      onChange={(e) => setEditSeedlingTrayCount(e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                      Células por Bandeja
+                    </label>
+                    <select
+                      value={editSeedlingCellCount}
+                      onChange={(e) => setEditSeedlingCellCount(e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                    >
+                      <option value="200">200 células</option>
+                      <option value="128">128 células</option>
+                      <option value="72">72 células</option>
+                      <option value="50">50 células</option>
+                      <option value="288">288 células</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                      Status do Lote
+                    </label>
+                    <select
+                      value={editSeedlingStatus}
+                      onChange={(e) => setEditSeedlingStatus(e.target.value as any)}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 bg-slate-50 focus:bg-white focus:outline-none focus:border-emerald-500"
+                    >
+                      <option value="nursery">🌱 No Viveiro</option>
+                      <option value="transplanted">🚜 Transplantada / Ir p/ Campo</option>
+                      <option value="lost">❌ Perda Total</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Conditional fields for transplanted status */}
+                {editSeedlingStatus === 'transplanted' && (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-slate-50 p-3.5 rounded-xl border border-slate-150">
+                    <div>
+                      <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                        Canteiro Destino
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Ex: Canteiro 4-B"
+                        value={editSeedlingTransplantedBed}
+                        onChange={(e) => setEditSeedlingTransplantedBed(e.target.value)}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                        Qtd. de Mudas
+                      </label>
+                      <input
+                        type="number"
+                        required
+                        value={editSeedlingTransplantedQty}
+                        onChange={(e) => setEditSeedlingTransplantedQty(e.target.value)}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                        Data de Transplante / Saída
+                      </label>
+                      <input
+                        type="date"
+                        required
+                        value={editSeedlingTransplantDate}
+                        onChange={(e) => setEditSeedlingTransplantDate(e.target.value)}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Observações */}
+                <div>
+                  <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                    Notas / Observações (Semeio)
+                  </label>
+                  <textarea
+                    placeholder="Ex: Substrato classe A, sementes peletizadas lote #9823..."
+                    value={editSeedlingNotes}
+                    onChange={(e) => setEditSeedlingNotes(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white h-16 resize-none"
+                  />
+                </div>
+
+                {/* TRATAMENTOS / LOGS EDITOR */}
+                <div className="border border-slate-200 rounded-xl p-3 bg-slate-50/50 space-y-3">
+                  <div>
+                    <h4 className="text-xs font-black uppercase text-slate-700 tracking-wider">Histórico de Tratamentos / Manejos</h4>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Adicione ou exclua tratamentos registrados no viveiro para este lote de mudas.</p>
+                  </div>
+
+                  {/* Add a treatment log form row */}
+                  <div className="flex flex-col sm:flex-row gap-2 bg-white p-2.5 rounded-lg border border-slate-150 items-end">
+                    <div className="w-full sm:w-36">
+                      <label className="block text-[9px] font-bold uppercase text-slate-400 tracking-wider mb-1">
+                        Data
+                      </label>
+                      <input
+                        type="date"
+                        value={newLogDate}
+                        onChange={(e) => setNewLogDate(e.target.value)}
+                        className="w-full px-2 py-1.5 border border-slate-200 rounded-md text-[11px] font-medium"
+                      />
+                    </div>
+                    <div className="flex-1 w-full">
+                      <label className="block text-[9px] font-bold uppercase text-slate-400 tracking-wider mb-1">
+                        Descrição do Tratamento / Produto / Calda
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Ex: Pulverização com calda bordalesa 1%"
+                        value={newLogDesc}
+                        onChange={(e) => setNewLogDesc(e.target.value)}
+                        className="w-full px-2 py-1.5 border border-slate-200 rounded-md text-[11px] font-medium"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleAddEditSeedlingLog}
+                      className="w-full sm:w-auto px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md text-[11px] font-bold uppercase cursor-pointer"
+                    >
+                      Adicionar
+                    </button>
+                  </div>
+
+                  {/* Log list */}
+                  <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                    {editSeedlingLogs.length === 0 ? (
+                      <p className="text-[10px] text-slate-400 italic py-2 text-center">Nenhum tratamento registrado para este lote.</p>
+                    ) : (
+                      editSeedlingLogs.map((log: any, lIdx: number) => {
+                        const lDate = log.date?.toDate ? log.date.toDate() : new Date(log.date);
+                        return (
+                          <div key={lIdx} className="flex items-center justify-between bg-white px-3 py-2 rounded-lg border border-slate-150 text-xs">
+                            <div className="flex flex-col">
+                              <span className="font-extrabold text-[10px] text-emerald-600 font-mono">
+                                {lDate.toLocaleDateString('pt-BR')}
+                              </span>
+                              <span className="text-slate-700 font-bold">{log.description}</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setEditSeedlingLogs(editSeedlingLogs.filter((_, idx) => idx !== lIdx))}
+                              className="text-rose-500 hover:bg-rose-50 p-1.5 rounded-lg cursor-pointer"
+                              title="Excluir Tratamento"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+
+                {/* Footer Buttons */}
+                <div className="flex items-center justify-end gap-2 border-t border-slate-100 pt-3 mt-4">
+                  <button
+                    type="button"
+                    onClick={() => setEditingSeedling(null)}
+                    className="px-4 py-2.5 rounded-xl text-xs font-extrabold uppercase tracking-wider text-slate-500 hover:bg-slate-100 transition-colors cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-extrabold uppercase tracking-wider shadow-sm transition-colors cursor-pointer flex items-center gap-1.5"
+                  >
+                    Salvar Alterações
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Nursery Treatment Modal (Manejo Coletivo) */}
+      <AnimatePresence>
+        {isNurseryManejoOpen && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-3xl w-full p-6 flex flex-col max-h-[90vh]"
+            >
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+                <div className="flex items-center gap-2">
+                  <Droplet className="text-amber-600 animate-pulse" size={22} />
+                  <div>
+                    <h3 className="text-lg font-black text-slate-900">Aplicar Tratamento em Viveiro</h3>
+                    <p className="text-xs text-slate-500">Registre inseticidas, fungicidas e foliares em canteiros de bandeja</p>
+                  </div>
+                </div>
+                <button 
+                  type="button"
+                  onClick={() => setIsNurseryManejoOpen(false)}
+                  className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveNurseryManejo} className="space-y-4 flex-1 flex flex-col overflow-hidden">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Date and Employee */}
+                  <div>
+                    <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                      Data do Tratamento
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={nurseryManejoDate}
+                      onChange={(e) => setNurseryManejoDate(e.target.value)}
+                      className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                      Responsável pela Aplicação
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ex: Seu Nome, Funcionário..."
+                      value={nurseryManejoEmployee}
+                      onChange={(e) => setNurseryManejoEmployee(e.target.value)}
+                      className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 flex-1 overflow-hidden">
+                  {/* Lotes de Mudas Checklist */}
+                  <div className="flex flex-col border border-slate-200 rounded-xl p-3 bg-slate-50/50 overflow-hidden">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[10px] font-extrabold uppercase text-slate-500 tracking-wider">
+                        Selecionar Lotes de Bandejas
+                      </span>
+                      {nurserySeedlings.filter(s => s.status === 'nursery').length > 0 && (
+                        <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={
+                              nurseryManejoSelectedIds.length === nurserySeedlings.filter(s => s.status === 'nursery').length &&
+                              nurseryManejoSelectedIds.length > 0
+                            }
+                            onChange={(e) => {
+                              const active = nurserySeedlings.filter(s => s.status === 'nursery');
+                              if (e.target.checked) {
+                                setNurseryManejoSelectedIds(active.map(s => s.id));
+                              } else {
+                                setNurseryManejoSelectedIds([]);
+                              }
+                            }}
+                            className="rounded text-emerald-600 focus:ring-emerald-500 border-slate-300"
+                          />
+                          Marcar Todos
+                        </label>
+                      )}
+                    </div>
+                    
+                    <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+                      {nurserySeedlings.filter(s => s.status === 'nursery').length === 0 ? (
+                        <p className="text-xs text-slate-400 text-center py-8 italic">
+                          Nenhum lote ativo no viveiro de mudas disponível no momento.
+                        </p>
+                      ) : (
+                        nurserySeedlings.filter(s => s.status === 'nursery').map(seedling => {
+                          const isChecked = nurseryManejoSelectedIds.includes(seedling.id);
+                          return (
+                            <label
+                              key={seedling.id}
+                              className={`flex items-start gap-2.5 p-2 rounded-lg border transition-all cursor-pointer ${
+                                isChecked 
+                                  ? 'bg-emerald-50/30 border-emerald-200 text-emerald-900' 
+                                  : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setNurseryManejoSelectedIds([...nurseryManejoSelectedIds, seedling.id]);
+                                  } else {
+                                    setNurseryManejoSelectedIds(nurseryManejoSelectedIds.filter(id => id !== seedling.id));
+                                  }
+                                }}
+                                className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300"
+                              />
+                              <div className="text-[11px] font-semibold">
+                                <span className="font-extrabold block text-slate-900">{seedling.crop}</span>
+                                <span className="text-[10px] text-slate-400">
+                                  Semeadura: {formatDate(seedling.plantingDate)} ({seedling.trayCount} band.)
+                                </span>
+                              </div>
+                            </label>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Multi-Products List */}
+                  <div className="flex flex-col border border-slate-200 rounded-xl p-3 bg-slate-50/50 overflow-hidden">
+                    <span className="text-[10px] font-extrabold uppercase text-slate-500 tracking-wider block mb-2">
+                      Definir Calda de Tratamento
+                    </span>
+                    
+                    <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+                      {nurseryManejoProducts.map((p, idx) => (
+                        <div key={idx} className="bg-white p-3 rounded-xl border border-slate-200 relative shadow-2xs">
+                          {nurseryManejoProducts.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setNurseryManejoProducts(nurseryManejoProducts.filter((_, i) => i !== idx));
+                              }}
+                              className="absolute top-2 right-2 p-1 text-rose-500 hover:bg-rose-50 rounded"
+                            >
+                              <X size={14} />
+                            </button>
+                          )}
+                          
+                          <div className="space-y-2">
+                            <div>
+                              <label className="block text-[9px] font-extrabold uppercase text-slate-400 tracking-wider mb-0.5">
+                                Tipo de Produto #{idx + 1}
+                              </label>
+                              <select
+                                value={p.type}
+                                onChange={(e) => {
+                                  const updated = [...nurseryManejoProducts];
+                                  updated[idx].type = e.target.value as any;
+                                  setNurseryManejoProducts(updated);
+                                }}
+                                className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                              >
+                                <option value="insecticide">Inseticida</option>
+                                <option value="fungicide">Fungicida</option>
+                                <option value="foliar">Adubo Foliar</option>
+                                <option value="general">Outros / Manejo Geral</option>
+                              </select>
+                            </div>
+                            
+                            <div>
+                              <label className="block text-[9px] font-extrabold uppercase text-slate-400 tracking-wider mb-0.5">
+                                Nome do Produto
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="Ex: Decis, Amistar, Kelpak..."
+                                required
+                                value={p.name}
+                                onChange={(e) => {
+                                  const updated = [...nurseryManejoProducts];
+                                  updated[idx].name = e.target.value;
+                                  setNurseryManejoProducts(updated);
+                                }}
+                                className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[9px] font-extrabold uppercase text-slate-400 tracking-wider mb-0.5">
+                                Dosagem / Proporção (Opcional)
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="Ex: 2ml/L, 20g por bandeja..."
+                                value={p.dosage}
+                                onChange={(e) => {
+                                  const updated = [...nurseryManejoProducts];
+                                  updated[idx].dosage = e.target.value;
+                                  setNurseryManejoProducts(updated);
+                                }}
+                                className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNurseryManejoProducts([...nurseryManejoProducts, { type: 'insecticide', name: '', dosage: '' }]);
+                      }}
+                      className="mt-2.5 w-full py-2 border border-dashed border-emerald-300 hover:border-emerald-500 text-emerald-700 bg-emerald-50/40 hover:bg-emerald-50 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <PlusCircle size={14} />
+                      Misturar Mais Outro Tratamento
+                    </button>
+                  </div>
+                </div>
+
+                {/* Notas do Tratamento */}
+                <div>
+                  <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                    Notas Gerais de Observação (Opcional)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Ex: Pulverização costal de baixa pressão, aplicado no final de tarde..."
+                    value={nurseryManejoNotes}
+                    onChange={(e) => setNurseryManejoNotes(e.target.value)}
+                    className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                  />
+                </div>
+
+                {/* Footer Buttons */}
+                <div className="flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
+                  <button
+                    type="button"
+                    onClick={() => setIsNurseryManejoOpen(false)}
+                    className="px-4 py-2.5 rounded-xl text-xs font-extrabold uppercase tracking-wider text-slate-500 hover:bg-slate-100 transition-colors cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={loading || nurseryManejoSelectedIds.length === 0}
+                    className="px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-extrabold uppercase tracking-wider shadow-sm transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Droplet size={14} />
+                    Confirmar Tratamento ({nurseryManejoSelectedIds.length} {nurseryManejoSelectedIds.length === 1 ? 'Lote' : 'Lotes'})
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Transplant to Field Modal */}
+      <AnimatePresence>
+        {isTransplantModalOpen && transplantTargetSeedling && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-md w-full p-6 flex flex-col max-h-[90vh]"
+            >
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+                <div className="flex items-center gap-2">
+                  <Sprout className="text-emerald-600 animate-bounce" size={22} />
+                  <div>
+                    <h3 className="text-lg font-black text-slate-900">Transplantar para o Campo</h3>
+                    <p className="text-xs text-slate-500">Mova as mudas do viveiro para os canteiros definitivos</p>
+                  </div>
+                </div>
+                <button 
+                  type="button"
+                  onClick={() => setIsTransplantModalOpen(false)}
+                  className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveTransplant} className="space-y-4">
+                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
+                  <div className="flex justify-between mb-1.5">
+                    <span className="text-slate-400 font-bold uppercase tracking-wider text-[10px]">Cultura:</span>
+                    <span className="font-extrabold text-slate-800">{transplantTargetSeedling.crop}</span>
+                  </div>
+                  <div className="flex justify-between mb-1.5">
+                    <span className="text-slate-400 font-bold uppercase tracking-wider text-[10px]">Semeado em:</span>
+                    <span className="font-bold text-slate-700">{formatDate(transplantTargetSeedling.plantingDate)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400 font-bold uppercase tracking-wider text-[10px]">Mudas Disponíveis:</span>
+                    <span className="font-extrabold text-emerald-700">{transplantTargetSeedling.totalCells} mudas</span>
+                  </div>
+                </div>
+
+                {/* Transplant Date */}
+                <div>
+                  <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                    Data do Transplante
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={transplantDate}
+                    onChange={(e) => setTransplantDate(e.target.value)}
+                    className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                  />
+                </div>
+
+                {/* Destination Bed */}
+                <div>
+                  <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                    Canteiro de Destino
+                  </label>
+                  <select
+                    required
+                    value={transplantBed}
+                    onChange={(e) => setTransplantBed(e.target.value)}
+                    className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                  >
+                    <option value="">Selecione o canteiro...</option>
+                    {allBedsList.map(bed => {
+                      // Check if bed already has growing crop
+                      const activeCrop = productions.find(p => p.bed === bed && p.status === 'growing');
+                      const activeLabel = activeCrop ? ` (Ocupado: ${activeCrop.crop})` : ' (Vazio)';
+                      return (
+                        <option key={bed} value={bed}>{bed}{activeLabel}</option>
+                      );
+                    })}
+                  </select>
+                </div>
+
+                {/* Quantity Transplanted */}
+                <div>
+                  <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
+                    Quantidade de Mudas a Plantar
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min="1"
+                    max={transplantTargetSeedling.totalCells}
+                    value={transplantQty}
+                    onChange={(e) => setTransplantQty(e.target.value)}
+                    className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                  />
+                </div>
+
+                {/* Auto Create Bed Production Switch */}
+                <label className="flex items-start gap-2.5 p-3 rounded-xl border border-emerald-100 bg-emerald-50/30 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={transplantAutoCreateBedProduction}
+                    onChange={(e) => setTransplantAutoCreateBedProduction(e.target.checked)}
+                    className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500 border-emerald-200"
+                  />
+                  <div className="text-xs">
+                    <span className="font-extrabold text-emerald-950 block">Criar Prontuário de Canteiro Automaticamente</span>
+                    <span className="text-[10px] text-slate-500">Gera um novo ciclo de cultivo ativo para o canteiro selecionado, vinculando a origem das mudas ao viveiro.</span>
+                  </div>
+                </label>
+
+                {/* Footer Buttons */}
+                <div className="flex items-center justify-end gap-2 border-t border-slate-100 pt-3 mt-4">
+                  <button
+                    type="button"
+                    onClick={() => setIsTransplantModalOpen(false)}
+                    className="px-4 py-2.5 rounded-xl text-xs font-extrabold uppercase tracking-wider text-slate-500 hover:bg-slate-100 transition-colors cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-extrabold uppercase tracking-wider shadow-sm transition-colors cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Sprout size={14} />
+                    Confirmar Transplante
                   </button>
                 </div>
               </form>

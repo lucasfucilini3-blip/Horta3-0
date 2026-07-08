@@ -174,3 +174,25 @@ export interface BedRecord {
   createdAt: any; // Timestamp do sistema
 }
 
+export interface SeedingLog {
+  date: any; // Firestore Timestamp
+  description: string;
+  products?: string[];
+}
+
+export interface NurserySeedling {
+  id: string;
+  crop: string;
+  plantingDate: any; // Firestore Timestamp
+  trayCount: number;
+  cellCount: number;
+  totalCells: number;
+  status: 'nursery' | 'transplanted' | 'lost';
+  transplantDate?: any; // Firestore Timestamp
+  transplantedQty?: number;
+  transplantedBed?: string;
+  notes?: string;
+  logs?: SeedingLog[];
+  createdAt: any; // Firestore Timestamp
+}
+

@@ -92,6 +92,11 @@ if (hasValidConfig) {
     realApp = initRealApp(firebaseConfig);
     realDb = getRealFirestore(realApp, firebaseConfig.firestoreDatabaseId);
     realAuthInstance = getRealAuth(realApp);
+    
+    // Enable offline multi-tab persistence automatically
+    realEnableMultiTab(realDb).catch((err) => {
+      console.warn("Could not enable Firestore offline persistence:", err);
+    });
   } catch (err) {
     console.error("Erro ao inicializar Firebase real:", err);
   }
@@ -793,7 +798,22 @@ export function writeBatch(dbInstance: any) {
 }
 
 export async function dbImportData(jsonData: any, currentUserProfile: any) {
-  const collections = ['users', 'customers', 'categories', 'inventory', 'sales', 'transactions', 'production', 'tasks', 'bed_records', 'inventory_history', 'backups', 'fairs'];
+  const collections = [
+    'users', 
+    'customers', 
+    'categories', 
+    'inventory', 
+    'sales', 
+    'transactions', 
+    'production', 
+    'tasks', 
+    'bed_records', 
+    'inventory_history', 
+    'backups', 
+    'fairs',
+    'nursery_seedlings',
+    'produce_catalog'
+  ];
   
   // Set in local cache/storage first as fallback
   for (const colName of collections) {
@@ -904,7 +924,9 @@ export async function migrateLocalDataToFirebaseFirestore(uid: string) {
     'bed_records',
     'inventory_history',
     'backups',
-    'fairs'
+    'fairs',
+    'nursery_seedlings',
+    'produce_catalog'
   ];
   
   try {
@@ -991,7 +1013,9 @@ export async function uploadLocalDataToFirebaseCloud() {
     'bed_records',
     'inventory_history',
     'backups',
-    'fairs'
+    'fairs',
+    'nursery_seedlings',
+    'produce_catalog'
   ];
   
   for (const colName of collectionsToMigrate) {

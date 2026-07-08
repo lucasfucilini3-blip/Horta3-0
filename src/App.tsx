@@ -94,8 +94,9 @@ export interface FirestoreErrorInfo {
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errorMsg = error instanceof Error ? error.message : String(error);
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errorMsg,
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
@@ -107,6 +108,16 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     path
   }
   console.error('Firestore Error: ', JSON.stringify(errInfo));
+  
+  // Show a user-friendly alert on write/delete failures
+  if (operationType === OperationType.WRITE || operationType === OperationType.DELETE) {
+    let friendlyMessage = `Erro ao salvar os dados (${path}): ${errorMsg}`;
+    if (errorMsg.toLowerCase().includes('permission-denied') || errorMsg.toLowerCase().includes('permission') || errorMsg.toLowerCase().includes('insufficient')) {
+      friendlyMessage = `Permissão negada para alterar '${path}'. Verifique se você está logado com a conta correta ou se tem as permissões necessárias.`;
+    }
+    alert(`⚠️ ${friendlyMessage}`);
+  }
+  
   throw new Error(JSON.stringify(errInfo));
 }
 

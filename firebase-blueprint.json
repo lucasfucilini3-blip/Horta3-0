@@ -246,9 +246,42 @@
         }
       },
       "required": ["name", "status", "totalSalesAmount", "items"]
+    },
+    "NurserySeedling": {
+      "title": "Nursery Seedling",
+      "description": "Tracking seedling trays in the nursery.",
+      "type": "object",
+      "properties": {
+        "crop": { "type": "string" },
+        "plantingDate": { "type": "string", "format": "date-time" },
+        "trayCount": { "type": "number" },
+        "cellCount": { "type": "number" },
+        "totalCells": { "type": "number" },
+        "status": { "type": "string", "enum": ["nursery", "transplanted", "lost"] },
+        "notes": { "type": "string" },
+        "logs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "date": { "type": "string", "format": "date-time" },
+              "description": { "type": "string" }
+            }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "transplantDate": { "type": "string", "format": "date-time" },
+        "transplantedQty": { "type": "number" },
+        "transplantedBed": { "type": "string" }
+      },
+      "required": ["crop", "plantingDate", "trayCount", "cellCount", "totalCells", "status", "createdAt"]
     }
   },
   "firestore": {
+    "/nursery_seedlings/{seedlingId}": {
+      "schema": "NurserySeedling",
+      "description": "Nursery seedling trays."
+    },
     "/users/{userId}": {
       "schema": "User",
       "description": "User profiles and permissions."

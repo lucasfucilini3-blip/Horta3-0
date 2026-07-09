@@ -1747,7 +1747,7 @@ export default function ProductionComponent() {
       </div>
 
       {/* 2. Top Stats Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 no-print">
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden group hover:border-emerald-500/50 transition-all">
           <p className="text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">Canteiros Totais</p>
           <div className="flex items-baseline gap-2 mt-2">
@@ -2597,10 +2597,10 @@ export default function ProductionComponent() {
       </AnimatePresence>
 
       {/* 4. Excel-Style Sheet Tabs & Controls */}
-      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden mb-6 no-print">
+      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden mb-6 print:border-none print:shadow-none print:bg-transparent print:rounded-none print:overflow-visible">
         
         {/* Excel style ribbon toolbar */}
-        <div className="bg-slate-50 border-b border-slate-200 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="bg-slate-50 border-b border-slate-200 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 no-print">
           
           {/* Tabs with Excel Sheet Style */}
           <div className="flex items-center gap-1">
@@ -2717,7 +2717,7 @@ export default function ProductionComponent() {
         </div>
 
         {/* 5. Excel Formula Bar Display */}
-        <div className="bg-white border-b border-slate-200 px-4 py-2 flex items-center gap-3 text-xs">
+        <div className="bg-white border-b border-slate-200 px-4 py-2 flex items-center gap-3 text-xs no-print">
           <div className="font-extrabold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded border border-emerald-100 select-none">
             fx
           </div>
@@ -3464,7 +3464,7 @@ export default function ProductionComponent() {
 
             {/* TAB 4: Printable Field Sheets / Fichas de Campo */}
             {activeTab === 'sheets' && (
-              <div className="p-4 bg-slate-100 min-h-screen">
+              <div className="p-4 bg-slate-100 min-h-screen print:bg-transparent print:p-0 print:min-h-0 print:h-auto print:block">
                 {/* Print styles injected dynamically when tab is open */}
                 <style>{`
                   @media print {
@@ -4000,7 +4000,7 @@ export default function ProductionComponent() {
         )}
 
         {/* 7. Bottom Status Bar (Simulating Excel summary footer) */}
-        <div className="bg-emerald-800 border-t border-emerald-900 px-4 py-2 flex flex-wrap items-center justify-between text-white font-mono text-[11px] select-none gap-y-1">
+        <div className="bg-emerald-800 border-t border-emerald-900 px-4 py-2 flex flex-wrap items-center justify-between text-white font-mono text-[11px] select-none gap-y-1 no-print">
           <div className="flex items-center gap-3">
             <span className="bg-emerald-950 px-2 py-0.5 rounded text-[9px] font-black tracking-widest text-emerald-400">PRONTO</span>
             <span className="font-semibold">Planilha de Cultivo Ativa</span>
@@ -5289,7 +5289,7 @@ export default function ProductionComponent() {
       </AnimatePresence>
 
       {/* 9. Extra Quick Gardening Information Callout */}
-      <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 no-print">
         <div className="flex items-start gap-3.5">
           <div className="p-2.5 bg-amber-50 text-amber-700 border border-amber-100 rounded-xl shrink-0">
             <Info size={20} />

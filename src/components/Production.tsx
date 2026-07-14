@@ -142,7 +142,7 @@ export default function ProductionComponent() {
   const [sheetType, setSheetType] = useState<'semeadura' | 'plantio' | 'tratamento' | 'colheita'>('semeadura');
   const [sheetOrientation, setSheetOrientation] = useState<'portrait' | 'landscape'>('landscape');
   const [sheetBlankRows, setSheetBlankRows] = useState(12);
-  const [sheetPrefillData, setSheetPrefillData] = useState(true);
+  const [sheetPrefillData, setSheetPrefillData] = useState(false);
   const [sheetResponsavel, setSheetResponsavel] = useState('');
   const [sheetNotes, setSheetNotes] = useState('');
 
@@ -1490,29 +1490,78 @@ export default function ProductionComponent() {
           });
 
         } else {
-          // Create new dispatch item in inventory on the fly
+          // Create or update dispatch item in inventory on the fly
           if (!newProductName.trim()) {
             alert('Por favor, informe o nome do novo produto para cadastro!');
             setLoading(false);
             return;
           }
           
-          const docRef = await addDoc(collection(db, 'inventory'), {
-            name: newProductName.trim(),
-            type: 'dispatch',
-            category: newProductCategory.trim() || 'Hortaliças',
-            quantity: incrementQty,
-            unit: newProductUnit,
-            price: Number(newProductPrice) || 0,
-            costPrice: Number(newProductCostPrice) || 0,
-            minStock: Number(newProductMinStock) || 0,
-            lastUpdated: serverTimestamp()
-          });
+          const targetName = newProductName.trim();
+
+          // Check if this product already exists in inventory (type === 'dispatch')
+          const existingInventoryItem = inventory.find(
+            item => item.type === 'dispatch' && item.name.toLowerCase() === targetName.toLowerCase()
+          );
+
+          let targetItemId = '';
+
+          if (existingInventoryItem) {
+            // Increment quantity of existing inventory item
+            const itemRef = doc(db, 'inventory', existingInventoryItem.id);
+            await updateDoc(itemRef, {
+              quantity: increment(incrementQty),
+              price: Number(newProductPrice) || existingInventoryItem.price || 0,
+              minStock: Number(newProductMinStock) || existingInventoryItem.minStock || 0,
+              unit: newProductUnit || existingInventoryItem.unit,
+              category: newProductCategory.trim() || existingInventoryItem.category || 'Hortaliças',
+              lastUpdated: serverTimestamp()
+            });
+            targetItemId = existingInventoryItem.id;
+          } else {
+            // Create a new inventory item
+            const docRef = await addDoc(collection(db, 'inventory'), {
+              name: targetName,
+              type: 'dispatch',
+              category: newProductCategory.trim() || 'Hortaliças',
+              quantity: incrementQty,
+              unit: newProductUnit,
+              price: Number(newProductPrice) || 0,
+              costPrice: Number(newProductCostPrice) || 0,
+              minStock: Number(newProductMinStock) || 0,
+              lastUpdated: serverTimestamp()
+            });
+            targetItemId = docRef.id;
+          }
+
+          // Ensure corresponding produce_catalog item is updated or created
+          const catalogRef = collection(db, 'produce_catalog');
+          const qCatalog = query(catalogRef, where('name', '==', targetName));
+          const querySnapshot = await getDocs(qCatalog);
+          
+          if (!querySnapshot.empty) {
+            for (const docSnap of querySnapshot.docs) {
+              await updateDoc(docSnap.ref, {
+                category: newProductCategory.trim() || 'Hortaliças',
+                unit: newProductUnit,
+                defaultPrice: Number(newProductPrice) || 0
+              });
+            }
+          } else {
+            await addDoc(catalogRef, {
+              name: targetName,
+              category: newProductCategory.trim() || 'Hortaliças',
+              unit: newProductUnit,
+              estimatedDaysToHarvest: 30,
+              defaultPrice: Number(newProductPrice) || 0,
+              createdAt: serverTimestamp()
+            });
+          }
 
           // Register in inventory history
           await addDoc(collection(db, 'inventory_history'), {
-            itemId: docRef.id,
-            itemName: newProductName.trim(),
+            itemId: targetItemId,
+            itemName: targetName,
             quantity: incrementQty,
             unit: newProductUnit,
             costPrice: Number(newProductCostPrice) || 0,
@@ -1525,6 +1574,15 @@ export default function ProductionComponent() {
       }
 
       setHarvestingItem(null);
+      // Reset new product form state
+      setNewProductName('');
+      setNewProductPrice('5.00');
+      setNewProductCostPrice('0.00');
+      setNewProductUnit('un');
+      setNewProductMinStock('10');
+      setNewProductCategory('Hortaliças');
+      setHarvestProductMode('existing');
+
       if (isFinal) {
         alert(`Colheita Final registrada com sucesso! ${qty} ${harvestingItem.unit || 'un'} de ${harvestingItem.crop} finalizados.`);
       } else {
@@ -3469,61 +3527,47 @@ export default function ProductionComponent() {
                 <style>{`
                   @media print {
                     @page {
-                      size: A4 ${sheetOrientation === 'landscape' ? 'landscape' : 'portrait'};
-                      margin: ${sheetOrientation === 'landscape' ? '0.6cm' : '1cm'} !important;
+                      size: A4 landscape !important;
+                      margin: 0.6cm !important;
                     }
                     
-                    /* Hide sidebars, headers, navigation elements, configurators, buttons, etc. */
-                    .no-print,
-                    .print\\:hidden,
-                    aside,
-                    header,
-                    button,
-                    nav,
-                    .no-print-header {
-                      display: none !important;
+                    /* Hide EVERYTHING in the page by default */
+                    body * {
+                      visibility: hidden !important;
                     }
 
-                    /* Release layout/height boundaries on printing */
-                    html, body, #root, .min-h-screen, main, [class*="overflow-"], [class*="max-h-"], [class*="p-"] {
+                    /* Show #print-area and all of its descendants */
+                    #print-area, #print-area * {
+                      visibility: visible !important;
+                    }
+
+                    /* Position #print-area absolutely at the top-left corner of the page */
+                    #print-area {
+                      visibility: visible !important;
+                      position: absolute !important;
+                      left: 0 !important;
+                      top: 0 !important;
+                      width: 100% !important;
+                      max-width: 100% !important;
+                      min-height: 0 !important;
+                      border: none !important;
+                      box-shadow: none !important;
+                      padding: 0 !important;
+                      margin: 0 !important;
+                      background: white !important;
+                      color: black !important;
+                      display: block !important;
+                    }
+
+                    /* Release layouts and scroll boundaries of all ancestors so they don't clip */
+                    html, body, #root, .min-h-screen, main, div, section, article, p, table, tbody, tr, td, th {
                       overflow: visible !important;
                       height: auto !important;
                       min-height: 0 !important;
                       max-height: none !important;
-                      width: 100% !important;
-                      margin: 0 !important;
-                      padding: 0 !important;
-                      position: static !important;
-                      background: white !important;
-                      color: black !important;
-                      display: block !important;
+                      border: none !important;
                       box-shadow: none !important;
-                    }
-
-                    /* Make sure parent container of the paper preview has no background, margin or border on paper */
-                    .flex-1.bg-slate-200 {
                       background: transparent !important;
-                      border: none !important;
-                      padding: 0 !important;
-                      margin: 0 !important;
-                      box-shadow: none !important;
-                      display: block !important;
-                    }
-
-                    /* Style the print sheet of paper to occupy full width and have no border/shadow on paper */
-                    #print-area {
-                      display: block !important;
-                      visibility: visible !important;
-                      background: white !important;
-                      color: black !important;
-                      width: 100% !important;
-                      max-width: 100% !important;
-                      min-height: 0 !important;
-                      position: relative !important;
-                      border: none !important;
-                      box-shadow: none !important;
-                      padding: 0 !important;
-                      margin: 0 !important;
                     }
 
                     /* Ensure table borders and headers look correct on paper */
@@ -3628,55 +3672,10 @@ export default function ProductionComponent() {
                         </div>
                       </div>
 
-                      {/* Select Sheet Orientation */}
-                      <div>
-                        <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1.5">
-                          Orientação da Página
-                        </label>
-                        <div className="grid grid-cols-2 gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setSheetOrientation('landscape')}
-                            className={`px-3 py-2 rounded-xl text-xs font-bold text-center border cursor-pointer transition-all flex items-center justify-center gap-1.5 ${
-                              sheetOrientation === 'landscape'
-                                ? 'bg-emerald-600 border-emerald-600 text-white shadow-xs font-black'
-                                : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                            }`}
-                          >
-                            <span className="rotate-90 inline-block font-mono text-[10px]">▤</span> Paisagem
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setSheetOrientation('portrait')}
-                            className={`px-3 py-2 rounded-xl text-xs font-bold text-center border cursor-pointer transition-all flex items-center justify-center gap-1.5 ${
-                              sheetOrientation === 'portrait'
-                                ? 'bg-emerald-600 border-emerald-600 text-white shadow-xs font-black'
-                                : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                            }`}
-                          >
-                            <span className="inline-block font-mono text-[10px]">▤</span> Retrato
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Responsible Field */}
-                      <div>
-                        <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
-                          Responsável na Impressão
-                        </label>
-                        <input
-                          type="text"
-                          value={sheetResponsavel}
-                          onChange={(e) => setSheetResponsavel(e.target.value)}
-                          placeholder="Ex: Lucas Fucilini"
-                          className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 bg-slate-50 focus:bg-white focus:outline-none focus:border-emerald-500 transition-colors"
-                        />
-                      </div>
-
                       {/* Number of empty/blank rows */}
                       <div>
                         <label className="block text-[10px] font-extrabold uppercase text-slate-400 tracking-wider mb-1">
-                          Linhas Vazias Adicionais (para anotação livre)
+                          Linhas Vazias da Ficha (para anotação livre)
                         </label>
                         <select
                           value={sheetBlankRows}
@@ -3690,25 +3689,6 @@ export default function ProductionComponent() {
                           <option value="20">20 linhas pautadas</option>
                           <option value="30">30 linhas pautadas</option>
                         </select>
-                      </div>
-
-                      {/* Prefill Toggle */}
-                      <div className="bg-slate-50 border border-slate-200/80 p-3 rounded-xl flex items-center justify-between">
-                        <div>
-                          <span className="block text-xs font-bold text-slate-700">Preencher com dados atuais?</span>
-                          <span className="block text-[10px] text-slate-500 mt-0.5">
-                            {sheetType === 'semeadura' && 'Exibe produtos do catálogo como sugestão.'}
-                            {sheetType === 'plantio' && 'Exibe lotes de mudas prontos no viveiro.'}
-                            {sheetType === 'tratamento' && 'Exibe canteiros com plantio em andamento.'}
-                            {sheetType === 'colheita' && 'Exibe culturas ativas esperando colheita.'}
-                          </span>
-                        </div>
-                        <input
-                          type="checkbox"
-                          checked={sheetPrefillData}
-                          onChange={(e) => setSheetPrefillData(e.target.checked)}
-                          className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
-                        />
                       </div>
 
                       {/* Custom Title / Subtitle Notes */}

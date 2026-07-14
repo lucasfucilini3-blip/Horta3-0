@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, onSnapshot, addDoc, updateDoc, doc, deleteDoc as firestoreDeleteDoc, serverTimestamp, orderBy, where, increment } from 'firebase/firestore';
+import { collection, query, onSnapshot, addDoc, updateDoc, doc, deleteDoc as firestoreDeleteDoc, serverTimestamp, orderBy, where, increment, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
-import { InventoryItem, InventoryCategory, Category } from '../types';
+import { InventoryItem, InventoryCategory, Category, ProduceCatalogItem } from '../types';
 import { Plus, Search, Filter, MoreVertical, Edit2, Trash2, AlertTriangle, Package, X as CloseIcon, ArrowDownCircle, Settings2, Tag, ShoppingCart, Scroll, ArrowUpRight, ArrowDownRight, FileText, Download, Calendar, Sprout } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth, handleFirestoreError, OperationType } from '../App';
@@ -36,6 +36,9 @@ export default function Inventory() {
   const [modalType, setModalType] = useState<'input' | 'dispatch'>('input');
   const [searchTerm, setSearchTerm] = useState('');
   const [historyLogs, setHistoryLogs] = useState<any[]>([]);
+  const [produceCatalog, setProduceCatalog] = useState<ProduceCatalogItem[]>([]);
+  const [inventoryProductMode, setInventoryProductMode] = useState<'existing' | 'new'>('existing');
+  const [selectedCatalogItemId, setSelectedCatalogItemId] = useState<string>('');
 
   // States for general history report
   const [activeTab, setActiveTab] = useState<'items' | 'history'>('items');
@@ -59,6 +62,19 @@ export default function Inventory() {
   }, [editingItem, isModalOpen]);
   
   const [filterCategory, setFilterCategory] = useState<string>('all');
+
+  const dispatchCategories = React.useMemo(() => {
+    const cats = items
+      .filter(item => item.type === 'dispatch' && item.category)
+      .map(item => item.category);
+    return Array.from(new Set(['Hortaliças', 'Legumes', 'Temperos', ...cats]));
+  }, [items]);
+
+  const availableCatalogItems = React.useMemo(() => {
+    return produceCatalog.filter(catItem => {
+      return !items.some(invItem => invItem.type === 'dispatch' && invItem.name.toLowerCase() === catItem.name.toLowerCase());
+    });
+  }, [produceCatalog, items]);
 
   useEffect(() => {
     if (!historyItem) {
@@ -283,12 +299,18 @@ export default function Inventory() {
       console.error("Erro ao carregar produções antigas:", error);
     });
 
+    const catalogQ = query(collection(db, 'produce_catalog'), orderBy('name', 'asc'));
+    const unsubCatalog = onSnapshot(catalogQ, (snapshot) => {
+      setProduceCatalog(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ProduceCatalogItem)));
+    });
+
     return () => { 
       unsubscribe(); 
       catUnsubscribe(); 
       unsubHist(); 
       unsubTrans();
       unsubProd();
+      unsubCatalog();
     };
   }, []);
 
@@ -425,15 +447,48 @@ export default function Inventory() {
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
+    
+    let name = formData.get('name') as string;
+    let type = formData.get('type') as 'input' | 'dispatch';
+    let category = formData.get('category') as InventoryCategory;
+    let unit = formData.get('unit') as string;
+    let price = Number(formData.get('price')) || 0;
+    let costPrice = Number(formData.get('costPrice')) || 0;
+    let minStock = Number(formData.get('minStock')) || 0;
+    let quantity = Number(formData.get('quantity')) || 0;
+
+    // If linking an existing catalog item and we are registering a NEW item
+    if (!editingItem && type === 'dispatch' && inventoryProductMode === 'existing') {
+      const catalogItemId = formData.get('catalogItemId') as string;
+      if (!catalogItemId) {
+        alert('Por favor, selecione um produto do catálogo!');
+        return;
+      }
+      const catalogItem = produceCatalog.find(item => item.id === catalogItemId);
+      if (!catalogItem) {
+        alert('Produto do catálogo não encontrado!');
+        return;
+      }
+      name = catalogItem.name;
+      category = catalogItem.category || 'Hortaliças';
+      unit = catalogItem.unit || 'un';
+      price = catalogItem.defaultPrice || 0;
+    }
+
+    if (!name || !name.trim()) {
+      alert('Por favor, informe o nome do item!');
+      return;
+    }
+
     const data = {
-      name: formData.get('name') as string,
-      type: formData.get('type') as 'input' | 'dispatch',
-      category: formData.get('category') as InventoryCategory,
-      quantity: Number(formData.get('quantity')),
-      unit: formData.get('unit') as string,
-      minStock: Number(formData.get('minStock')),
-      price: Number(formData.get('price')) || 0,
-      costPrice: Number(formData.get('costPrice')) || 0,
+      name: name.trim(),
+      type,
+      category: category || 'Hortaliças',
+      quantity,
+      unit: unit || 'unidade',
+      minStock,
+      price,
+      costPrice,
       lastUpdated: serverTimestamp(),
     };
 
@@ -454,6 +509,32 @@ export default function Inventory() {
             date: serverTimestamp()
           });
         }
+
+        // If it is a dispatch item, ensure corresponding produce_catalog item is updated or created
+        if (data.type === 'dispatch') {
+          const catalogRef = collection(db, 'produce_catalog');
+          const qCatalog = query(catalogRef, where('name', '==', editingItem.name));
+          const querySnapshot = await getDocs(qCatalog);
+          if (!querySnapshot.empty) {
+            for (const docSnap of querySnapshot.docs) {
+              await updateDoc(docSnap.ref, {
+                name: data.name.trim(),
+                category: data.category || 'Hortaliças',
+                unit: data.unit,
+                defaultPrice: data.price || 0
+              });
+            }
+          } else {
+            await addDoc(catalogRef, {
+              name: data.name.trim(),
+              category: data.category || 'Hortaliças',
+              unit: data.unit,
+              estimatedDaysToHarvest: 30,
+              defaultPrice: data.price || 0,
+              createdAt: serverTimestamp()
+            });
+          }
+        }
       } else {
         const docRef = await addDoc(collection(db, 'inventory'), data);
         await addDoc(collection(db, 'inventory_history'), {
@@ -467,6 +548,23 @@ export default function Inventory() {
           description: 'Cadastro inicial de estoque',
           date: serverTimestamp()
         });
+
+        // If it's a dispatch item, also create in produce_catalog so it is visible in sales and catalogs
+        if (data.type === 'dispatch') {
+          const catalogRef = collection(db, 'produce_catalog');
+          const qCatalog = query(catalogRef, where('name', '==', data.name.trim()));
+          const querySnapshot = await getDocs(qCatalog);
+          if (querySnapshot.empty) {
+            await addDoc(catalogRef, {
+              name: data.name.trim(),
+              category: data.category || 'Hortaliças',
+              unit: data.unit,
+              estimatedDaysToHarvest: 30,
+              defaultPrice: data.price || 0,
+              createdAt: serverTimestamp()
+            });
+          }
+        }
       }
       setModalOpen(false);
       setEditingItem(null);
@@ -935,7 +1033,7 @@ export default function Inventory() {
             Categorias
           </button>
           <button 
-            onClick={() => { setEditingItem(null); setModalOpen(true); }}
+            onClick={() => { setEditingItem(null); setInventoryProductMode('existing'); setSelectedCatalogItemId(''); setModalOpen(true); }}
             className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-emerald-600 text-white px-4 md:px-6 py-3 rounded-xl font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 active:scale-95 text-sm md:text-base"
           >
             <Plus size={18} className="md:w-5 md:h-5" />
@@ -1451,20 +1549,6 @@ export default function Inventory() {
                     <p className="text-xs text-blue-600">Estoque atual: {stockItem?.quantity} {stockItem?.unit}</p>
                   </div>
 
-                  <div className="space-y-2">
-                    <label className="text-sm font-bold text-slate-700 ml-1">Tipo de Estoque</label>
-                    <select 
-                      name="type" 
-                      required 
-                      value={modalType}
-                      onChange={(e) => setModalType(e.target.value as 'input' | 'dispatch')}
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    >
-                      <option value="input">Entrada de Insumos (Seeds, Adubos, etc)</option>
-                      <option value="dispatch">Expedição (Produtos para Venda)</option>
-                    </select>
-                  </div>
-
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <label className="text-sm font-bold text-slate-700 ml-1">Qtd a Adicionar</label>
@@ -1557,7 +1641,8 @@ export default function Inventory() {
                     <select 
                       name="type" 
                       required 
-                      defaultValue={editingItem?.type || 'input'}
+                      value={modalType}
+                      onChange={(e) => setModalType(e.target.value as 'input' | 'dispatch')}
                       className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     >
                       <option value="input">Entrada de Insumos (Seeds, Adubos, etc)</option>
@@ -1565,68 +1650,157 @@ export default function Inventory() {
                     </select>
                   </div>
 
-                  <div className="space-y-2">
-                    <label className="text-sm font-bold text-slate-700 ml-1">Nome do Item</label>
-                    <input 
-                      name="name" 
-                      required 
-                      defaultValue={editingItem?.name}
-                      placeholder="Ex: Alface Crespa"
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Categoria</label>
-                      <select 
-                        name="category" 
-                        required 
-                        defaultValue={editingItem?.category}
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      >
-                        <option value="">Selecione...</option>
-                        {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-                      </select>
+                  {!editingItem && modalType === 'dispatch' && (
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                      <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                        Origem do Produto
+                      </span>
+                      <div className="flex gap-1 bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                        <button
+                          type="button"
+                          onClick={() => setInventoryProductMode('existing')}
+                          className={`px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
+                            inventoryProductMode === 'existing'
+                              ? 'bg-white text-emerald-800 shadow-xs'
+                              : 'text-slate-500 hover:text-slate-800'
+                          }`}
+                        >
+                          Vincular do Catálogo
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setInventoryProductMode('new')}
+                          className={`px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
+                            inventoryProductMode === 'new'
+                              ? 'bg-white text-emerald-800 shadow-xs'
+                              : 'text-slate-500 hover:text-slate-800'
+                          }`}
+                        >
+                          Cadastrar Novo
+                        </button>
+                      </div>
                     </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700 ml-1">Unidade</label>
-                      <input 
-                        name="unit" 
-                        required 
-                        defaultValue={editingItem?.unit || 'unidade'}
-                        placeholder="Ex: kg, g, un"
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      />
-                    </div>
-                  </div>
+                  )}
 
-                  <div className="grid grid-cols-2 gap-4">
-                    {(profile?.role === 'owner' || modalType === 'input') && (
+                  {!editingItem && modalType === 'dispatch' && inventoryProductMode === 'existing' ? (
+                    <div className="space-y-4">
                       <div className="space-y-2">
-                        <label className="text-sm font-bold text-slate-700 ml-1">Custo Unitário (R$)</label>
+                        <label className="text-sm font-bold text-slate-700 ml-1">Produto do Catálogo de Cultivos</label>
+                        <select
+                          name="catalogItemId"
+                          required
+                          value={selectedCatalogItemId}
+                          onChange={(e) => setSelectedCatalogItemId(e.target.value)}
+                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        >
+                          <option value="">Selecione um produto...</option>
+                          {availableCatalogItems.map(item => (
+                            <option key={item.id} value={item.id}>
+                              {item.name} ({item.unit}) - {item.category}
+                            </option>
+                          ))}
+                        </select>
+                        {availableCatalogItems.length === 0 && (
+                          <p className="text-[11px] text-slate-400 mt-1">
+                            Todos os produtos do catálogo de cultivos já possuem destino de expedição cadastrados no estoque. Use "Cadastrar Novo" para registrar um produto inédito.
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Display Info Card about Selected Item */}
+                      {selectedCatalogItemId && (() => {
+                        const sel = produceCatalog.find(i => i.id === selectedCatalogItemId);
+                        if (!sel) return null;
+                        return (
+                          <div className="bg-emerald-50/50 border border-emerald-100 p-3.5 rounded-xl space-y-1.5">
+                            <span className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider block">Dados Vinculados do Catálogo</span>
+                            <div className="grid grid-cols-3 gap-2 text-xs">
+                              <div>
+                                <span className="text-slate-500 block">Categoria</span>
+                                <span className="font-bold text-slate-800">{sel.category}</span>
+                              </div>
+                              <div>
+                                <span className="text-slate-500 block">Unidade</span>
+                                <span className="font-bold text-slate-800">{sel.unit}</span>
+                              </div>
+                              <div>
+                                <span className="text-slate-500 block">Preço de Venda</span>
+                                <span className="font-bold text-slate-800 font-mono">R$ {sel.defaultPrice.toFixed(2)}</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="space-y-2">
+                        <label className="text-sm font-bold text-slate-700 ml-1">Nome do Item</label>
                         <input 
-                          name="costPrice" 
-                          type="number" 
-                          step="0.01"
-                          defaultValue={editingItem?.costPrice || 0}
+                          name="name" 
+                          required 
+                          defaultValue={editingItem?.name}
+                          placeholder="Ex: Alface Crespa"
                           className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
                         />
                       </div>
-                    )}
-                    {modalType === 'dispatch' && (
-                      <div className={cn("space-y-2", profile?.role !== 'owner' && "col-span-2")}>
-                        <label className="text-sm font-bold text-slate-700 ml-1">Preço de Venda (R$)</label>
-                        <input 
-                          name="price" 
-                          type="number" 
-                          step="0.01"
-                          defaultValue={editingItem?.price || 0}
-                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                        />
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <label className="text-sm font-bold text-slate-700 ml-1">Categoria</label>
+                          <select 
+                            name="category" 
+                            required 
+                            defaultValue={editingItem?.category}
+                            className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                          >
+                            <option value="">Selecione...</option>
+                            {modalType === 'dispatch' 
+                              ? dispatchCategories.map(cat => <option key={cat} value={cat}>{cat}</option>)
+                              : categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)
+                            }
+                          </select>
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-sm font-bold text-slate-700 ml-1">Unidade</label>
+                          <input 
+                            name="unit" 
+                            required 
+                            defaultValue={editingItem?.unit || 'unidade'}
+                            placeholder="Ex: kg, g, un"
+                            className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                          />
+                        </div>
                       </div>
-                    )}
-                  </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        {(profile?.role === 'owner' || modalType === 'input') && (
+                          <div className="space-y-2">
+                            <label className="text-sm font-bold text-slate-700 ml-1">Custo Unitário (R$)</label>
+                            <input 
+                              name="costPrice" 
+                              type="number" 
+                              step="0.01"
+                              defaultValue={editingItem?.costPrice || 0}
+                              className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                            />
+                          </div>
+                        )}
+                        {modalType === 'dispatch' && (
+                          <div className={cn("space-y-2", profile?.role !== 'owner' && "col-span-2")}>
+                            <label className="text-sm font-bold text-slate-700 ml-1">Preço de Venda (R$)</label>
+                            <input 
+                              name="price" 
+                              type="number" 
+                              step="0.01"
+                              defaultValue={editingItem?.price || 0}
+                              className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
 
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">

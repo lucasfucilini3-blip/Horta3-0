@@ -1715,8 +1715,8 @@ export default function Reports() {
                 {filteredPendingDeliveries.map((s, idx) => {
                   const dDate = parseFirebaseDate(s.deliveryDate);
                   return (
-                    <tr key={s.id} className="hover:bg-slate-50/30 transition-colors">
-                      <td className="py-1.5 px-3">
+                    <tr key={s.id} className="hover:bg-slate-50/30 transition-colors border-b border-slate-100">
+                      <td className="py-4 px-3 align-middle">
                         <div className="space-y-0.5">
                           <p className="font-bold text-slate-900 text-xs flex items-center gap-1">
                             <span className="text-[8px] px-1 py-0.2 bg-slate-100 border border-slate-200 rounded text-slate-500 font-mono font-bold leading-none">
@@ -1729,7 +1729,7 @@ export default function Reports() {
                           )}
                         </div>
                       </td>
-                      <td className="py-1.5 px-3 font-medium text-slate-500 whitespace-nowrap">
+                      <td className="py-4 px-3 font-medium text-slate-500 whitespace-nowrap align-middle">
                         {dDate ? (
                           <div className="flex items-center gap-1 font-bold text-slate-700 text-[10px] bg-slate-50 border border-slate-100 px-1.5 py-0.5 rounded w-max">
                             <Calendar size={10} className="text-amber-500 shrink-0" />
@@ -1739,10 +1739,10 @@ export default function Reports() {
                           <span className="text-[10px] text-slate-400 italic">Não agendado</span>
                         )}
                       </td>
-                      <td className="py-1.5 px-3 max-w-xs truncate text-slate-600 font-medium text-[11px]" title={s.deliveryAddress}>
+                      <td className="py-4 px-3 max-w-xs truncate text-slate-600 font-medium text-[11px] align-middle" title={s.deliveryAddress}>
                         {s.deliveryAddress || <span className="text-slate-400 italic text-[10px]">Retirada Local</span>}
                       </td>
-                      <td className="py-1.5 px-3">
+                      <td className="py-4 px-3 align-middle">
                         <div className="flex flex-wrap gap-1 max-w-md">
                           {s.items.map((item, i) => (
                             <span key={i} className="text-[9px] bg-emerald-50/60 border border-emerald-100/50 text-emerald-800 px-1.5 py-0.2 rounded font-mono font-bold leading-none">
@@ -1756,7 +1756,7 @@ export default function Reports() {
                           </p>
                         )}
                       </td>
-                      <td className="py-1.5 px-3 text-right font-black text-slate-900 text-xs whitespace-nowrap">
+                      <td className="py-4 px-3 text-right font-black text-slate-900 text-xs whitespace-nowrap align-middle">
                         R$ {s.total.toFixed(2)}
                       </td>
                     </tr>
@@ -2292,37 +2292,37 @@ export default function Reports() {
                 : 'Pagar na Entrega';
 
               return (
-                <tr key={s.id} className="print-item-row text-slate-900 border-b border-slate-400">
+                <tr key={s.id} className="print-item-row text-slate-900 border-b-2 border-slate-950">
                   {/* Número Seq/Ref do Pedido */}
-                  <td className="py-2 px-2 border border-slate-400 text-center font-mono font-black bg-slate-50">
+                  <td className="py-6 px-3 border border-slate-400 text-center font-mono font-black bg-slate-50">
                     #{s.saleNumber || `${idx + 1}`}
                   </td>
 
                   {/* Cliente e Celular */}
-                  <td className="py-2 px-2 border border-slate-400">
+                  <td className="py-6 px-3 border border-slate-400">
                     <div className="font-black text-slate-955 text-[11px] leading-tight">{s.customerName}</div>
                     {getCustomerPhone(s) && (
-                      <div className="text-[9px] text-slate-500 font-bold mt-0.5 font-mono">{getCustomerPhone(s)}</div>
+                      <div className="text-[9px] text-slate-500 font-bold mt-1 font-mono">{getCustomerPhone(s)}</div>
                     )}
                   </td>
 
                   {/* Previsão de Entrega */}
-                  <td className="py-2 px-2 border border-slate-400 font-bold text-slate-700 whitespace-nowrap text-center">
+                  <td className="py-6 px-3 border border-slate-400 font-bold text-slate-700 whitespace-nowrap text-center">
                     {dDate ? safeFormatDate(s.deliveryDate, "dd/MM/yyyy") : <span className="text-slate-400 italic">Não agendado</span>}
                   </td>
 
                   {/* Endereço de Entrega */}
-                  <td className="py-2 px-2 border border-slate-400 font-extrabold text-[10px] leading-snug uppercase text-slate-900">
+                  <td className="py-6 px-3 border border-slate-400 font-extrabold text-[10px] leading-snug uppercase text-slate-900">
                     {s.deliveryAddress || <span className="text-slate-500 italic lowercase font-medium">Retirada Local / Horta</span>}
                   </td>
 
                   {/* Itens do Pedido */}
-                  <td className="py-2 px-2 border border-slate-400">
+                  <td className="py-6 px-3 border border-slate-400">
                     <div className="flex flex-wrap gap-1 font-mono text-[9px]">
                       {s.items.map((item, i) => {
                         const qty = typeof item.quantity === 'number' ? item.quantity : Number(item.quantity) || 0;
                         return (
-                          <span key={i} className="bg-slate-100 border border-slate-300 text-slate-900 px-1 py-0.2 rounded font-bold whitespace-nowrap">
+                          <span key={i} className="bg-slate-100 border border-slate-300 text-slate-900 px-1.5 py-0.5 rounded font-bold whitespace-nowrap">
                             {qty}x {item.name}
                           </span>
                         );
@@ -2331,14 +2331,14 @@ export default function Reports() {
                   </td>
 
                   {/* Observações */}
-                  <td className="py-2 px-2 border border-slate-400 text-[9px] leading-tight text-slate-700 italic font-medium">
+                  <td className="py-6 px-3 border border-slate-400 text-[9px] leading-tight text-slate-700 italic font-medium">
                     {s.observations?.trim() ? s.observations : "—"}
                   </td>
 
                   {/* Total e Forma de Cobrança */}
-                  <td className="py-2 px-2 border border-slate-400 text-right font-mono whitespace-nowrap">
+                  <td className="py-6 px-3 border border-slate-400 text-right font-mono whitespace-nowrap">
                     <div className="font-black text-[11px] text-slate-950">R$ {s.total.toFixed(2)}</div>
-                    <div className="text-[7.5px] text-slate-500 font-extrabold font-sans uppercase tracking-tighter mt-0.5">{pmStr}</div>
+                    <div className="text-[7.5px] text-slate-500 font-extrabold font-sans uppercase tracking-tighter mt-1">{pmStr}</div>
                   </td>
                 </tr>
               );

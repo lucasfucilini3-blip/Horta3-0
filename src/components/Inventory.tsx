@@ -40,6 +40,11 @@ export default function Inventory() {
   const [inventoryProductMode, setInventoryProductMode] = useState<'existing' | 'new'>('existing');
   const [selectedCatalogItemId, setSelectedCatalogItemId] = useState<string>('');
 
+  // States for custom delete modals
+  const [deletingItem, setDeletingItem] = useState<InventoryItem | null>(null);
+  const [deletingCategory, setDeletingCategory] = useState<Category | null>(null);
+  const [deletingHistoryId, setDeletingHistoryId] = useState<string | null>(null);
+
   // States for general history report
   const [activeTab, setActiveTab] = useState<'items' | 'history'>('items');
   const [globalHistory, setGlobalHistory] = useState<any[]>([]);
@@ -623,19 +628,29 @@ export default function Inventory() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Tem certeza que deseja excluir este item?')) return;
+  const handleDelete = (item: InventoryItem) => {
+    setDeletingItem(item);
+  };
+
+  const executeDelete = async () => {
+    if (!deletingItem) return;
     try {
-      await firestoreDeleteDoc(doc(db, 'inventory', id));
+      await firestoreDeleteDoc(doc(db, 'inventory', deletingItem.id));
+      setDeletingItem(null);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, 'inventory');
     }
   };
 
-  const handleDeleteHistory = async (id: string) => {
-    if (!confirm('Deseja realmente excluir permanentemente este lançamento do histórico de movimentações?')) return;
+  const handleDeleteHistory = (id: string) => {
+    setDeletingHistoryId(id);
+  };
+
+  const executeDeleteHistory = async () => {
+    if (!deletingHistoryId) return;
     try {
-      await firestoreDeleteDoc(doc(db, 'inventory_history', id));
+      await firestoreDeleteDoc(doc(db, 'inventory_history', deletingHistoryId));
+      setDeletingHistoryId(null);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, 'inventory_history');
     }
@@ -659,10 +674,15 @@ export default function Inventory() {
     }
   };
 
-  const handleDeleteCategory = async (id: string) => {
-    if (!confirm('Excluir esta categoria?')) return;
+  const handleDeleteCategory = (cat: Category) => {
+    setDeletingCategory(cat);
+  };
+
+  const executeDeleteCategory = async () => {
+    if (!deletingCategory) return;
     try {
-      await firestoreDeleteDoc(doc(db, 'categories', id));
+      await firestoreDeleteDoc(doc(db, 'categories', deletingCategory.id));
+      setDeletingCategory(null);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, 'categories');
     }
@@ -729,8 +749,6 @@ export default function Inventory() {
 
   const inputItems = filteredItems.filter(item => item.type === 'input' || !item.type || isMuda(item)); // Fallback for old items
   const dispatchItems = filteredItems.filter(item => item.type === 'dispatch' && !isMuda(item));
-  const salesItems = dispatchItems.filter(item => !isPeUnitOrName(item));
-  const processingItems = dispatchItems.filter(item => isPeUnitOrName(item));
 
   const InventoryTable = ({ items, title, description, icon: Icon }: { items: InventoryItem[], title: string, description?: string, icon: any }) => (
     <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden animate-in fade-in duration-350">
@@ -843,7 +861,7 @@ export default function Inventory() {
                       <Edit2 size={16} className="md:w-[18px] md:h-[18px]" />
                     </button>
                     <button 
-                      onClick={() => handleDelete(item.id)}
+                      onClick={() => handleDelete(item)}
                       className="p-1.5 md:p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
                     >
                       <Trash2 size={16} className="md:w-[18px] md:h-[18px]" />
@@ -1105,14 +1123,7 @@ export default function Inventory() {
             />
             
             <InventoryTable 
-              items={salesItems} 
-              title="Estoque de Venda (Produtos Processados / Pacotes)" 
-              description="Produtos lavados, processados e embalados (ex: Pacotes / pct) prontos para feiras ou faturamento"
-              icon={ShoppingCart} 
-            />
-
-            <InventoryTable 
-              items={processingItems} 
+              items={dispatchItems} 
               title="Estoque da Horta (Colhidos / Aguardando Processamento)" 
               description="Hortaliças frescas recém-colhidas (ex: Pés de alface) que aguardam limpeza, seleção e pesagem/embalimento"
               icon={Sprout} 
@@ -1495,7 +1506,7 @@ export default function Inventory() {
                             <Edit2 size={18} />
                           </button>
                           <button 
-                            onClick={() => handleDeleteCategory(cat.id)}
+                            onClick={() => handleDeleteCategory(cat)}
                             className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
                           >
                             <Trash2 size={18} />
@@ -1646,7 +1657,7 @@ export default function Inventory() {
                       className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     >
                       <option value="input">Entrada de Insumos (Seeds, Adubos, etc)</option>
-                      <option value="dispatch">Expedição (Produtos para Venda)</option>
+                      <option value="dispatch">Estoque da Horta (Colhidos / Aguardando Processamento)</option>
                     </select>
                   </div>
 
@@ -2010,6 +2021,135 @@ export default function Inventory() {
                     Fechar Histórico
                   </button>
                 </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal de Confirmação de Exclusão de Item do Estoque */}
+      <AnimatePresence>
+        {deletingItem && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setDeletingItem(null)}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" 
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative bg-white w-full max-w-md rounded-[2rem] shadow-2xl p-6 overflow-hidden text-center"
+            >
+              <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-rose-100 text-rose-600 mb-4 animate-bounce">
+                <AlertTriangle size={24} />
+              </div>
+              <h3 className="text-lg font-extrabold text-slate-800 leading-6">Excluir Item do Estoque</h3>
+              <p className="mt-2 text-sm text-slate-500">
+                Tem certeza que deseja excluir permanentemente o item <strong className="text-slate-700">"{deletingItem.name}"</strong>? Esta ação não poderá ser desfeita.
+              </p>
+              <div className="mt-6 flex gap-3">
+                <button 
+                  onClick={() => setDeletingItem(null)}
+                  className="flex-1 px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-sm transition-colors cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={executeDelete}
+                  className="flex-1 px-4 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-sm transition-all shadow-lg shadow-rose-100 cursor-pointer"
+                >
+                  Sim, Excluir
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal de Confirmação de Exclusão de Categoria */}
+      <AnimatePresence>
+        {deletingCategory && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setDeletingCategory(null)}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" 
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative bg-white w-full max-w-md rounded-[2rem] shadow-2xl p-6 overflow-hidden text-center"
+            >
+              <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-rose-100 text-rose-600 mb-4">
+                <AlertTriangle size={24} />
+              </div>
+              <h3 className="text-lg font-extrabold text-slate-800 leading-6">Excluir Categoria</h3>
+              <p className="mt-2 text-sm text-slate-500">
+                Tem certeza que deseja excluir a categoria <strong className="text-slate-700">"{deletingCategory.name}"</strong>?
+              </p>
+              <div className="mt-6 flex gap-3">
+                <button 
+                  onClick={() => setDeletingCategory(null)}
+                  className="flex-1 px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-sm transition-colors cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={executeDeleteCategory}
+                  className="flex-1 px-4 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-sm transition-all shadow-lg shadow-rose-100 cursor-pointer"
+                >
+                  Sim, Excluir
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal de Confirmação de Exclusão de Histórico */}
+      <AnimatePresence>
+        {deletingHistoryId && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setDeletingHistoryId(null)}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" 
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative bg-white w-full max-w-md rounded-[2rem] shadow-2xl p-6 overflow-hidden text-center"
+            >
+              <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-rose-100 text-rose-600 mb-4">
+                <AlertTriangle size={24} />
+              </div>
+              <h3 className="text-lg font-extrabold text-slate-800 leading-6">Excluir Lançamento Histórico</h3>
+              <p className="mt-2 text-sm text-slate-500">
+                Deseja realmente excluir permanentemente este lançamento do histórico de movimentações? Esta ação não poderá ser desfeita.
+              </p>
+              <div className="mt-6 flex gap-3">
+                <button 
+                  onClick={() => setDeletingHistoryId(null)}
+                  className="flex-1 px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-sm transition-colors cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={executeDeleteHistory}
+                  className="flex-1 px-4 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-sm transition-all shadow-lg shadow-rose-100 cursor-pointer"
+                >
+                  Sim, Excluir
+                </button>
               </div>
             </motion.div>
           </div>

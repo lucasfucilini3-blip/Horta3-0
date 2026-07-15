@@ -221,7 +221,7 @@ service cloud.firestore {
     match /inventory/{itemId} {
       allow read: if isAuthenticated();
       allow create, update: if isOwner() || ((hasPermission('canManageInventory') || hasPermission('canManageSales') || hasPermission('canManageProduction')) && isValidInventoryItem(request.resource.data));
-      allow delete: if isOwner();
+      allow delete: if isOwner() || hasPermission('canManageInventory') || hasPermission('canManageSales') || hasPermission('canManageProduction');
     }
 
     match /inventory_history/{historyId} {

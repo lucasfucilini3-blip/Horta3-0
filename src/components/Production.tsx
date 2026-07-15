@@ -4142,10 +4142,10 @@ export default function ProductionComponent() {
                   />
                   <div className="flex-1">
                     <label htmlFor="addToInventory" className="block text-xs font-bold text-emerald-900 select-none cursor-pointer">
-                      Lançar no Estoque de Vendas (Expedição)
+                      Lançar no Estoque da Horta (Colhidos / Aguardando Processamento)
                     </label>
                     <p className="text-[10px] text-emerald-700/80 mt-1 leading-normal">
-                      Ao selecionar, o sistema adicionará esta quantidade colhida diretamente ao estoque de vendas, deixando o produto pronto para faturamento.
+                      Ao selecionar, o sistema adicionará esta quantidade colhida diretamente ao estoque da horta, deixando o produto pronto para limpeza, seleção e faturamento.
                     </p>
                   </div>
                 </div>

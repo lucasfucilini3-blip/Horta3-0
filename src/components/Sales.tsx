@@ -55,51 +55,7 @@ const isMuda = (item: any) => {
 };
 
 const isPeUnitOrName = (item: any) => {
-  const u = (item.unit || '').toLowerCase().trim();
-  const n = (item.name || '').toLowerCase().trim();
-  const cat = (item.category || '').toLowerCase().trim();
-
-  // If explicitly "processados" or similar, it's a sales/processed item, NOT raw garden item
-  if (
-    cat === 'processados' ||
-    cat === 'processadas' ||
-    cat === 'processado' ||
-    cat === 'procecados' ||
-    cat === 'procecado' ||
-    cat === 'procecada' ||
-    cat === 'procecidas'
-  ) {
-    return false;
-  }
-
-  // If explicitly "produção" or similar, it's a raw garden item colhido
-  if (
-    cat === 'produção' ||
-    cat === 'producao' ||
-    cat === 'produçao' ||
-    cat === 'colheita' ||
-    cat === 'produce' ||
-    cat.startsWith('produ')
-  ) {
-    return true;
-  }
-
-  // Otherwise fallback to unit/name check
-  return (
-    u === 'pé' ||
-    u === 'pe' ||
-    u === 'pés' ||
-    u === 'pes' ||
-    u.startsWith('pé ') ||
-    u.startsWith('pe ') ||
-    u.startsWith('pés ') ||
-    u.startsWith('pes ') ||
-    u.includes(' de alface') || 
-    n.startsWith('pé ') ||
-    n.startsWith('pe ') ||
-    n.includes(' pé ') ||
-    n.includes(' pe ')
-  );
+  return false;
 };
 
 export default function Sales() {
@@ -1904,12 +1860,12 @@ export default function Sales() {
                 </div>
 
                 <div className="space-y-3">
-                  <label className="text-sm font-bold text-slate-700 ml-1 block">Estoque de Expedição (Escolha o que levar no caminhão)</label>
+                  <label className="text-sm font-bold text-slate-700 ml-1 block">Estoque da Horta (Escolha o que levar no caminhão)</label>
                   
                   {inventory.filter(item => item.type === 'dispatch' && !isPeUnitOrName(item) && !isMuda(item)).length === 0 ? (
                     <div className="bg-slate-50 p-8 text-center border border-slate-200 rounded-2xl text-slate-400">
-                      <p className="font-bold">Nenhum produto cadastrado no Estoque de Expedição.</p>
-                      <p className="text-xs mt-1">Vá até o menu de Estoque e adicione produtos do tipo "Expedição" primeiro.</p>
+                      <p className="font-bold">Nenhum produto cadastrado no Estoque da Horta.</p>
+                      <p className="text-xs mt-1">Vá até o menu de Estoque e adicione produtos ao "Estoque da Horta" primeiro.</p>
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-96 overflow-y-auto p-1">
@@ -2301,7 +2257,7 @@ export default function Sales() {
                   <div className="space-y-4">
                     {!isDeliveryEditing && (
                       <div className="space-y-2">
-                        <label className="text-sm font-bold text-slate-700 ml-1 block">Produtos da Horta (Estoque de Expedição)</label>
+                        <label className="text-sm font-bold text-slate-700 ml-1 block">Estoque da Horta (Colhidos / Aguardando Processamento)</label>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto p-2 border border-slate-100 rounded-xl bg-slate-50/50">
                           {inventory.filter(item => item.type === 'dispatch' && !isPeUnitOrName(item) && !isMuda(item)).map(item => (
                             <button

@@ -790,7 +790,7 @@ export default function Sales() {
       
       const newSold = Math.max(0, item.soldQty + saleChange);
       const newLost = Math.max(0, (item.lostQty || 0) + lossChange);
-      const newRemaining = Math.max(0, item.initialQty - newSold - newLost);
+      const newRemaining = item.initialQty - newSold - newLost;
       
       return {
         ...item,
@@ -800,7 +800,10 @@ export default function Sales() {
       };
     });
     
-    const newTotal = updatedItems.reduce((acc: number, item: any) => acc + (item.price * item.soldQty), 0);
+    const newTotal = updatedItems.reduce(
+      (acc: number, item: any) => acc + Math.max(0, (item.price * item.soldQty) - (item.discount || 0)), 
+      0
+    );
     
     await updateDoc(doc(db, 'fairs', activeFair.id), {
       items: updatedItems,
@@ -808,7 +811,11 @@ export default function Sales() {
     });
   };
 
-  const handleFairItemInputChange = async (itemId: string, field: 'remainingQty' | 'lostQty' | 'price', value: number) => {
+  const handleFairItemInputChange = async (
+    itemId: string, 
+    field: 'remainingQty' | 'lostQty' | 'price' | 'soldQty' | 'discount' | 'quick_sell_all' | 'quick_reset', 
+    value: number
+  ) => {
     if (!activeFair) return;
     
     const updatedItems = activeFair.items.map((item: any) => {
@@ -817,23 +824,48 @@ export default function Sales() {
       let newPrice = item.price;
       let newRemaining = item.remainingQty;
       let newLost = item.lostQty || 0;
+      let newSold = item.soldQty || 0;
+      let newDiscount = item.discount || 0;
       
-      if (field === 'price') newPrice = value;
-      if (field === 'remainingQty') newRemaining = Math.max(0, Math.min(item.initialQty - newLost, value));
-      if (field === 'lostQty') newLost = Math.max(0, Math.min(item.initialQty - newRemaining, value));
-      
-      const newSold = Math.max(0, item.initialQty - newRemaining - newLost);
+      if (field === 'price') {
+        newPrice = value;
+      } else if (field === 'remainingQty') {
+        newRemaining = value;
+        newSold = item.initialQty - newRemaining - newLost;
+      } else if (field === 'lostQty') {
+        newLost = Math.max(0, value);
+        newSold = item.initialQty - newRemaining - newLost;
+      } else if (field === 'soldQty') {
+        newSold = value;
+        newRemaining = item.initialQty - newSold - newLost;
+      } else if (field === 'discount') {
+        newDiscount = Math.max(0, value);
+      } else if (field === 'quick_sell_all') {
+        newRemaining = 0;
+        newLost = 0;
+        newSold = item.initialQty;
+        newDiscount = 0;
+      } else if (field === 'quick_reset') {
+        newRemaining = item.initialQty;
+        newLost = 0;
+        newSold = 0;
+        newDiscount = 0;
+      }
       
       return {
         ...item,
         price: newPrice,
         remainingQty: newRemaining,
         lostQty: newLost,
-        soldQty: newSold
+        soldQty: newSold,
+        discount: newDiscount
       };
     });
     
-    const newTotal = updatedItems.reduce((acc: number, item: any) => acc + (item.price * item.soldQty), 0);
+    const newTotal = updatedItems.reduce(
+      (acc: number, item: any) => acc + Math.max(0, (item.price * item.soldQty) - (item.discount || 0)), 
+      0
+    );
     
     await updateDoc(doc(db, 'fairs', activeFair.id), {
       items: updatedItems,
@@ -869,7 +901,24 @@ export default function Sales() {
       });
 
       for (const item of activeFair.items) {
-        if (closingReturnToInventory && item.remainingQty > 0) {
+        if (item.remainingQty < 0) {
+          // Excedente de venda: deduzir do estoque principal o déficit vendido
+          const invRef = doc(db, 'inventory', item.itemId);
+          await updateDoc(invRef, {
+            quantity: increment(item.remainingQty),
+            lastUpdated: serverTimestamp()
+          });
+
+          await addDoc(collection(db, 'inventory_history'), {
+            itemId: item.itemId,
+            itemName: item.name,
+            quantity: item.remainingQty,
+            unit: item.unit,
+            type: 'use_stock',
+            description: `Ajuste de venda excedente de feira (${activeFair.name})`,
+            date: serverTimestamp()
+          });
+        } else if (closingReturnToInventory && item.remainingQty > 0) {
           const invRef = doc(db, 'inventory', item.itemId);
           await updateDoc(invRef, {
             quantity: increment(item.remainingQty),
@@ -1709,11 +1758,14 @@ export default function Sales() {
               {/* Grid de Cards de Produtos Ativos */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {activeFair.items.map((item: any) => {
-                  const soldPct = Math.min(100, Math.round(((item.soldQty || 0) / (item.initialQty || 1)) * 100)) || 0;
+                  const soldPct = Math.round(((item.soldQty || 0) / (item.initialQty || 1)) * 100) || 0;
+                  const progressPct = Math.min(100, soldPct);
+                  const isNegative = item.remainingQty < 0;
+
                   return (
                     <div key={item.itemId} className="bg-white rounded-3xl border border-slate-200 p-5 md:p-6 shadow-sm hover:shadow-md transition-all flex flex-col space-y-4">
                       {/* Topo Item */}
-                      <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-start justify-between gap-3 font-sans">
                         <div className="min-w-0">
                           <h4 className="font-black text-slate-800 text-lg truncate" title={item.name}>{item.name}</h4>
                           <div className="flex items-center gap-2 mt-1">
@@ -1730,9 +1782,11 @@ export default function Sales() {
                             </div>
                           </div>
                         </div>
-                        <div className="bg-slate-100 px-3 py-1.5 rounded-xl text-right shrink-0">
-                          <span className="text-[10px] uppercase font-bold text-slate-400 block">Restante</span>
-                          <span className="text-lg font-black text-slate-700">
+                        <div className={`px-3 py-1.5 rounded-xl text-right shrink-0 ${isNegative ? 'bg-rose-50 border border-rose-100' : 'bg-slate-100'}`}>
+                          <span className={`text-[10px] uppercase font-bold block ${isNegative ? 'text-rose-500' : 'text-slate-400'}`}>
+                            {isNegative ? 'Excedente' : 'Restante'}
+                          </span>
+                          <span className={`text-lg font-black ${isNegative ? 'text-rose-600' : 'text-slate-700'}`}>
                             {item.remainingQty} <span className="text-xs font-normal text-slate-400">{formatUnit(item.unit, item.remainingQty)}</span>
                           </span>
                         </div>
@@ -1742,92 +1796,148 @@ export default function Sales() {
                       <div>
                         <div className="flex justify-between text-xs font-bold text-slate-500 mb-1 font-sans">
                           <span>Vendidos: {item.soldQty} de {item.initialQty} {formatUnit(item.unit, item.initialQty)}</span>
-                          <span>{soldPct}%</span>
+                          <span className={soldPct > 100 ? 'text-rose-600 font-black' : ''}>{soldPct}%</span>
                         </div>
                         <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden border border-slate-150">
                           <div 
-                            className="bg-emerald-500 h-full rounded-full transition-all duration-300" 
-                            style={{ width: `${soldPct}%` }}
+                            className={`${soldPct > 100 ? 'bg-rose-500' : 'bg-emerald-500'} h-full rounded-full transition-all duration-300`} 
+                            style={{ width: `${progressPct}%` }}
                           />
                         </div>
                       </div>
 
-                      {/* Botoes Táteis Super Rápidos */}
-                      <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-3">
-                        <span className="text-[10px] font-bold text-slate-400 uppercase block text-center tracking-wider">Painel de Cliques Rápidos</span>
-                        <div className="grid grid-cols-2 gap-3">
+                      {/* Atalhos de Ação Rápida */}
+                      <div className="grid grid-cols-2 gap-2.5">
+                        <button
+                          type="button"
+                          onClick={() => handleFairItemInputChange(item.itemId, 'quick_sell_all', 0)}
+                          className="py-2.5 bg-emerald-600 text-white rounded-xl text-xs font-black hover:bg-emerald-700 active:scale-[0.97] transition-all flex items-center justify-center gap-1.5 shadow-md shadow-emerald-100 cursor-pointer"
+                        >
+                          <span>Vendeu Tudo! 🚀</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleFairItemInputChange(item.itemId, 'quick_reset', 0)}
+                          className="py-2.5 bg-slate-100 text-slate-600 rounded-xl text-xs font-black hover:bg-slate-200 active:scale-[0.97] transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                        >
+                          <span>Resetar Tudo 🔄</span>
+                        </button>
+                      </div>
+
+                      {/* Cliques Rápidos de Unidades (+1 / -1) */}
+                      <div className="bg-slate-50/70 p-2.5 rounded-2xl border border-slate-100 flex items-center justify-between gap-2 text-[11px] font-sans">
+                        <div className="flex items-center gap-1">
+                          <span className="font-bold text-slate-400">Venda:</span>
                           <button
                             type="button"
                             onClick={() => handleUpdateFairItemQty(item.itemId, 1, 0)}
-                            disabled={item.remainingQty <= 0}
-                            className="h-16 bg-emerald-600 text-white rounded-xl font-black hover:bg-emerald-700 active:scale-[0.95] disabled:opacity-40 disabled:pointer-events-none transition-all flex flex-col items-center justify-center shadow-lg shadow-emerald-100 cursor-pointer"
+                            className="bg-white border border-slate-200 px-2 py-1 rounded-lg font-black hover:bg-emerald-50 hover:text-emerald-700 cursor-pointer active:scale-95 transition-all"
                           >
-                            <span className="text-[10px] uppercase tracking-wider opacity-90 font-bold">Vendido (+1)</span>
-                            <span className="text-base font-black text-white">+ R$ {item.price.toFixed(2)}</span>
+                            +1
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => handleUpdateFairItemQty(item.itemId, 0, 1)}
-                            disabled={item.remainingQty <= 0}
-                            className="h-16 bg-amber-500 text-white rounded-xl font-black hover:bg-amber-600 active:scale-[0.95] disabled:opacity-40 disabled:pointer-events-none transition-all flex flex-col items-center justify-center shadow-lg shadow-amber-100 cursor-pointer"
-                          >
-                            <span className="text-[10px] uppercase tracking-wider opacity-90 font-bold">Perda (+1)</span>
-                            <span className="text-sm font-black text-white">Rachou / Perda</span>
-                          </button>
-                        </div>
-
-                        {/* Corretores pequenininhos embaixo */}
-                        <div className="flex justify-between items-center text-xs px-1 font-sans">
                           <button
                             type="button"
                             onClick={() => handleUpdateFairItemQty(item.itemId, -1, 0)}
                             disabled={item.soldQty <= 0}
-                            className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 px-2 py-1 rounded-lg transition-all disabled:opacity-30 disabled:pointer-events-none font-bold"
+                            className="bg-white border border-slate-200 px-2 py-1 rounded-lg font-black hover:bg-rose-50 hover:text-rose-700 disabled:opacity-30 disabled:pointer-events-none cursor-pointer active:scale-95 transition-all"
                           >
-                            Desfazer Venda (-1)
+                            -1
+                          </button>
+                        </div>
+                        <div className="h-4 w-[1px] bg-slate-200" />
+                        <div className="flex items-center gap-1">
+                          <span className="font-bold text-slate-400">Perda:</span>
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateFairItemQty(item.itemId, 0, 1)}
+                            className="bg-white border border-slate-200 px-2 py-1 rounded-lg font-black hover:bg-amber-50 hover:text-amber-700 cursor-pointer active:scale-95 transition-all"
+                          >
+                            +1
                           </button>
                           <button
                             type="button"
                             onClick={() => handleUpdateFairItemQty(item.itemId, 0, -1)}
                             disabled={item.lostQty <= 0}
-                            className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 px-2 py-1 rounded-lg transition-all disabled:opacity-30 disabled:pointer-events-none font-bold"
+                            className="bg-white border border-slate-200 px-2 py-1 rounded-lg font-black hover:bg-rose-50 hover:text-rose-700 disabled:opacity-30 disabled:pointer-events-none cursor-pointer active:scale-95 transition-all"
                           >
-                            Desfazer Perda (-1)
+                            -1
                           </button>
                         </div>
                       </div>
 
-                      {/* Recortadores manuais no final */}
-                      <div className="border-t border-slate-100 pt-3 grid grid-cols-2 gap-4">
+                      {/* Ajuste Direto de Quantidades */}
+                      <div className="grid grid-cols-3 gap-2 border-t border-slate-100 pt-3">
                         <div>
-                          <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Preencher Sobra Final</label>
-                          <div className="relative">
-                            <input 
-                              type="number"
-                              min="0"
-                              max={item.initialQty}
-                              value={item.remainingQty}
-                              onChange={(e) => handleFairItemInputChange(item.itemId, 'remainingQty', Number(e.target.value))}
-                              className="bg-slate-50 border border-slate-200 font-bold px-3 py-2 text-center text-sm text-slate-800 rounded-xl focus:ring-1 focus:ring-emerald-500 focus:outline-none w-full"
-                            />
-                            <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400">{formatUnit(item.unit, item.remainingQty)}</span>
+                          <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1 text-center">Carregado</label>
+                          <div className="bg-slate-50 border border-slate-200 font-bold px-1 py-2 text-center text-xs text-slate-500 rounded-xl w-full">
+                            {item.initialQty} <span className="text-[10px] font-normal text-slate-400">{item.unit}</span>
                           </div>
                         </div>
                         <div>
-                          <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Perdas Totais</label>
-                          <div className="relative">
-                            <input 
-                              type="number"
-                              min="0"
-                              max={item.initialQty}
-                              value={item.lostQty || 0}
-                              onChange={(e) => handleFairItemInputChange(item.itemId, 'lostQty', Number(e.target.value))}
-                              className="bg-slate-50 border border-slate-200 font-bold px-3 py-2 text-center text-sm text-slate-800 rounded-xl focus:ring-1 focus:ring-emerald-500 focus:outline-none w-full"
-                            />
-                            <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400">{formatUnit(item.unit, item.lostQty || 0)}</span>
-                          </div>
+                          <label className="text-[10px] font-bold text-emerald-600 uppercase block mb-1 text-center">Vendidos</label>
+                          <input 
+                            type="number"
+                            value={item.soldQty || 0}
+                            onChange={(e) => handleFairItemInputChange(item.itemId, 'soldQty', Number(e.target.value))}
+                            className="bg-emerald-50/50 border border-emerald-200 font-bold px-1 py-2 text-center text-xs text-emerald-800 rounded-xl focus:ring-1 focus:ring-emerald-500 focus:outline-none w-full"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-amber-600 uppercase block mb-1 text-center">Sobra</label>
+                          <input 
+                            type="number"
+                            value={item.remainingQty}
+                            onChange={(e) => handleFairItemInputChange(item.itemId, 'remainingQty', Number(e.target.value))}
+                            className="bg-amber-50/50 border border-amber-200 font-bold px-1 py-2 text-center text-xs text-amber-800 rounded-xl focus:ring-1 focus:ring-amber-500 focus:outline-none w-full"
+                          />
                         </div>
                       </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[10px] font-bold text-rose-500 uppercase block mb-1 text-center">Perdas Totais</label>
+                          <input 
+                            type="number"
+                            min="0"
+                            value={item.lostQty || 0}
+                            onChange={(e) => handleFairItemInputChange(item.itemId, 'lostQty', Number(e.target.value))}
+                            className="bg-rose-50/35 border border-rose-100 font-bold px-1 py-1.5 text-center text-xs text-rose-700 rounded-xl focus:ring-1 focus:ring-rose-400 focus:outline-none w-full"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-indigo-600 uppercase block mb-1 text-center">Desconto (R$)</label>
+                          <input 
+                            type="number"
+                            min="0"
+                            step="0.50"
+                            value={item.discount || 0}
+                            onChange={(e) => handleFairItemInputChange(item.itemId, 'discount', Number(e.target.value))}
+                            className="bg-indigo-50/35 border border-indigo-100 font-bold px-1 py-1.5 text-center text-xs text-indigo-700 rounded-xl focus:ring-1 focus:ring-indigo-400 focus:outline-none w-full"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Resumo de Faturamento do Item */}
+                      {item.soldQty > 0 && (
+                        <div className="bg-emerald-50/40 border border-emerald-100 p-3 rounded-2xl flex flex-col space-y-1 font-sans">
+                          <div className="flex justify-between items-center">
+                            <span className="text-[10px] font-bold text-slate-500 uppercase">Faturamento Líquido</span>
+                            <span className="text-sm font-black text-emerald-700">
+                              R$ {Math.max(0, (item.price * item.soldQty) - (item.discount || 0)).toFixed(2)}
+                            </span>
+                          </div>
+                          <div className="flex justify-between text-[10px] text-slate-400 font-medium">
+                            <span>Faturamento Bruto:</span>
+                            <span>R$ {(item.price * item.soldQty).toFixed(2)}</span>
+                          </div>
+                          {item.discount > 0 && (
+                            <div className="flex justify-between text-[10px] text-rose-500 font-bold">
+                              <span>Desconto Aplicado:</span>
+                              <span>- R$ {Number(item.discount).toFixed(2)}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -1988,11 +2098,16 @@ export default function Sales() {
                             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Balanço das Saídas:</span>
                             <div className="flex flex-wrap gap-2">
                               {fair.items?.map((item: any, i: number) => (
-                                <span key={i} className="px-2.5 py-1 bg-slate-50 text-slate-600 border border-slate-150 rounded-lg text-xs font-semibold flex items-center gap-1.5">
+                                <span key={i} className="px-2.5 py-1 bg-slate-50 text-slate-600 border border-slate-150 rounded-lg text-xs font-semibold flex items-center gap-1.5 flex-wrap">
                                   <strong>{item.name}:</strong> 
                                   <span className="text-emerald-650 font-black">{item.soldQty} vend.</span> | 
                                   <span className="text-slate-500 font-medium">{item.remainingQty} sob.</span> | 
                                   <span className="text-amber-600 font-medium">{item.lostQty || 0} perdas</span>
+                                  {item.discount > 0 && (
+                                    <>
+                                      | <span className="text-rose-600 font-bold">- R$ {Number(item.discount).toFixed(2)} desc.</span>
+                                    </>
+                                  )}
                                 </span>
                               ))}
                             </div>

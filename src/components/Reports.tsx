@@ -13,8 +13,14 @@ export default function Reports() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [productions, setProductions] = useState<Production[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [fairs, setFairs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeReport, setActiveReport] = useState<'general' | 'operational' | 'customer' | 'product' | 'pending_deliveries' | 'receivables' | 'expenses'>('general');
+  const [activeReport, setActiveReport] = useState<'general' | 'operational' | 'customer' | 'product' | 'pending_deliveries' | 'receivables' | 'expenses' | 'sales_by_channel'>('general');
+
+  // Filters for Sales by Channel report
+  const [channelFilterPreset, setChannelFilterPreset] = useState<'all' | 'today' | 'yesterday' | 'last7' | 'last30' | 'month' | 'custom'>('last30');
+  const [channelDateStart, setChannelDateStart] = useState(format(subDays(new Date(), 30), 'yyyy-MM-dd'));
+  const [channelDateEnd, setChannelDateEnd] = useState(format(new Date(), 'yyyy-MM-dd'));
 
   // Filters for Expense report
   const [expenseFilterPreset, setExpenseFilterPreset] = useState<'week' | 'month' | 'custom'>('month');
@@ -148,6 +154,7 @@ export default function Reports() {
     const transQ = query(collection(db, 'transactions'), orderBy('date', 'desc'));
     const prodQ = query(collection(db, 'production'), orderBy('plantingDate', 'desc'));
     const custQ = query(collection(db, 'customers'), orderBy('companyName', 'asc'));
+    const fairsQ = query(collection(db, 'fairs'), orderBy('date', 'desc'));
 
     const unsubSales = onSnapshot(salesQ, (snapshot) => {
       setSales(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Sale)));
@@ -166,7 +173,11 @@ export default function Reports() {
       setCustomers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Customer)));
     });
 
-    return () => { unsubSales(); unsubTrans(); unsubProd(); unsubCust(); };
+    const unsubFairs = onSnapshot(fairsQ, (snapshot) => {
+      setFairs(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+
+    return () => { unsubSales(); unsubTrans(); unsubProd(); unsubCust(); unsubFairs(); };
   }, []);
 
   const getCustomerPhone = (sale: Sale) => {
@@ -684,6 +695,164 @@ export default function Reports() {
 
   const expenseTimelineSorted = expenseTimelineGrouped.sort((a, b) => a.rawDate.localeCompare(b.rawDate));
 
+  // ==========================================
+  // COMPUTATIONS FOR SALES BY CHANNEL REPORT
+  // ==========================================
+  const isChannelDateInInterval = (dDate: Date) => {
+    const todayDate = new Date();
+    if (channelFilterPreset === 'all') return true;
+    if (channelFilterPreset === 'today') {
+      return dDate >= startOfDay(todayDate) && dDate <= endOfDay(todayDate);
+    }
+    if (channelFilterPreset === 'yesterday') {
+      const yesterday = subDays(todayDate, 1);
+      return dDate >= startOfDay(yesterday) && dDate <= endOfDay(yesterday);
+    }
+    if (channelFilterPreset === 'last7') {
+      return dDate >= startOfDay(subDays(todayDate, 7)) && dDate <= endOfDay(todayDate);
+    }
+    if (channelFilterPreset === 'last30') {
+      return dDate >= startOfDay(subDays(todayDate, 30)) && dDate <= endOfDay(todayDate);
+    }
+    if (channelFilterPreset === 'month') {
+      return dDate >= startOfMonth(todayDate) && dDate <= endOfMonth(todayDate);
+    }
+    if (channelFilterPreset === 'custom') {
+      if (channelDateStart) {
+        const start = startOfDay(new Date(channelDateStart + 'T00:00:00'));
+        if (dDate < start) return false;
+      }
+      if (channelDateEnd) {
+        const end = endOfDay(new Date(channelDateEnd + 'T23:59:59'));
+        if (dDate > end) return false;
+      }
+      return true;
+    }
+    return true;
+  };
+
+  const filteredSalesForChannel = sales.filter(s => {
+    if (s.status === 'cancelled') return false;
+    const sDate = parseFirebaseDate(s.createdAt);
+    if (!sDate) return false;
+    return isChannelDateInInterval(sDate);
+  });
+
+  const filteredFairsForChannel = fairs.filter(f => {
+    const fDate = parseFirebaseDate(f.date || f.createdAt);
+    if (!fDate) return false;
+    return isChannelDateInInterval(fDate);
+  });
+
+  // Calculate totals
+  let totalDeliveryAmt = 0;
+  let totalDeliveryCount = 0;
+  let totalNormalAmt = 0;
+  let totalNormalCount = 0;
+  let totalFairAmt = 0;
+  let totalFairCount = 0;
+  let totalOverallAmt = 0;
+
+  filteredSalesForChannel.forEach(s => {
+    const isDelivery = s.isDelivery === true || !!s.deliveryAddress?.trim();
+    const amt = s.total || 0;
+    if (isDelivery) {
+      totalDeliveryAmt += amt;
+      totalDeliveryCount += 1;
+    } else {
+      totalNormalAmt += amt;
+      totalNormalCount += 1;
+    }
+    totalOverallAmt += amt;
+  });
+
+  filteredFairsForChannel.forEach(f => {
+    const amt = f.totalSalesAmount || 0;
+    totalFairAmt += amt;
+    totalFairCount += 1;
+    totalOverallAmt += amt;
+  });
+
+  const channelDailyDataMap: { [dateStr: string]: {
+    date: string;
+    formattedDate: string;
+    deliveryAmt: number;
+    deliveryCount: number;
+    normalAmt: number;
+    normalCount: number;
+    fairAmt: number;
+    fairCount: number;
+    totalAmt: number;
+  } } = {};
+
+  filteredSalesForChannel.forEach(s => {
+    const sDate = parseFirebaseDate(s.createdAt);
+    if (!sDate) return;
+    const dateKey = format(sDate, 'yyyy-MM-dd');
+    const formattedDate = format(sDate, 'dd/MM/yyyy');
+    
+    if (!channelDailyDataMap[dateKey]) {
+      channelDailyDataMap[dateKey] = {
+        date: dateKey,
+        formattedDate,
+        deliveryAmt: 0,
+        deliveryCount: 0,
+        normalAmt: 0,
+        normalCount: 0,
+        fairAmt: 0,
+        fairCount: 0,
+        totalAmt: 0
+      };
+    }
+    
+    const isDelivery = s.isDelivery === true || !!s.deliveryAddress?.trim();
+    const amt = s.total || 0;
+    
+    if (isDelivery) {
+      channelDailyDataMap[dateKey].deliveryAmt += amt;
+      channelDailyDataMap[dateKey].deliveryCount += 1;
+    } else {
+      channelDailyDataMap[dateKey].normalAmt += amt;
+      channelDailyDataMap[dateKey].normalCount += 1;
+    }
+    channelDailyDataMap[dateKey].totalAmt += amt;
+  });
+
+  filteredFairsForChannel.forEach(f => {
+    const fDate = parseFirebaseDate(f.date || f.createdAt);
+    if (!fDate) return;
+    const dateKey = format(fDate, 'yyyy-MM-dd');
+    const formattedDate = format(fDate, 'dd/MM/yyyy');
+    
+    if (!channelDailyDataMap[dateKey]) {
+      channelDailyDataMap[dateKey] = {
+        date: dateKey,
+        formattedDate,
+        deliveryAmt: 0,
+        deliveryCount: 0,
+        normalAmt: 0,
+        normalCount: 0,
+        fairAmt: 0,
+        fairCount: 0,
+        totalAmt: 0
+      };
+    }
+    
+    const amt = f.totalSalesAmount || 0;
+    channelDailyDataMap[dateKey].fairAmt += amt;
+    channelDailyDataMap[dateKey].fairCount += 1;
+    channelDailyDataMap[dateKey].totalAmt += amt;
+  });
+
+  const sortedChannelDailyData = Object.values(channelDailyDataMap).sort((a, b) => a.date.localeCompare(b.date));
+  const sortedChannelDailyDataDesc = Object.values(channelDailyDataMap).sort((a, b) => b.date.localeCompare(a.date));
+
+  const pieData = [
+    { name: 'Delivery', value: totalDeliveryAmt, color: '#3b82f6' },
+    { name: 'Venda Normal', value: totalNormalAmt, color: '#10b981' },
+    { name: 'Feira', value: totalFairAmt, color: '#f59e0b' }
+  ].filter(p => p.value > 0);
+
   return (
     <>
       {/* Visualização de Tela (Oculta na impressão para layout limpo) */}
@@ -707,6 +876,7 @@ export default function Reports() {
         {[
           { id: 'general', label: 'Visão Geral', icon: Activity },
           { id: 'operational', label: 'Operacional', icon: Target },
+          { id: 'sales_by_channel', label: 'Vendas por Canal', icon: BarChart3 },
           { id: 'expenses', label: 'Despesas', icon: TrendingDown },
           { id: 'pending_deliveries', label: 'Entregas Pendentes', icon: ShoppingBag },
           { id: 'receivables', label: 'Valores a Receber', icon: DollarSign },
@@ -1060,6 +1230,329 @@ export default function Reports() {
         </div>
       </div>
         </>
+      )}
+
+      {activeReport === 'sales_by_channel' && (
+        <div className="space-y-6">
+          {/* Header & Filter Card */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden p-5 space-y-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
+                  <BarChart3 className="text-emerald-600" size={22} />
+                  Vendas por Canal e Dia
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">Análise comparativa de faturamento entre Delivery, Vendas Normais e Feiras.</p>
+              </div>
+
+              {/* Date Filter selector */}
+              <div className="flex flex-wrap items-center gap-1.5 border border-slate-100 bg-slate-50/50 p-2 rounded-xl">
+                <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider px-1">Período:</span>
+                {[
+                  { id: 'all', label: 'Todas' },
+                  { id: 'today', label: 'Hoje' },
+                  { id: 'yesterday', label: 'Ontem' },
+                  { id: 'last7', label: '7 dias' },
+                  { id: 'last30', label: '30 dias' },
+                  { id: 'month', label: 'Este Mês' },
+                  { id: 'custom', label: 'Personalizado' },
+                ].map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => setChannelFilterPreset(p.id as any)}
+                    className={cn(
+                      "px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all border",
+                      channelFilterPreset === p.id
+                        ? "bg-emerald-100 border-emerald-300 text-emerald-800 shadow-sm"
+                        : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                    )}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {channelFilterPreset === 'custom' && (
+              <div className="flex items-center gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200 max-w-sm">
+                <div>
+                  <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Início</label>
+                  <input
+                    type="date"
+                    value={channelDateStart}
+                    onChange={(e) => setChannelDateStart(e.target.value)}
+                    className="bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-700 px-2.5 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500 w-36"
+                  />
+                </div>
+                <span className="text-slate-300 font-bold self-end mb-1">-</span>
+                <div>
+                  <label className="block text-[9px] font-black uppercase text-slate-400 mb-1">Fim</label>
+                  <input
+                    type="date"
+                    value={channelDateEnd}
+                    onChange={(e) => setChannelDateEnd(e.target.value)}
+                    className="bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-700 px-2.5 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500 w-36"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Cards Resumo */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+              <div>
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Faturamento Geral</span>
+                <h4 className="text-2xl font-black text-slate-800 mt-1 font-mono">
+                  R$ {totalOverallAmt.toFixed(2)}
+                </h4>
+              </div>
+              <p className="text-[10px] text-slate-500 mt-3 font-semibold">
+                Soma de todos os canais de venda no período
+              </p>
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+              <div>
+                <span className="text-[10px] font-black text-blue-500 uppercase tracking-widest block flex items-center gap-1">
+                  <span className="w-2.5 h-2.5 rounded-full bg-blue-500 inline-block" />
+                  Delivery
+                </span>
+                <h4 className="text-2xl font-black text-slate-800 mt-1 font-mono">
+                  R$ {totalDeliveryAmt.toFixed(2)}
+                </h4>
+              </div>
+              <div className="flex justify-between items-center mt-3 text-[10px] font-bold text-slate-500">
+                <span>{totalDeliveryCount} pedidos</span>
+                <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-md">
+                  {totalOverallAmt > 0 ? ((totalDeliveryAmt / totalOverallAmt) * 100).toFixed(1) : 0}%
+                </span>
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+              <div>
+                <span className="text-[10px] font-black text-emerald-500 uppercase tracking-widest block flex items-center gap-1">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block" />
+                  Venda Normal
+                </span>
+                <h4 className="text-2xl font-black text-slate-800 mt-1 font-mono">
+                  R$ {totalNormalAmt.toFixed(2)}
+                </h4>
+              </div>
+              <div className="flex justify-between items-center mt-3 text-[10px] font-bold text-slate-500">
+                <span>{totalNormalCount} vendas</span>
+                <span className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-md">
+                  {totalOverallAmt > 0 ? ((totalNormalAmt / totalOverallAmt) * 100).toFixed(1) : 0}%
+                </span>
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+              <div>
+                <span className="text-[10px] font-black text-amber-500 uppercase tracking-widest block flex items-center gap-1">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block" />
+                  Feira
+                </span>
+                <h4 className="text-2xl font-black text-slate-800 mt-1 font-mono">
+                  R$ {totalFairAmt.toFixed(2)}
+                </h4>
+              </div>
+              <div className="flex justify-between items-center mt-3 text-[10px] font-bold text-slate-500">
+                <span>{totalFairCount} feiras fechadas</span>
+                <span className="bg-amber-50 text-amber-700 px-2 py-0.5 rounded-md">
+                  {totalOverallAmt > 0 ? ((totalFairAmt / totalOverallAmt) * 100).toFixed(1) : 0}%
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Gráficos */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Gráfico de Barras Empilhadas */}
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 lg:col-span-2 space-y-4">
+              <div>
+                <h4 className="text-sm font-black text-slate-800 uppercase tracking-wider">Histórico de Faturamento por Dia</h4>
+                <p className="text-[10px] text-slate-500">Visualização diária das vendas por modalidade.</p>
+              </div>
+              <div className="h-[300px] w-full">
+                {sortedChannelDailyData.length === 0 ? (
+                  <div className="h-full w-full flex flex-col items-center justify-center text-slate-400 gap-2">
+                    <BarChart3 size={40} className="stroke-1 opacity-50" />
+                    <span className="text-xs font-semibold">Nenhuma venda registrada no período selecionado</span>
+                  </div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={sortedChannelDailyData}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                      <XAxis dataKey="formattedDate" stroke="#94a3b8" fontSize={10} fontWeight="bold" tickLine={false} />
+                      <YAxis stroke="#94a3b8" fontSize={10} fontWeight="bold" tickLine={false} tickFormatter={(val) => `R$${val}`} />
+                      <Tooltip 
+                        formatter={(value: any) => [`R$ ${Number(value).toFixed(2)}`]}
+                        contentStyle={{ backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', fontFamily: 'sans-serif', fontSize: '11px' }}
+                      />
+                      <Legend verticalAlign="top" height={36} iconType="circle" wrapperStyle={{ fontSize: '11px', fontWeight: 'bold' }} />
+                      <Bar dataKey="normalAmt" name="Venda Normal" stackId="a" fill="#10b981" />
+                      <Bar dataKey="deliveryAmt" name="Delivery" stackId="a" fill="#3b82f6" />
+                      <Bar dataKey="fairAmt" name="Feira" stackId="a" fill="#f59e0b" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
+            </div>
+
+            {/* Pizza de Distribuição */}
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex flex-col justify-between space-y-4">
+              <div>
+                <h4 className="text-sm font-black text-slate-800 uppercase tracking-wider">Participação por Canal</h4>
+                <p className="text-[10px] text-slate-500">Proporção das receitas totais de cada canal.</p>
+              </div>
+              <div className="h-[220px] w-full flex items-center justify-center relative font-sans">
+                {pieData.length === 0 ? (
+                  <div className="text-slate-400 text-xs font-semibold">Sem dados</div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={pieData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={60}
+                        outerRadius={80}
+                        paddingAngle={5}
+                        dataKey="value"
+                      >
+                        {pieData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip 
+                        formatter={(value: any) => [`R$ ${Number(value).toFixed(2)}`]}
+                        contentStyle={{ backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', fontFamily: 'sans-serif', fontSize: '11px' }}
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                )}
+                {totalOverallAmt > 0 && (
+                  <div className="absolute text-center flex flex-col items-center">
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block leading-none mb-1">Total</span>
+                    <span className="text-sm font-black text-slate-800 font-mono leading-none">R$ {totalOverallAmt.toFixed(0)}</span>
+                  </div>
+                )}
+              </div>
+              <div className="space-y-1.5 pt-2 font-sans">
+                {pieData.map((d, i) => (
+                  <div key={i} className="flex justify-between items-center text-xs font-bold border-b border-slate-50 pb-1.5 last:border-0 last:pb-0">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: d.color }} />
+                      <span className="text-slate-600">{d.name}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-slate-800 font-mono">R$ {d.value.toFixed(2)}</span>
+                      <span className="text-[10px] text-slate-400 font-normal font-sans">
+                        ({((d.value / totalOverallAmt) * 100).toFixed(1)}%)
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Tabela Detalhada por Dia */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-4 md:p-5 border-b border-slate-100 bg-slate-50/50">
+              <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">Detalhamento Diário</h4>
+              <p className="text-[10px] text-slate-500 mt-0.5">Visão tabular consolidada por data.</p>
+            </div>
+            
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-wider font-sans">
+                    <th className="px-6 py-3.5">Dia</th>
+                    <th className="px-6 py-3.5 text-center">Venda Normal</th>
+                    <th className="px-6 py-3.5 text-center">Delivery</th>
+                    <th className="px-6 py-3.5 text-center">Feira</th>
+                    <th className="px-6 py-3.5 text-right">Total do Dia</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-xs bg-white">
+                  {sortedChannelDailyDataDesc.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="px-6 py-10 text-center font-bold text-slate-400">
+                        Nenhuma venda encontrada no intervalo selecionado.
+                      </td>
+                    </tr>
+                  ) : (
+                    sortedChannelDailyDataDesc.map((row, i) => (
+                      <tr key={i} className="hover:bg-slate-50/50 transition-colors font-sans">
+                        <td className="px-6 py-3.5 font-bold text-slate-800 font-mono">
+                          {row.formattedDate}
+                        </td>
+                        <td className="px-6 py-3.5 text-center">
+                          {row.normalAmt > 0 ? (
+                            <div className="flex flex-col">
+                              <span className="font-black text-emerald-600 font-mono">R$ {row.normalAmt.toFixed(2)}</span>
+                              <span className="text-[10px] text-slate-400 font-medium">{row.normalCount} {row.normalCount === 1 ? 'venda' : 'vendas'}</span>
+                            </div>
+                          ) : (
+                            <span className="text-slate-300">-</span>
+                          )}
+                        </td>
+                        <td className="px-6 py-3.5 text-center">
+                          {row.deliveryAmt > 0 ? (
+                            <div className="flex flex-col">
+                              <span className="font-black text-blue-600 font-mono">R$ {row.deliveryAmt.toFixed(2)}</span>
+                              <span className="text-[10px] text-slate-400 font-medium">{row.deliveryCount} {row.deliveryCount === 1 ? 'pedido' : 'pedidos'}</span>
+                            </div>
+                          ) : (
+                            <span className="text-slate-300">-</span>
+                          )}
+                        </td>
+                        <td className="px-6 py-3.5 text-center">
+                          {row.fairAmt > 0 ? (
+                            <div className="flex flex-col">
+                              <span className="font-black text-amber-600 font-mono">R$ {row.fairAmt.toFixed(2)}</span>
+                              <span className="text-[10px] text-slate-400 font-medium">{row.fairCount} {row.fairCount === 1 ? 'feira' : 'feiras'}</span>
+                            </div>
+                          ) : (
+                            <span className="text-slate-300">-</span>
+                          )}
+                        </td>
+                        <td className="px-6 py-3.5 text-right font-black text-slate-900 bg-slate-50/30 font-mono text-sm">
+                          R$ {row.totalAmt.toFixed(2)}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+                {sortedChannelDailyDataDesc.length > 0 && (
+                  <tfoot>
+                    <tr className="bg-slate-50 font-black text-slate-700 text-xs border-t border-slate-200">
+                      <td className="px-6 py-4">Total Consolidado</td>
+                      <td className="px-6 py-4 text-center text-emerald-700 font-mono">
+                        R$ {totalNormalAmt.toFixed(2)}
+                        <span className="block text-[10px] font-bold text-slate-400 font-sans mt-0.5">({totalNormalCount} {totalNormalCount === 1 ? 'venda' : 'vendas'})</span>
+                      </td>
+                      <td className="px-6 py-4 text-center text-blue-700 font-mono">
+                        R$ {totalDeliveryAmt.toFixed(2)}
+                        <span className="block text-[10px] font-bold text-slate-400 font-sans mt-0.5">({totalDeliveryCount} {totalDeliveryCount === 1 ? 'pedido' : 'pedidos'})</span>
+                      </td>
+                      <td className="px-6 py-4 text-center text-amber-700 font-mono">
+                        R$ {totalFairAmt.toFixed(2)}
+                        <span className="block text-[10px] font-bold text-slate-400 font-sans mt-0.5">({totalFairCount} {totalFairCount === 1 ? 'feira' : 'feiras'})</span>
+                      </td>
+                      <td className="px-6 py-4 text-right text-slate-900 bg-slate-100/50 font-mono text-sm font-black">
+                        R$ {totalOverallAmt.toFixed(2)}
+                      </td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </div>
+          </div>
+        </div>
       )}
 
       {activeReport === 'operational' && (

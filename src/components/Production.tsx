@@ -1067,6 +1067,51 @@ export default function ProductionComponent() {
     }
   };
 
+  const isMuda = (item: any) => {
+    const cat = (item.category || '').toLowerCase().trim();
+    return cat === 'muda' || cat === 'mudas';
+  };
+
+  const getCostOfFoot = (cropName: string, activeProdItem?: Production | null) => {
+    const normCrop = cropName.toLowerCase().trim();
+
+    const matchedMuda = inventory.find(item => {
+      const normItemName = item.name.toLowerCase().trim();
+      const seedling = isMuda(item);
+      const hasFootUnit = ['pé', 'pe', 'pés', 'pes'].includes((item.unit || '').toLowerCase().trim());
+      const nameMatches = normItemName.includes(normCrop) || normCrop.includes(normItemName);
+      return (seedling || hasFootUnit) && nameMatches;
+    });
+
+    if (matchedMuda) {
+      if (matchedMuda.costPrice > 0) return matchedMuda.costPrice;
+      if (matchedMuda.price > 0) return matchedMuda.price;
+    }
+
+    const matchedInput = inventory.find(item => {
+      const normItemName = item.name.toLowerCase().trim();
+      return item.type === 'input' && (normItemName.includes(normCrop) || normCrop.includes(normItemName));
+    });
+
+    if (matchedInput) {
+      if (matchedInput.costPrice > 0) return matchedInput.costPrice;
+      if (matchedInput.price > 0) return matchedInput.price;
+    }
+
+    if (activeProdItem) {
+      const totalCost = activeProdItem.totalCost || 0;
+      const qtyPlanted = activeProdItem.quantityPlanted || 1;
+      if (totalCost > 0) {
+        return totalCost / qtyPlanted;
+      }
+      if (activeProdItem.unitCost && activeProdItem.unitCost > 0) {
+        return activeProdItem.unitCost;
+      }
+    }
+
+    return 0;
+  };
+
   // Handle saving of Collective Harvest
   const handleSaveCollectiveHarvest = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1142,6 +1187,9 @@ export default function ProductionComponent() {
 
         if (row.addToInventory) {
           const incrementQty = pkgs > 0 ? pkgs : qty;
+          const originalItem = productions.find(p => p.id === row.productionId);
+          const costPerFoot = getCostOfFoot(row.crop, originalItem);
+          const computedCostPrice = pkgs > 0 ? (costPerFoot * qty) / pkgs : costPerFoot;
           const catalogItem = produceCatalog.find(item => item.name.toLowerCase() === row.crop.toLowerCase());
 
           let targetItemId = '';
@@ -1151,11 +1199,22 @@ export default function ProductionComponent() {
             );
 
             if (existingInventoryItem) {
+              const currentQty = existingInventoryItem.quantity || 0;
+              const currentCost = existingInventoryItem.costPrice || 0;
+              const newTotalCost = (currentQty * currentCost) + (incrementQty * computedCostPrice);
+              const totalQty = currentQty + incrementQty;
+              const newAvgCost = totalQty > 0 ? newTotalCost / totalQty : 0;
+
               const itemRef = doc(db, 'inventory', existingInventoryItem.id);
-              await updateDoc(itemRef, {
+              const updatePayload: any = {
                 quantity: increment(incrementQty),
+                costPrice: newAvgCost,
                 lastUpdated: serverTimestamp()
-              });
+              };
+              if (pkgs > 0) {
+                updatePayload.unit = 'pct';
+              }
+              await updateDoc(itemRef, updatePayload);
               targetItemId = existingInventoryItem.id;
             } else {
               const docRef = await addDoc(collection(db, 'inventory'), {
@@ -1163,9 +1222,9 @@ export default function ProductionComponent() {
                 type: 'dispatch',
                 category: catalogItem.category || 'Hortaliças',
                 quantity: incrementQty,
-                unit: catalogItem.unit || 'un',
+                unit: pkgs > 0 ? 'pct' : (catalogItem.unit || 'un'),
                 price: catalogItem.defaultPrice || 0,
-                costPrice: 0,
+                costPrice: computedCostPrice,
                 minStock: 10,
                 lastUpdated: serverTimestamp()
               });
@@ -1176,8 +1235,8 @@ export default function ProductionComponent() {
               itemId: targetItemId,
               itemName: catalogItem.name,
               quantity: incrementQty,
-              unit: catalogItem.unit || 'un',
-              costPrice: 0,
+              unit: pkgs > 0 ? 'pct' : (catalogItem.unit || 'un'),
+              costPrice: computedCostPrice,
               price: catalogItem.defaultPrice || 0,
               type: 'harvest',
               description: `Colheita Coletiva no canteiro ${row.bed}: ${qty} ${row.unit || 'un'} colhidos${pkgs > 0 ? `, rendendo ${pkgs} pacotes no estoque.` : ''}`,
@@ -1189,11 +1248,22 @@ export default function ProductionComponent() {
             );
 
             if (existingInventoryItem) {
+              const currentQty = existingInventoryItem.quantity || 0;
+              const currentCost = existingInventoryItem.costPrice || 0;
+              const newTotalCost = (currentQty * currentCost) + (incrementQty * computedCostPrice);
+              const totalQty = currentQty + incrementQty;
+              const newAvgCost = totalQty > 0 ? newTotalCost / totalQty : 0;
+
               const itemRef = doc(db, 'inventory', existingInventoryItem.id);
-              await updateDoc(itemRef, {
+              const updatePayload: any = {
                 quantity: increment(incrementQty),
+                costPrice: newAvgCost,
                 lastUpdated: serverTimestamp()
-              });
+              };
+              if (pkgs > 0) {
+                updatePayload.unit = 'pct';
+              }
+              await updateDoc(itemRef, updatePayload);
               targetItemId = existingInventoryItem.id;
             } else {
               const docRef = await addDoc(collection(db, 'inventory'), {
@@ -1201,9 +1271,9 @@ export default function ProductionComponent() {
                 type: 'dispatch',
                 category: 'Hortaliças',
                 quantity: incrementQty,
-                unit: row.unit || 'un',
+                unit: pkgs > 0 ? 'pct' : (row.unit || 'un'),
                 price: 0,
-                costPrice: 0,
+                costPrice: computedCostPrice,
                 minStock: 10,
                 lastUpdated: serverTimestamp()
               });
@@ -1214,8 +1284,8 @@ export default function ProductionComponent() {
               itemId: targetItemId,
               itemName: row.crop,
               quantity: incrementQty,
-              unit: row.unit || 'un',
-              costPrice: 0,
+              unit: pkgs > 0 ? 'pct' : (row.unit || 'un'),
+              costPrice: computedCostPrice,
               price: 0,
               type: 'harvest',
               description: `Colheita Coletiva no canteiro ${row.bed}: ${qty} ${row.unit || 'un'} colhidos${pkgs > 0 ? `, rendendo ${pkgs} pacotes no estoque.` : ''}`,
@@ -1430,6 +1500,8 @@ export default function ProductionComponent() {
       // Integrate into inventory if requested
       if (addToInventory) {
         const incrementQty = pkgs > 0 ? pkgs : qty;
+        const costPerFoot = getCostOfFoot(harvestingItem.crop, harvestingItem);
+        const computedCostPrice = pkgs > 0 ? (costPerFoot * qty) / pkgs : costPerFoot;
 
         if (harvestProductMode === 'existing') {
           if (!selectedCatalogItemId) {
@@ -1453,12 +1525,23 @@ export default function ProductionComponent() {
           let targetItemId = '';
 
           if (existingInventoryItem) {
+            const currentQty = existingInventoryItem.quantity || 0;
+            const currentCost = existingInventoryItem.costPrice || 0;
+            const newTotalCost = (currentQty * currentCost) + (incrementQty * computedCostPrice);
+            const totalQty = currentQty + incrementQty;
+            const newAvgCost = totalQty > 0 ? newTotalCost / totalQty : 0;
+
             // Increment quantity of existing inventory item
             const itemRef = doc(db, 'inventory', existingInventoryItem.id);
-            await updateDoc(itemRef, {
+            const updatePayload: any = {
               quantity: increment(incrementQty),
+              costPrice: newAvgCost,
               lastUpdated: serverTimestamp()
-            });
+            };
+            if (pkgs > 0) {
+              updatePayload.unit = 'pct';
+            }
+            await updateDoc(itemRef, updatePayload);
             targetItemId = existingInventoryItem.id;
           } else {
             // Create a new inventory item for this catalog product
@@ -1467,9 +1550,9 @@ export default function ProductionComponent() {
               type: 'dispatch',
               category: catalogItem.category || 'Hortaliças',
               quantity: incrementQty,
-              unit: catalogItem.unit || 'un',
+              unit: pkgs > 0 ? 'pct' : (catalogItem.unit || 'un'),
               price: catalogItem.defaultPrice || 0,
-              costPrice: 0,
+              costPrice: computedCostPrice,
               minStock: 10,
               lastUpdated: serverTimestamp()
             });
@@ -1481,8 +1564,8 @@ export default function ProductionComponent() {
             itemId: targetItemId,
             itemName: catalogItem.name,
             quantity: incrementQty,
-            unit: catalogItem.unit || 'un',
-            costPrice: 0,
+            unit: pkgs > 0 ? 'pct' : (catalogItem.unit || 'un'),
+            costPrice: computedCostPrice,
             price: catalogItem.defaultPrice || 0,
             type: 'harvest',
             description: `Colheita no canteiro ${harvestingItem.bed}: ${qty} ${harvestingItem.unit || 'un'} colhidos${pkgs > 0 ? `, rendendo ${pkgs} pacotes no estoque.` : ''}`,
@@ -1505,15 +1588,24 @@ export default function ProductionComponent() {
           );
 
           let targetItemId = '';
+          const resolvedCostPrice = computedCostPrice > 0 ? computedCostPrice : (Number(newProductCostPrice) || 0);
+          const resolvedUnit = pkgs > 0 ? 'pct' : (newProductUnit || 'un');
 
           if (existingInventoryItem) {
+            const currentQty = existingInventoryItem.quantity || 0;
+            const currentCost = existingInventoryItem.costPrice || 0;
+            const newTotalCost = (currentQty * currentCost) + (incrementQty * resolvedCostPrice);
+            const totalQty = currentQty + incrementQty;
+            const newAvgCost = totalQty > 0 ? newTotalCost / totalQty : 0;
+
             // Increment quantity of existing inventory item
             const itemRef = doc(db, 'inventory', existingInventoryItem.id);
             await updateDoc(itemRef, {
               quantity: increment(incrementQty),
               price: Number(newProductPrice) || existingInventoryItem.price || 0,
+              costPrice: newAvgCost,
               minStock: Number(newProductMinStock) || existingInventoryItem.minStock || 0,
-              unit: newProductUnit || existingInventoryItem.unit,
+              unit: resolvedUnit,
               category: newProductCategory.trim() || existingInventoryItem.category || 'Hortaliças',
               lastUpdated: serverTimestamp()
             });
@@ -1525,9 +1617,9 @@ export default function ProductionComponent() {
               type: 'dispatch',
               category: newProductCategory.trim() || 'Hortaliças',
               quantity: incrementQty,
-              unit: newProductUnit,
+              unit: resolvedUnit,
               price: Number(newProductPrice) || 0,
-              costPrice: Number(newProductCostPrice) || 0,
+              costPrice: resolvedCostPrice,
               minStock: Number(newProductMinStock) || 0,
               lastUpdated: serverTimestamp()
             });
@@ -1543,7 +1635,7 @@ export default function ProductionComponent() {
             for (const docSnap of querySnapshot.docs) {
               await updateDoc(docSnap.ref, {
                 category: newProductCategory.trim() || 'Hortaliças',
-                unit: newProductUnit,
+                unit: resolvedUnit,
                 defaultPrice: Number(newProductPrice) || 0
               });
             }
@@ -1551,7 +1643,7 @@ export default function ProductionComponent() {
             await addDoc(catalogRef, {
               name: targetName,
               category: newProductCategory.trim() || 'Hortaliças',
-              unit: newProductUnit,
+              unit: resolvedUnit,
               estimatedDaysToHarvest: 30,
               defaultPrice: Number(newProductPrice) || 0,
               createdAt: serverTimestamp()
@@ -1563,8 +1655,8 @@ export default function ProductionComponent() {
             itemId: targetItemId,
             itemName: targetName,
             quantity: incrementQty,
-            unit: newProductUnit,
-            costPrice: Number(newProductCostPrice) || 0,
+            unit: resolvedUnit,
+            costPrice: resolvedCostPrice,
             price: Number(newProductPrice) || 0,
             type: 'harvest',
             description: `Colheita no canteiro ${harvestingItem.bed}: ${qty} ${harvestingItem.unit || 'un'} colhidos${pkgs > 0 ? `, rendendo ${pkgs} pacotes no estoque.` : ''}`,

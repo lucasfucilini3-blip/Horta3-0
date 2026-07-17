@@ -2007,11 +2007,10 @@ export default function Sales() {
                                 <input 
                                   type="number" 
                                   min="0"
-                                  max={item.quantity}
                                   value={currentVal || ''}
                                   onChange={(e) => setSelectedLoadQuantities({
                                     ...selectedLoadQuantities,
-                                    [item.id]: Math.min(item.quantity, Math.max(0, Number(e.target.value)))
+                                    [item.id]: Math.max(0, Number(e.target.value))
                                   })}
                                   placeholder="0"
                                   className="w-12 h-7 text-center bg-transparent border-0 font-bold text-xs focus:ring-0 focus:outline-none"
@@ -2020,7 +2019,7 @@ export default function Sales() {
                                   type="button"
                                   onClick={() => setSelectedLoadQuantities({
                                     ...selectedLoadQuantities,
-                                    [item.id]: Math.min(item.quantity, currentVal + 1)
+                                    [item.id]: currentVal + 1
                                   })}
                                   className="w-7 h-7 rounded bg-slate-100 hover:bg-slate-200 border border-slate-205 font-bold active:scale-90 flex items-center justify-center shrink-0"
                                 >

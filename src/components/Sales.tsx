@@ -788,8 +788,8 @@ export default function Sales() {
     const updatedItems = activeFair.items.map((item: any) => {
       if (item.itemId !== itemId) return item;
       
-      const newSold = Math.max(0, item.soldQty + saleChange);
-      const newLost = Math.max(0, (item.lostQty || 0) + lossChange);
+      const newSold = item.soldQty + saleChange;
+      const newLost = (item.lostQty || 0) + lossChange;
       const newRemaining = item.initialQty - newSold - newLost;
       
       return {
@@ -801,7 +801,7 @@ export default function Sales() {
     });
     
     const newTotal = updatedItems.reduce(
-      (acc: number, item: any) => acc + Math.max(0, (item.price * item.soldQty) - (item.discount || 0)), 
+      (acc: number, item: any) => acc + ((item.price * item.soldQty) - (item.discount || 0)), 
       0
     );
     
@@ -833,13 +833,13 @@ export default function Sales() {
         newRemaining = value;
         newSold = item.initialQty - newRemaining - newLost;
       } else if (field === 'lostQty') {
-        newLost = Math.max(0, value);
+        newLost = value;
         newSold = item.initialQty - newRemaining - newLost;
       } else if (field === 'soldQty') {
         newSold = value;
         newRemaining = item.initialQty - newSold - newLost;
       } else if (field === 'discount') {
-        newDiscount = Math.max(0, value);
+        newDiscount = value;
       } else if (field === 'quick_sell_all') {
         newRemaining = 0;
         newLost = 0;
@@ -863,7 +863,7 @@ export default function Sales() {
     });
     
     const newTotal = updatedItems.reduce(
-      (acc: number, item: any) => acc + Math.max(0, (item.price * item.soldQty) - (item.discount || 0)), 
+      (acc: number, item: any) => acc + ((item.price * item.soldQty) - (item.discount || 0)), 
       0
     );
     
@@ -1838,8 +1838,7 @@ export default function Sales() {
                           <button
                             type="button"
                             onClick={() => handleUpdateFairItemQty(item.itemId, -1, 0)}
-                            disabled={item.soldQty <= 0}
-                            className="bg-white border border-slate-200 px-2 py-1 rounded-lg font-black hover:bg-rose-50 hover:text-rose-700 disabled:opacity-30 disabled:pointer-events-none cursor-pointer active:scale-95 transition-all"
+                            className="bg-white border border-slate-200 px-2 py-1 rounded-lg font-black hover:bg-rose-50 hover:text-rose-700 cursor-pointer active:scale-95 transition-all"
                           >
                             -1
                           </button>
@@ -1857,8 +1856,7 @@ export default function Sales() {
                           <button
                             type="button"
                             onClick={() => handleUpdateFairItemQty(item.itemId, 0, -1)}
-                            disabled={item.lostQty <= 0}
-                            className="bg-white border border-slate-200 px-2 py-1 rounded-lg font-black hover:bg-rose-50 hover:text-rose-700 disabled:opacity-30 disabled:pointer-events-none cursor-pointer active:scale-95 transition-all"
+                            className="bg-white border border-slate-200 px-2 py-1 rounded-lg font-black hover:bg-rose-50 hover:text-rose-700 cursor-pointer active:scale-95 transition-all"
                           >
                             -1
                           </button>
@@ -1898,7 +1896,6 @@ export default function Sales() {
                           <label className="text-[10px] font-bold text-rose-500 uppercase block mb-1 text-center">Perdas Totais</label>
                           <input 
                             type="number"
-                            min="0"
                             value={item.lostQty || 0}
                             onChange={(e) => handleFairItemInputChange(item.itemId, 'lostQty', Number(e.target.value))}
                             className="bg-rose-50/35 border border-rose-100 font-bold px-1 py-1.5 text-center text-xs text-rose-700 rounded-xl focus:ring-1 focus:ring-rose-400 focus:outline-none w-full"
@@ -1908,7 +1905,6 @@ export default function Sales() {
                           <label className="text-[10px] font-bold text-indigo-600 uppercase block mb-1 text-center">Desconto (R$)</label>
                           <input 
                             type="number"
-                            min="0"
                             step="0.50"
                             value={item.discount || 0}
                             onChange={(e) => handleFairItemInputChange(item.itemId, 'discount', Number(e.target.value))}
@@ -1918,22 +1914,22 @@ export default function Sales() {
                       </div>
 
                       {/* Resumo de Faturamento do Item */}
-                      {item.soldQty > 0 && (
+                      {(item.soldQty !== 0 || (item.discount || 0) !== 0) && (
                         <div className="bg-emerald-50/40 border border-emerald-100 p-3 rounded-2xl flex flex-col space-y-1 font-sans">
                           <div className="flex justify-between items-center">
                             <span className="text-[10px] font-bold text-slate-500 uppercase">Faturamento Líquido</span>
                             <span className="text-sm font-black text-emerald-700">
-                              R$ {Math.max(0, (item.price * item.soldQty) - (item.discount || 0)).toFixed(2)}
+                              R$ {((item.price * item.soldQty) - (item.discount || 0)).toFixed(2)}
                             </span>
                           </div>
                           <div className="flex justify-between text-[10px] text-slate-400 font-medium">
                             <span>Faturamento Bruto:</span>
                             <span>R$ {(item.price * item.soldQty).toFixed(2)}</span>
                           </div>
-                          {item.discount > 0 && (
+                          {item.discount !== 0 && (
                             <div className="flex justify-between text-[10px] text-rose-500 font-bold">
                               <span>Desconto Aplicado:</span>
-                              <span>- R$ {Number(item.discount).toFixed(2)}</span>
+                              <span>R$ {Number(item.discount).toFixed(2)}</span>
                             </div>
                           )}
                         </div>

@@ -12,11 +12,12 @@ interface HarvestReportProps {
 }
 
 const getDeliveryDate = (sale: Sale): Date | null => {
-  if (!sale.deliveryDate) return null;
-  if (typeof (sale.deliveryDate as any).toDate === 'function') {
-    return (sale.deliveryDate as any).toDate();
+  const targetDate = sale.deliveryDate || sale.createdAt;
+  if (!targetDate) return null;
+  if (typeof (targetDate as any).toDate === 'function') {
+    return (targetDate as any).toDate();
   }
-  return new Date(sale.deliveryDate);
+  return new Date(targetDate);
 };
 
 export default function HarvestReport({ sales, produceCatalog, inventory }: HarvestReportProps) {
@@ -56,17 +57,14 @@ export default function HarvestReport({ sales, produceCatalog, inventory }: Harv
     return 'un'; // default fallback
   };
 
-  // Filter and aggregate pending delivery sales
+  // Filter and aggregate pending delivery and normal sales
   const getAggregatedHarvestItems = () => {
     const pendingSales = sales.filter(sale => {
-      // 1. Only delivery orders
-      if (!sale.isDelivery) return false;
-      
-      // 2. Only pending delivery or ordered status
+      // 1. Only pending delivery or ordered status
       const isPending = sale.status === 'pending_delivery' || sale.status === 'ordered' || sale.status === 'pending';
       if (!isPending) return false;
 
-      // 3. Date filtering
+      // 2. Date filtering
       if (dateFilter === 'all') return true;
 
       const delDate = getDeliveryDate(sale);
@@ -115,7 +113,7 @@ export default function HarvestReport({ sales, produceCatalog, inventory }: Harv
       name: string;
       totalQty: number;
       unit: string;
-      customers: Array<{ customerName: string; quantity: number; deliveryDate: any; observations?: string }>;
+      customers: Array<{ customerName: string; quantity: number; deliveryDate: any; isDelivery: boolean; observations?: string }>;
     }> = {};
 
     pendingSales.forEach(sale => {
@@ -137,7 +135,8 @@ export default function HarvestReport({ sales, produceCatalog, inventory }: Harv
         aggregation[name].customers.push({
           customerName: sale.customerName,
           quantity: qty,
-          deliveryDate: sale.deliveryDate,
+          deliveryDate: sale.deliveryDate || sale.createdAt,
+          isDelivery: !!sale.isDelivery,
           observations: sale.observations || sale.observations === '' ? sale.observations : undefined
         });
       });
@@ -354,7 +353,7 @@ export default function HarvestReport({ sales, produceCatalog, inventory }: Harv
                       const cDate = c.deliveryDate ? (c.deliveryDate.toDate ? c.deliveryDate.toDate() : new Date(c.deliveryDate)) : null;
                       return (
                         <div key={idx} className="text-[10px]">
-                          • <b>{c.customerName}</b>: {c.quantity} {formatUnit(item.unit, c.quantity)}
+                          • <b>{c.customerName}</b> ({c.isDelivery ? 'Delivery' : 'Venda Normal'}): {c.quantity} {formatUnit(item.unit, c.quantity)}
                           {cDate && ` (Entrega: ${format(cDate, 'dd/MM/yy')})`}
                           {c.observations && <span className="text-gray-500 block pl-2 font-medium">Obs: {c.observations}</span>}
                         </div>
@@ -464,7 +463,12 @@ export default function HarvestReport({ sales, produceCatalog, inventory }: Harv
                             return (
                               <div key={idx} className="bg-white p-3 rounded-xl border border-slate-150 shadow-xs flex flex-col justify-between">
                                 <div className="flex items-center justify-between gap-2">
-                                  <span className="text-xs font-black text-slate-800 truncate">{c.customerName}</span>
+                                  <div className="flex flex-col min-w-0">
+                                    <span className="text-xs font-black text-slate-800 truncate">{c.customerName}</span>
+                                    <span className="text-[9px] font-bold text-slate-400 mt-0.5">
+                                      {c.isDelivery ? '🚀 Delivery' : '📦 Venda Normal'}
+                                    </span>
+                                  </div>
                                   <span className="text-xs font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-lg shrink-0">
                                     {c.quantity} {formatUnit(item.unit, c.quantity)}
                                   </span>

@@ -130,13 +130,17 @@ export default function Sales() {
   const [activeFair, setActiveFair] = useState<any | null>(null);
   const [loadingFair, setLoadingFair] = useState(true);
   const [newFairName, setNewFairName] = useState('');
+  const [newFairDate, setNewFairDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [selectedLoadQuantities, setSelectedLoadQuantities] = useState<Record<string, number>>({});
   const [showCloseFairModal, setShowCloseFairModal] = useState(false);
+  const [closingFairDate, setClosingFairDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [closingPix, setClosingPix] = useState(0);
   const [closingCash, setClosingCash] = useState(0);
   const [closingCard, setClosingCard] = useState(0);
   const [closingReturnToInventory, setClosingReturnToInventory] = useState(true);
   const [closingSaving, setClosingSaving] = useState(false);
+  const [editingFairModal, setEditingFairModal] = useState<{ id: string; name: string; date: string } | null>(null);
+  const [editingFairSaving, setEditingFairSaving] = useState(false);
   const [quickPaymentMethod, setQuickPaymentMethod] = useState<string>('Dinheiro');
 
   useEffect(() => {
@@ -708,11 +712,12 @@ export default function Sales() {
       });
       setSelectedLoadQuantities(initialLoads);
       
+      const d = newFairDate ? new Date(newFairDate + 'T12:00:00') : new Date();
       const days = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
-      const dayName = days[new Date().getDay()];
-      setNewFairName(`Feira de ${dayName} - ${format(new Date(), 'dd/MM/yyyy')}`);
+      const dayName = days[d.getDay()];
+      setNewFairName(`Feira de ${dayName} - ${format(d, 'dd/MM/yyyy')}`);
     }
-  }, [activeTab, activeFair, inventory]);
+  }, [activeTab, activeFair, inventory, newFairDate]);
 
   const handleStartFair = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -744,9 +749,10 @@ export default function Sales() {
 
       setSaving(true);
       const fairId = `fair_${Date.now()}`;
+      const fairDateObj = newFairDate ? new Date(newFairDate + 'T12:00:00') : new Date();
       const fairData = {
-        name: newFairName.trim() || `Feira - ${format(new Date(), 'dd/MM/yyyy')}`,
-        date: new Date(),
+        name: newFairName.trim() || `Feira - ${format(fairDateObj, 'dd/MM/yyyy')}`,
+        date: fairDateObj,
         status: 'active',
         items: itemsToLoad,
         totalSalesAmount: 0,
@@ -769,7 +775,7 @@ export default function Sales() {
           unit: item.unit,
           type: 'use_stock',
           description: `Carga carregada para ${fairData.name}`,
-          date: serverTimestamp()
+          date: fairDateObj
         });
       }
 
@@ -880,6 +886,10 @@ export default function Sales() {
     setClosingCash(0);
     setClosingCard(0);
     setClosingReturnToInventory(true);
+    const dStr = activeFair.date?.toDate 
+      ? format(activeFair.date.toDate(), 'yyyy-MM-dd') 
+      : (activeFair.date ? format(new Date(activeFair.date), 'yyyy-MM-dd') : format(new Date(), 'yyyy-MM-dd'));
+    setClosingFairDate(dStr);
     setShowCloseFairModal(true);
   };
 
@@ -887,10 +897,12 @@ export default function Sales() {
     if (!activeFair) return;
     setClosingSaving(true);
     setError(null);
+    const fairDateObj = closingFairDate ? new Date(closingFairDate + 'T12:00:00') : new Date();
     
     try {
       await updateDoc(doc(db, 'fairs', activeFair.id), {
         status: 'closed',
+        date: fairDateObj,
         closedAt: serverTimestamp(),
         closingReturnToInventory,
         closingPayments: {
@@ -916,7 +928,7 @@ export default function Sales() {
             unit: item.unit,
             type: 'use_stock',
             description: `Ajuste de venda excedente de feira (${activeFair.name})`,
-            date: serverTimestamp()
+            date: fairDateObj
           });
         } else if (closingReturnToInventory && item.remainingQty > 0) {
           const invRef = doc(db, 'inventory', item.itemId);
@@ -932,7 +944,7 @@ export default function Sales() {
             unit: item.unit,
             type: 'add_stock',
             description: `Retorno de sobra de feira (${activeFair.name})`,
-            date: serverTimestamp()
+            date: fairDateObj
           });
         } else if (!closingReturnToInventory && item.remainingQty > 0) {
           await addDoc(collection(db, 'inventory_history'), {
@@ -942,7 +954,7 @@ export default function Sales() {
             unit: item.unit,
             type: 'use_stock',
             description: `Sobra de feira não retornada (${activeFair.name})`,
-            date: serverTimestamp()
+            date: fairDateObj
           });
         }
 
@@ -954,7 +966,7 @@ export default function Sales() {
             unit: item.unit,
             type: 'use_stock',
             description: `Perda registrada na ${activeFair.name}`,
-            date: serverTimestamp()
+            date: fairDateObj
           });
         }
       }
@@ -973,7 +985,7 @@ export default function Sales() {
             amount: totalAmount,
             description: `Faturamento Feira - ${activeFair.name}`,
             category: 'Venda de Produção',
-            date: serverTimestamp(),
+            date: fairDateObj,
             relatedFairId: activeFair.id
           });
         } else {
@@ -983,7 +995,7 @@ export default function Sales() {
               amount: pay.amt,
               description: `Fechamento Feira (${pay.method}) - ${activeFair.name}`,
               category: 'Venda de Produção',
-              date: serverTimestamp(),
+              date: fairDateObj,
               relatedFairId: activeFair.id
             });
           }
@@ -996,6 +1008,36 @@ export default function Sales() {
       setError('Erro ao concluir fechamento da feira: ' + (err.message || 'Erro desconhecido'));
     } finally {
       setClosingSaving(false);
+    }
+  };
+
+  const handleSaveFairEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingFairModal) return;
+    setEditingFairSaving(true);
+    setError(null);
+    try {
+      const fairDateObj = editingFairModal.date ? new Date(editingFairModal.date + 'T12:00:00') : new Date();
+      await updateDoc(doc(db, 'fairs', editingFairModal.id), {
+        name: editingFairModal.name.trim(),
+        date: fairDateObj
+      });
+
+      // Atualiza também os lançamentos financeiros vinculados a esta feira, se existirem
+      const transQ = query(collection(db, 'transactions'), where('relatedFairId', '==', editingFairModal.id));
+      const transSnap = await getDocs(transQ);
+      for (const transDoc of transSnap.docs) {
+        await updateDoc(doc(db, 'transactions', transDoc.id), {
+          date: fairDateObj
+        });
+      }
+
+      setEditingFairModal(null);
+    } catch (err: any) {
+      console.error(err);
+      setError('Erro ao salvar edições da feira: ' + (err.message || 'Erro desconhecido'));
+    } finally {
+      setEditingFairSaving(false);
     }
   };
 
@@ -1710,8 +1752,27 @@ export default function Sales() {
                     <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
                     <span className="text-emerald-800 text-[10px] font-black tracking-widest uppercase bg-emerald-100 px-3 py-1 rounded-full animate-none">Sessão da Feira Ativa</span>
                   </div>
-                  <h3 className="text-2xl font-black text-slate-950 mt-3">{activeFair.name}</h3>
-                  <p className="text-xs text-slate-500 mt-1 font-medium">Iniciada em: {activeFair.date?.toDate ? format(activeFair.date.toDate(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR }) : ''}</p>
+                  <div className="flex items-center gap-3 mt-3">
+                    <h3 className="text-2xl font-black text-slate-950">{activeFair.name}</h3>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const dStr = activeFair.date?.toDate 
+                          ? format(activeFair.date.toDate(), 'yyyy-MM-dd') 
+                          : (activeFair.date ? format(new Date(activeFair.date), 'yyyy-MM-dd') : format(new Date(), 'yyyy-MM-dd'));
+                        setEditingFairModal({ id: activeFair.id, name: activeFair.name, date: dStr });
+                      }}
+                      className="p-1.5 text-slate-500 hover:text-emerald-700 hover:bg-emerald-100/60 rounded-lg transition-all cursor-pointer flex items-center gap-1 text-xs font-bold"
+                      title="Editar Data ou Nome da Feira"
+                    >
+                      <Edit2 size={14} />
+                      <span>Alterar Data</span>
+                    </button>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1 font-semibold flex items-center gap-1.5">
+                    <Calendar size={14} className="text-emerald-600" />
+                    Data Real da Feira: <strong className="text-slate-800">{activeFair.date?.toDate ? format(activeFair.date.toDate(), "dd 'de' MMMM 'de' yyyy", { locale: ptBR }) : (activeFair.date ? format(new Date(activeFair.date), "dd 'de' MMMM 'de' yyyy", { locale: ptBR }) : 'Não definida')}</strong>
+                  </p>
                 </div>
                 <button
                   type="button"
@@ -1952,13 +2013,32 @@ export default function Sales() {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-1.5 col-span-2">
+                  <div className="space-y-1.5 col-span-2 md:col-span-1">
                     <label className="text-sm font-bold text-slate-700 ml-1">Identificação / Nome da Feira</label>
                     <input 
                       type="text" 
                       value={newFairName}
                       onChange={(e) => setNewFairName(e.target.value)}
                       placeholder="Ex: Feira de Quarta-feira - Centro"
+                      required
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 font-bold text-slate-800"
+                    />
+                  </div>
+                  <div className="space-y-1.5 col-span-2 md:col-span-1">
+                    <label className="text-sm font-bold text-slate-700 ml-1">Data Real da Feira *</label>
+                    <input 
+                      type="date" 
+                      value={newFairDate}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setNewFairDate(val);
+                        if (val) {
+                          const selectedD = new Date(val + 'T12:00:00');
+                          const days = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+                          const dayName = days[selectedD.getDay()];
+                          setNewFairName(`Feira de ${dayName} - ${format(selectedD, 'dd/MM/yyyy')}`);
+                        }
+                      }}
                       required
                       className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 font-bold text-slate-800"
                     />
@@ -2070,21 +2150,40 @@ export default function Sales() {
                             <div>
                               <span className="text-[9px] text-emerald-800 font-extrabold tracking-widest uppercase bg-emerald-50 border border-emerald-100 px-3 py-1 rounded-full w-fit block animate-none">Feira Encerrada</span>
                               <h4 className="font-black text-slate-800 mt-2 text-lg">{fair.name}</h4>
-                              <p className="text-xs text-slate-400 font-medium">Realizada em: {fair.date?.toDate ? format(fair.date.toDate(), "dd 'de' MMMM 'de' yyyy", { locale: ptBR }) : ''}</p>
+                              <p className="text-xs text-slate-500 mt-1 font-semibold flex items-center gap-1.5">
+                                <Calendar size={13} className="text-emerald-600" />
+                                Realizada em: <strong className="text-slate-800">{fair.date?.toDate ? format(fair.date.toDate(), "dd 'de' MMMM 'de' yyyy", { locale: ptBR }) : (fair.date ? format(new Date(fair.date), "dd 'de' MMMM 'de' yyyy", { locale: ptBR }) : 'Não informada')}</strong>
+                              </p>
                             </div>
                             <div className="flex items-center gap-4">
                               <div className="text-left sm:text-right">
                                 <span className="text-[10px] text-slate-400 uppercase font-black tracking-wider block">Faturamento Realizado</span>
                                 <span className="font-black text-emerald-600 text-xl block">R$ {faturamento.toFixed(2)}</span>
                               </div>
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteFair(fair.id)}
-                                className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all shrink-0 cursor-pointer"
-                                title="Excluir do Histórico"
-                              >
-                                <Trash2 size={16} />
-                              </button>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const dStr = fair.date?.toDate 
+                                      ? format(fair.date.toDate(), 'yyyy-MM-dd') 
+                                      : (fair.date ? format(new Date(fair.date), 'yyyy-MM-dd') : format(new Date(), 'yyyy-MM-dd'));
+                                    setEditingFairModal({ id: fair.id, name: fair.name, date: dStr });
+                                  }}
+                                  className="p-2 text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-xl transition-all shrink-0 cursor-pointer flex items-center gap-1 text-xs font-bold"
+                                  title="Editar Data ou Nome da Feira"
+                                >
+                                  <Edit2 size={15} />
+                                  <span className="hidden sm:inline">Editar Data</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteFair(fair.id)}
+                                  className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all shrink-0 cursor-pointer"
+                                  title="Excluir do Histórico"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
                             </div>
                           </div>
 
@@ -2563,6 +2662,21 @@ export default function Sales() {
                     </div>
                   </div>
 
+                  {/* Data Real da Feira */}
+                  <div className="space-y-1 bg-emerald-50/50 border border-emerald-100 p-4 rounded-2xl">
+                    <label className="text-xs font-black text-emerald-900 block">Data Real em que a Feira Ocorreu *</label>
+                    <input 
+                      type="date"
+                      value={closingFairDate}
+                      onChange={(e) => setClosingFairDate(e.target.value)}
+                      required
+                      className="w-full px-4 py-2.5 bg-white border border-emerald-200 rounded-xl font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    />
+                    <p className="text-[10px] text-slate-500 font-medium mt-1">
+                      Esta data será salva nos relatórios do sistema e nos lançamentos financeiros do caixa.
+                    </p>
+                  </div>
+
                   {/* Toggle para devolução automatica */}
                   <label className="flex items-start gap-3 p-4 bg-emerald-50/40 border border-emerald-100 rounded-2xl cursor-pointer">
                     <input 
@@ -2670,6 +2784,78 @@ export default function Sales() {
                   </button>
                 </div>
               </div>
+            </motion.div>
+          </div>
+        )}
+        {/* Modal de Edição de Feira */}
+        {editingFairModal && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setEditingFairModal(null)}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" 
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative bg-white w-full max-w-md rounded-[2rem] shadow-2xl overflow-hidden p-6"
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+                  <Calendar className="text-emerald-600" size={20} />
+                  Editar Data e Nome da Feira
+                </h3>
+                <button onClick={() => setEditingFairModal(null)} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-full">
+                  <XCircle size={20} />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveFairEdit} className="space-y-4 font-sans">
+                <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">Nome / Identificação da Feira *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editingFairModal.name}
+                    onChange={(e) => setEditingFairModal({ ...editingFairModal, name: e.target.value })}
+                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">Data Real da Feira *</label>
+                  <input
+                    type="date"
+                    required
+                    value={editingFairModal.date}
+                    onChange={(e) => setEditingFairModal({ ...editingFairModal, date: e.target.value })}
+                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Esta alteração atualizará os relatórios de vendas e os lançamentos de caixa associados a esta feira.
+                  </p>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingFairModal(null)}
+                    className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-all cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={editingFairSaving}
+                    className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition-all shadow-md shadow-emerald-200 cursor-pointer"
+                  >
+                    {editingFairSaving ? 'Salvando...' : 'Salvar Alterações'}
+                  </button>
+                </div>
+              </form>
             </motion.div>
           </div>
         )}

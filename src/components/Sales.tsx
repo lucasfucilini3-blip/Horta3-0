@@ -2,7 +2,46 @@ import React, { useState, useEffect } from 'react';
 import { collection, query, onSnapshot, addDoc, updateDoc, doc, serverTimestamp, orderBy, getDoc, increment, where, deleteDoc, getDocs, limit, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Sale, SaleStatus, InventoryItem, SaleItem, Customer, Production, PaymentMethod, ProduceCatalogItem } from '../types';
-import { Plus, Search, Filter, ShoppingCart, CheckCircle, XCircle, Clock, ChevronDown, Trash2, Package, X, Calendar, CreditCard, DollarSign, Edit2, Store, Truck, RotateCcw, AlertTriangle, RefreshCw, ClipboardList } from 'lucide-react';
+import { Plus, Search, Filter, ShoppingCart, CheckCircle, XCircle, Clock, ChevronDown, Trash2, Package, X, Calendar, CreditCard, DollarSign, Edit2, Store, Truck, RotateCcw, AlertTriangle, RefreshCw, ClipboardList, Sparkles, Phone } from 'lucide-react';
+
+export function isPhoneMatch(typedPhone?: string, candidatePhone?: string): boolean {
+  if (!typedPhone || !candidatePhone) return false;
+
+  const t = typedPhone.replace(/\D/g, '');
+  const c = candidatePhone.replace(/\D/g, '');
+
+  if (t.length < 8 || c.length < 8) return false;
+
+  // Exact digits match
+  if (t === c) return true;
+
+  // Suffix/endsWith match (handles country codes or DDD added/missing)
+  if (t.endsWith(c) || c.endsWith(t)) return true;
+
+  // If one has no DDD (<=9 digits) and other has DDD (>=10 digits), match last 8 or 9 digits
+  const tHasNoDDD = t.length <= 9;
+  const cHasNoDDD = c.length <= 9;
+
+  if (tHasNoDDD || cHasNoDDD) {
+    const tLast9 = t.slice(-9);
+    const cLast9 = c.slice(-9);
+    if (tLast9 === cLast9) return true;
+
+    const tLast8 = t.slice(-8);
+    const cLast8 = c.slice(-8);
+    if (tLast8 === cLast8) return true;
+  }
+
+  return false;
+}
+
+export interface PhoneMatchResult {
+  customerName: string;
+  customerPhone: string;
+  deliveryAddress?: string;
+  observations?: string;
+  source: 'sale' | 'customer';
+}
 import HarvestReport from './HarvestReport';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth, handleFirestoreError, OperationType } from '../App';
@@ -103,28 +142,46 @@ export default function Sales() {
   const [customerSearchTerm, setCustomerSearchTerm] = useState('');
   const [showCustomerSuggestions, setShowCustomerSuggestions] = useState(false);
 
-  const [lastMatchingSaleForDelivery, setLastMatchingSaleForDelivery] = useState<Sale | null>(null);
-  const [lastMatchingSaleForEditing, setLastMatchingSaleForEditing] = useState<Sale | null>(null);
+  const [phoneMatchForDelivery, setPhoneMatchForDelivery] = useState<PhoneMatchResult | null>(null);
+  const [phoneMatchForEditing, setPhoneMatchForEditing] = useState<PhoneMatchResult | null>(null);
+
+  const findMatchForPhone = (phoneInput: string): PhoneMatchResult | null => {
+    if (!phoneInput || phoneInput.replace(/\D/g, '').length < 8) return null;
+
+    // 1. Check previous sales (most recent first)
+    const matchSale = sales.find(s => s.customerPhone && isPhoneMatch(phoneInput, s.customerPhone));
+    if (matchSale) {
+      return {
+        customerName: matchSale.customerName || '',
+        customerPhone: matchSale.customerPhone || '',
+        deliveryAddress: matchSale.deliveryAddress || '',
+        observations: matchSale.observations || '',
+        source: 'sale'
+      };
+    }
+
+    // 2. Check registered customers list
+    const matchCust = customers.find(c => c.phone && isPhoneMatch(phoneInput, c.phone));
+    if (matchCust) {
+      return {
+        customerName: matchCust.companyName || matchCust.contactName || '',
+        customerPhone: matchCust.phone || '',
+        deliveryAddress: '',
+        observations: '',
+        source: 'customer'
+      };
+    }
+
+    return null;
+  };
 
   useEffect(() => {
-    const cleanPhone = deliveryClientPhone.replace(/\D/g, '');
-    if (cleanPhone.length >= 8) {
-      const match = sales.find(s => s.customerPhone && s.customerPhone.replace(/\D/g, '') === cleanPhone);
-      setLastMatchingSaleForDelivery(match || null);
-    } else {
-      setLastMatchingSaleForDelivery(null);
-    }
-  }, [deliveryClientPhone, sales]);
+    setPhoneMatchForDelivery(findMatchForPhone(deliveryClientPhone));
+  }, [deliveryClientPhone, sales, customers]);
 
   useEffect(() => {
-    const cleanPhone = deliveryClientPhoneEditing.replace(/\D/g, '');
-    if (cleanPhone.length >= 8) {
-      const match = sales.find(s => s.customerPhone && s.customerPhone.replace(/\D/g, '') === cleanPhone);
-      setLastMatchingSaleForEditing(match || null);
-    } else {
-      setLastMatchingSaleForEditing(null);
-    }
-  }, [deliveryClientPhoneEditing, sales]);
+    setPhoneMatchForEditing(findMatchForPhone(deliveryClientPhoneEditing));
+  }, [deliveryClientPhoneEditing, sales, customers]);
 
   const [fairs, setFairs] = useState<any[]>([]);
   const [activeFair, setActiveFair] = useState<any | null>(null);
@@ -1355,42 +1412,65 @@ export default function Sales() {
                 1. Informações de Entrega
               </h4>
 
-              {/* Data de Entrega */}
+              {/* 1. Telefone do Cliente (Opção Inicial) */}
               <div className="space-y-2">
-                <label className="block text-xs font-black uppercase text-slate-500 tracking-wider">Data de Entrega *</label>
-                <div className="flex gap-2">
-                  <input 
-                    type="date"
-                    value={deliveryDateInput}
-                    onChange={(e) => setDeliveryDateInput(e.target.value)}
-                    required
-                    className="flex-1 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-bold text-slate-700"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const today = format(new Date(), 'yyyy-MM-dd');
-                      setDeliveryDateInput(today);
-                    }}
-                    className="px-3 py-2 text-xs font-bold bg-white border border-slate-200 hover:border-emerald-300 text-slate-600 rounded-xl hover:text-emerald-600 transition-all shadow-sm"
-                  >
-                    Hoje
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const tomorrow = new Date();
-                      tomorrow.setDate(tomorrow.getDate() + 1);
-                      setDeliveryDateInput(format(tomorrow, 'yyyy-MM-dd'));
-                    }}
-                    className="px-3 py-2 text-xs font-bold bg-white border border-slate-200 hover:border-emerald-300 text-slate-600 rounded-xl hover:text-emerald-600 transition-all shadow-sm"
-                  >
-                    Amanhã
-                  </button>
-                </div>
+                <label className="block text-xs font-black uppercase text-emerald-800 tracking-wider flex items-center gap-1.5">
+                  <Phone size={13} className="text-emerald-600" />
+                  Telefone do Cliente (Busca Automática)
+                </label>
+                <input 
+                  type="text"
+                  placeholder="Digite o telefone (Ex: 11999999999 ou 999999999)..."
+                  value={deliveryClientPhone}
+                  onChange={(e) => setDeliveryClientPhone(e.target.value)}
+                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-bold text-slate-800"
+                />
+                
+                <AnimatePresence>
+                  {phoneMatchForDelivery && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="bg-emerald-50 border border-emerald-200 p-3.5 rounded-xl space-y-2 mt-1.5 shadow-sm"
+                    >
+                      <div className="flex items-start gap-2.5 text-xs font-bold text-emerald-900">
+                        <Sparkles size={18} className="shrink-0 text-emerald-600 mt-0.5" />
+                        <div>
+                          <span className="text-xs font-black text-emerald-950 block">Cliente Encontrado no Sistema!</span>
+                          <span className="text-xs text-emerald-800 font-semibold block mt-0.5">
+                            Nome: <b>{phoneMatchForDelivery.customerName}</b>
+                          </span>
+                          {phoneMatchForDelivery.deliveryAddress && (
+                            <span className="block text-[11px] text-emerald-700 mt-0.5 font-medium truncate">
+                              Endereço: {phoneMatchForDelivery.deliveryAddress}
+                            </span>
+                          )}
+                          {phoneMatchForDelivery.observations && (
+                            <span className="block text-[11px] text-emerald-700 font-medium truncate">
+                              Obs: {phoneMatchForDelivery.observations}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (phoneMatchForDelivery.customerName) setDeliveryClientName(phoneMatchForDelivery.customerName);
+                          if (phoneMatchForDelivery.deliveryAddress) setDeliveryAddress(phoneMatchForDelivery.deliveryAddress);
+                          if (phoneMatchForDelivery.observations) setDeliveryObservations(phoneMatchForDelivery.observations);
+                        }}
+                        className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[11px] rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
+                      >
+                        <CheckCircle size={14} />
+                        Auto-Preencher Nome, Endereço e Observações
+                      </button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
 
-              {/* Nome do Cliente */}
+              {/* 2. Nome do Cliente */}
               <div className="space-y-2 relative">
                 <label className="block text-xs font-black uppercase text-slate-500 tracking-wider">Nome do Cliente *</label>
                 <div className="relative">
@@ -1446,52 +1526,39 @@ export default function Sales() {
                 </div>
               </div>
 
-              {/* Telefone */}
+              {/* 3. Data de Entrega */}
               <div className="space-y-2">
-                <label className="block text-xs font-black uppercase text-slate-500 tracking-wider">Telefone</label>
-                <input 
-                  type="text"
-                  placeholder="Ex: (11) 99999-9999"
-                  value={deliveryClientPhone}
-                  onChange={(e) => setDeliveryClientPhone(e.target.value)}
-                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-semibold"
-                />
-                
-                <AnimatePresence>
-                  {lastMatchingSaleForDelivery && (
-                    <motion.div
-                      initial={{ opacity: 0, y: -10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -10 }}
-                      className="bg-emerald-50 border border-emerald-150 p-3.5 rounded-xl space-y-2 mt-1.5 shadow-sm"
-                    >
-                      <div className="flex items-start gap-2 text-xs font-bold text-emerald-800">
-                        <AlertTriangle size={15} className="shrink-0 text-emerald-600 mt-0.5" />
-                        <div>
-                          <span>Encontramos dados de um pedido anterior de <b>{lastMatchingSaleForDelivery.customerName}</b> para este telefone.</span>
-                          {lastMatchingSaleForDelivery.deliveryAddress && (
-                            <span className="block text-[10px] text-emerald-600 mt-1 font-medium truncate">Endereço: {lastMatchingSaleForDelivery.deliveryAddress}</span>
-                          )}
-                          {lastMatchingSaleForDelivery.observations && (
-                            <span className="block text-[10px] text-emerald-600 font-medium truncate">Obs: {lastMatchingSaleForDelivery.observations}</span>
-                          )}
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setDeliveryClientName(lastMatchingSaleForDelivery.customerName);
-                          if (lastMatchingSaleForDelivery.deliveryAddress) setDeliveryAddress(lastMatchingSaleForDelivery.deliveryAddress);
-                          if (lastMatchingSaleForDelivery.observations) setDeliveryObservations(lastMatchingSaleForDelivery.observations);
-                          setLastMatchingSaleForDelivery(null); // Clear suggestion after pulling
-                        }}
-                        className="w-full py-1.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[11px] rounded-lg transition-colors cursor-pointer"
-                      >
-                        Puxar Nome, Endereço e Observações
-                      </button>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                <label className="block text-xs font-black uppercase text-slate-500 tracking-wider">Data de Entrega *</label>
+                <div className="flex gap-2">
+                  <input 
+                    type="date"
+                    value={deliveryDateInput}
+                    onChange={(e) => setDeliveryDateInput(e.target.value)}
+                    required
+                    className="flex-1 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-bold text-slate-700"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const today = format(new Date(), 'yyyy-MM-dd');
+                      setDeliveryDateInput(today);
+                    }}
+                    className="px-3 py-2 text-xs font-bold bg-white border border-slate-200 hover:border-emerald-300 text-slate-600 rounded-xl hover:text-emerald-600 transition-all shadow-sm"
+                  >
+                    Hoje
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const tomorrow = new Date();
+                      tomorrow.setDate(tomorrow.getDate() + 1);
+                      setDeliveryDateInput(format(tomorrow, 'yyyy-MM-dd'));
+                    }}
+                    className="px-3 py-2 text-xs font-bold bg-white border border-slate-200 hover:border-emerald-300 text-slate-600 rounded-xl hover:text-emerald-600 transition-all shadow-sm"
+                  >
+                    Amanhã
+                  </button>
+                </div>
               </div>
 
               {/* Endereço */}
@@ -2295,8 +2362,62 @@ export default function Sales() {
 
                   {isDeliveryEditing ? (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border border-slate-100 bg-slate-50/30 p-4 rounded-2xl">
-                      {/* Customer Name input with dropdown suggestions */}
-                      <div className="space-y-2 relative">
+                      {/* 1. Phone Input (FIRST FIELD) */}
+                      <div className="space-y-2 md:col-span-1">
+                        <label className="text-xs font-black uppercase text-emerald-800 tracking-wider ml-1 flex items-center gap-1.5">
+                          <Phone size={13} className="text-emerald-600" />
+                          Telefone do Cliente (Busca Automática)
+                        </label>
+                        <input 
+                          type="text"
+                          placeholder="Ex: (11) 99999-9999 ou 999999999"
+                          value={deliveryClientPhoneEditing}
+                          onChange={(e) => setDeliveryClientPhoneEditing(e.target.value)}
+                          className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-semibold text-slate-800"
+                        />
+                        
+                        <AnimatePresence>
+                          {phoneMatchForEditing && (
+                            <motion.div
+                              initial={{ opacity: 0, y: -10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: -10 }}
+                              className="bg-emerald-50 border border-emerald-200 p-3 rounded-xl space-y-2 mt-1.5 shadow-sm"
+                            >
+                              <div className="flex items-start gap-2 text-xs font-bold text-emerald-900">
+                                <Sparkles size={16} className="shrink-0 text-emerald-600 mt-0.5" />
+                                <div>
+                                  <span className="text-xs font-black text-emerald-950 block">Cliente Encontrado!</span>
+                                  <span className="text-xs text-emerald-800 font-semibold block mt-0.5">
+                                    Nome: <b>{phoneMatchForEditing.customerName}</b>
+                                  </span>
+                                  {phoneMatchForEditing.deliveryAddress && (
+                                    <span className="block text-[10px] text-emerald-700 font-medium truncate">Endereço: {phoneMatchForEditing.deliveryAddress}</span>
+                                  )}
+                                  {phoneMatchForEditing.observations && (
+                                    <span className="block text-[10px] text-emerald-700 font-medium truncate">Obs: {phoneMatchForEditing.observations}</span>
+                                  )}
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (phoneMatchForEditing.customerName) setCustomCustomerNameEditing(phoneMatchForEditing.customerName);
+                                  if (phoneMatchForEditing.deliveryAddress) setDeliveryAddressEditing(phoneMatchForEditing.deliveryAddress);
+                                  if (phoneMatchForEditing.observations) setDeliveryObservationsEditing(phoneMatchForEditing.observations);
+                                }}
+                                className="w-full py-1.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[11px] rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-1 shadow-sm"
+                              >
+                                <CheckCircle size={13} />
+                                Auto-Preencher Dados
+                              </button>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+
+                      {/* 2. Customer Name input with dropdown suggestions */}
+                      <div className="space-y-2 relative md:col-span-1">
                         <label className="text-sm font-bold text-slate-700 ml-1">Nome do Cliente *</label>
                         <div className="relative">
                           <input 
@@ -2349,54 +2470,6 @@ export default function Sales() {
                             </div>
                           )}
                         </div>
-                      </div>
-
-                      {/* Phone Input */}
-                      <div className="space-y-2">
-                        <label className="text-sm font-bold text-slate-700 ml-1">Telefone</label>
-                        <input 
-                          type="text"
-                          placeholder="Ex: (11) 99999-9999"
-                          value={deliveryClientPhoneEditing}
-                          onChange={(e) => setDeliveryClientPhoneEditing(e.target.value)}
-                          className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-semibold text-slate-800"
-                        />
-                        
-                        <AnimatePresence>
-                          {lastMatchingSaleForEditing && (
-                            <motion.div
-                              initial={{ opacity: 0, y: -10 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              exit={{ opacity: 0, y: -10 }}
-                              className="bg-emerald-50 border border-emerald-150 p-3.5 rounded-xl space-y-2 mt-1.5 shadow-sm"
-                            >
-                              <div className="flex items-start gap-2 text-xs font-bold text-emerald-800">
-                                <AlertTriangle size={15} className="shrink-0 text-emerald-600 mt-0.5" />
-                                <div>
-                                  <span>Encontramos dados de um pedido anterior de <b>{lastMatchingSaleForEditing.customerName}</b> para este telefone.</span>
-                                  {lastMatchingSaleForEditing.deliveryAddress && (
-                                    <span className="block text-[10px] text-emerald-600 mt-1 font-medium truncate">Endereço: {lastMatchingSaleForEditing.deliveryAddress}</span>
-                                  )}
-                                  {lastMatchingSaleForEditing.observations && (
-                                    <span className="block text-[10px] text-emerald-600 font-medium truncate">Obs: {lastMatchingSaleForEditing.observations}</span>
-                                  )}
-                                </div>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setCustomCustomerNameEditing(lastMatchingSaleForEditing.customerName);
-                                  if (lastMatchingSaleForEditing.deliveryAddress) setDeliveryAddressEditing(lastMatchingSaleForEditing.deliveryAddress);
-                                  if (lastMatchingSaleForEditing.observations) setDeliveryObservationsEditing(lastMatchingSaleForEditing.observations);
-                                  setLastMatchingSaleForEditing(null); // Clear suggestion after pulling
-                                }}
-                                className="w-full py-1.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[11px] rounded-lg transition-colors cursor-pointer"
-                              >
-                                Puxar Nome, Endereço e Observações
-                              </button>
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
                       </div>
 
                       {/* Delivery Date */}

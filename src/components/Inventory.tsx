@@ -1055,7 +1055,7 @@ export default function Inventory() {
             className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-emerald-600 text-white px-4 md:px-6 py-3 rounded-xl font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 active:scale-95 text-sm md:text-base"
           >
             <Plus size={18} className="md:w-5 md:h-5" />
-            Novo Item
+            Cadastrar Novo Item
           </button>
         </div>
       </header>
@@ -1639,7 +1639,7 @@ export default function Inventory() {
               <div className="p-8">
                 <div className="flex items-center justify-between mb-8">
                   <h3 className="text-2xl font-bold text-slate-900">
-                    {editingItem ? 'Editar Item' : 'Novo Item'}
+                    {editingItem ? 'Editar Item' : 'Cadastrar Novo Item'}
                   </h3>
                   <button onClick={() => setModalOpen(false)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full">
                     <CloseIcon size={24} />

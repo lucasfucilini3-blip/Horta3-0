@@ -4,6 +4,7 @@ import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { ClipboardList, Search, Calendar, Printer, CheckSquare, Square, Truck, AlertTriangle, RefreshCw, ChevronDown, Check, Download } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { getCanonicalProductName, normalizeProductName } from '../productUtils';
 
 interface HarvestReportProps {
   sales: Sale[];
@@ -118,21 +119,22 @@ export default function HarvestReport({ sales, produceCatalog, inventory }: Harv
 
     pendingSales.forEach(sale => {
       sale.items.forEach(item => {
-        const name = item.name;
+        const canonicalName = getCanonicalProductName(item.name);
+        const normKey = normalizeProductName(item.name);
         const qty = item.quantity;
         
-        if (!aggregation[name]) {
-          const unit = findUnitForProduct(name);
-          aggregation[name] = {
-            name,
+        if (!aggregation[normKey]) {
+          const unit = findUnitForProduct(canonicalName) || findUnitForProduct(item.name);
+          aggregation[normKey] = {
+            name: canonicalName,
             totalQty: 0,
             unit,
             customers: []
           };
         }
 
-        aggregation[name].totalQty += qty;
-        aggregation[name].customers.push({
+        aggregation[normKey].totalQty += qty;
+        aggregation[normKey].customers.push({
           customerName: sale.customerName,
           quantity: qty,
           deliveryDate: sale.deliveryDate || sale.createdAt,

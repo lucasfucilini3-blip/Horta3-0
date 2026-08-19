@@ -43,6 +43,7 @@ export interface PhoneMatchResult {
   source: 'sale' | 'customer';
 }
 import HarvestReport from './HarvestReport';
+import { getCanonicalProductName, normalizeProductName } from '../productUtils';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth, handleFirestoreError, OperationType } from '../App';
 import { format } from 'date-fns';
@@ -255,33 +256,81 @@ export default function Sales() {
     };
   }, []);
 
+  // Canonical deduplicated produce catalog (avoids duplicates like "Alface Americana" and "Pct Alface Americana")
+  const uniqueCatalogItems = React.useMemo(() => {
+    const map = new Map<string, ProduceCatalogItem>();
+    for (const item of produceCatalog) {
+      if (!item.name) continue;
+      const canonicalName = getCanonicalProductName(item.name);
+      const key = normalizeProductName(item.name);
+      if (!key) continue;
+
+      if (!map.has(key)) {
+        map.set(key, { ...item, name: canonicalName });
+      } else {
+        const existing = map.get(key)!;
+        if ((!existing.defaultPrice || existing.defaultPrice === 0) && item.defaultPrice && item.defaultPrice > 0) {
+          map.set(key, { ...item, name: canonicalName });
+        }
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+  }, [produceCatalog]);
+
+  // Canonical deduplicated dispatch inventory items
+  const uniqueDispatchItems = React.useMemo(() => {
+    const map = new Map<string, InventoryItem>();
+    for (const item of inventory.filter(i => i.type === 'dispatch' && !isPeUnitOrName(i) && !isMuda(i))) {
+      if (!item.name) continue;
+      const canonicalName = getCanonicalProductName(item.name);
+      const key = normalizeProductName(item.name);
+      if (!key) continue;
+
+      if (!map.has(key)) {
+        map.set(key, { ...item, name: canonicalName });
+      } else {
+        const existing = map.get(key)!;
+        map.set(key, {
+          ...existing,
+          name: canonicalName,
+          quantity: (existing.quantity || 0) + (item.quantity || 0),
+          price: existing.price || item.price || 0,
+        });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+  }, [inventory]);
+
   const handleAddItem = (id: string, type: 'inventory' | 'production' | 'catalog') => {
     let name = '';
     let price = 0;
 
     if (type === 'inventory') {
-      const item = inventory.find(i => i.id === id);
+      const item = uniqueDispatchItems.find(i => i.id === id) || inventory.find(i => i.id === id);
       if (!item) return;
-      name = item.name;
+      name = getCanonicalProductName(item.name);
       price = item.price || 0;
     } else if (type === 'production') {
       const item = harvestedProductions.find(p => p.id === id);
       if (!item) return;
-      name = item.crop;
+      name = getCanonicalProductName(item.crop);
       price = 0;
     } else if (type === 'catalog') {
-      const item = produceCatalog.find(c => c.id === id);
+      const item = uniqueCatalogItems.find(c => c.id === id) || produceCatalog.find(c => c.id === id);
       if (!item) return;
-      name = item.name;
+      name = getCanonicalProductName(item.name);
       price = item.defaultPrice || 0;
     } else {
       return;
     }
 
-    const existing = selectedItems.find(si => si.itemId === id);
+    const normName = normalizeProductName(name);
+    const existing = selectedItems.find(si => si.itemId === id || normalizeProductName(si.name) === normName);
     if (existing) {
       setSelectedItems(selectedItems.map(si => 
-        si.itemId === id ? { ...si, quantity: si.quantity + 1 } : si
+        (si.itemId === id || normalizeProductName(si.name) === normName)
+          ? { ...si, name, quantity: si.quantity + 1 } 
+          : si
       ));
     } else {
       setSelectedItems([...selectedItems, { itemId: id, name, quantity: 1, price }]);
@@ -443,28 +492,31 @@ export default function Sales() {
     let price = 0;
 
     if (type === 'inventory') {
-      const item = inventory.find(i => i.id === id);
+      const item = uniqueDispatchItems.find(i => i.id === id) || inventory.find(i => i.id === id);
       if (!item) return;
-      name = item.name;
+      name = getCanonicalProductName(item.name);
       price = item.price || 0;
     } else if (type === 'production') {
       const item = harvestedProductions.find(p => p.id === id);
       if (!item) return;
-      name = item.crop;
+      name = getCanonicalProductName(item.crop);
       price = 0;
     } else if (type === 'catalog') {
-      const item = produceCatalog.find(c => c.id === id);
+      const item = uniqueCatalogItems.find(c => c.id === id) || produceCatalog.find(c => c.id === id);
       if (!item) return;
-      name = item.name;
+      name = getCanonicalProductName(item.name);
       price = item.defaultPrice || 0;
     } else {
       return;
     }
 
-    const existing = deliverySelectedItems.find(si => si.itemId === id);
+    const normName = normalizeProductName(name);
+    const existing = deliverySelectedItems.find(si => si.itemId === id || normalizeProductName(si.name) === normName);
     if (existing) {
       setDeliverySelectedItems(deliverySelectedItems.map(si => 
-        si.itemId === id ? { ...si, quantity: si.quantity + 1 } : si
+        (si.itemId === id || normalizeProductName(si.name) === normName)
+          ? { ...si, name, quantity: si.quantity + 1 } 
+          : si
       ));
     } else {
       setDeliverySelectedItems([...deliverySelectedItems, { itemId: id, name, quantity: 1, price }]);
@@ -1651,7 +1703,7 @@ export default function Sales() {
                 <div className="space-y-2">
                   <span className="text-xs font-black uppercase text-slate-400 tracking-wider">Produtos do Catálogo de Produção</span>
                   <div className="flex flex-col gap-2 max-h-96 overflow-y-auto p-1.5 border border-slate-100 rounded-2xl bg-slate-50/50 scrollbar-thin">
-                    {produceCatalog
+                    {uniqueCatalogItems
                       .filter(item => item.name.toLowerCase().includes(productSearchTerm.toLowerCase()))
                       .map(item => (
                         <div
@@ -1681,7 +1733,7 @@ export default function Sales() {
                           </button>
                         </div>
                       ))}
-                    {produceCatalog.filter(item => item.name.toLowerCase().includes(productSearchTerm.toLowerCase())).length === 0 && (
+                    {uniqueCatalogItems.filter(item => item.name.toLowerCase().includes(productSearchTerm.toLowerCase())).length === 0 && (
                       <div className="col-span-full py-6 text-center text-slate-400 text-xs font-medium">
                         Nenhum produto cadastrado no catálogo de produção com este nome.
                       </div>
@@ -2115,14 +2167,14 @@ export default function Sales() {
                 <div className="space-y-3">
                   <label className="text-sm font-bold text-slate-700 ml-1 block">Estoque da Horta (Escolha o que levar no caminhão)</label>
                   
-                  {inventory.filter(item => item.type === 'dispatch' && !isPeUnitOrName(item) && !isMuda(item)).length === 0 ? (
+                  {uniqueDispatchItems.length === 0 ? (
                     <div className="bg-slate-50 p-8 text-center border border-slate-200 rounded-2xl text-slate-400">
                       <p className="font-bold">Nenhum produto cadastrado no Estoque da Horta.</p>
                       <p className="text-xs mt-1">Vá até o menu de Estoque e adicione produtos ao "Estoque da Horta" primeiro.</p>
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-96 overflow-y-auto p-1">
-                      {inventory.filter(item => item.type === 'dispatch' && !isPeUnitOrName(item) && !isMuda(item)).map(item => {
+                      {uniqueDispatchItems.map(item => {
                         const currentVal = selectedLoadQuantities[item.id] || 0;
                         return (
                           <div 
@@ -2541,7 +2593,7 @@ export default function Sales() {
                       <div className="space-y-2">
                         <label className="text-sm font-bold text-slate-700 ml-1 block">Estoque da Horta (Colhidos / Aguardando Processamento)</label>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto p-2 border border-slate-100 rounded-xl bg-slate-50/50">
-                          {inventory.filter(item => item.type === 'dispatch' && !isPeUnitOrName(item) && !isMuda(item)).map(item => (
+                          {uniqueDispatchItems.map(item => (
                             <button
                               key={item.id}
                               type="button"
@@ -2562,7 +2614,7 @@ export default function Sales() {
                     <div className="space-y-2">
                       <label className="text-sm font-bold text-slate-700 ml-1 block">Catálogo de Produtos (Produção)</label>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto p-2 border border-slate-100 rounded-xl bg-slate-50/50">
-                        {produceCatalog.map(item => (
+                        {uniqueCatalogItems.map(item => (
                           <button
                             key={item.id}
                             type="button"

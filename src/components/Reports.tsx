@@ -5,8 +5,9 @@ import { Sale, Transaction, Production, Customer } from '../types';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Cell, PieChart, Pie, Legend } from 'recharts';
 import { format, subDays, startOfDay, endOfDay, isWithinInterval, startOfWeek, endOfWeek, startOfMonth, endOfMonth } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import { BarChart3, TrendingUp, TrendingDown, DollarSign, ShoppingBag, PieChart as PieChartIcon, Activity, Filter, Calendar, Search, Printer, User, Package, Sprout, Clock, Target, ClipboardList, Tag } from 'lucide-react';
+import { BarChart3, TrendingUp, TrendingDown, DollarSign, ShoppingBag, PieChart as PieChartIcon, Activity, Filter, Calendar, Search, Printer, User, Package, Sprout, Clock, Target, ClipboardList, Tag, Users, Layers, ArrowUpDown, ChevronDown, ChevronRight, Download, FileSpreadsheet, Sparkles, CheckCircle2 } from 'lucide-react';
 import { useAuth, handleFirestoreError, OperationType, cn } from '../App';
+import { getCanonicalProductName, normalizeProductName, stripAccentsAndSpecial } from '../productUtils';
 
 export default function Reports() {
   const [sales, setSales] = useState<Sale[]>([]);
@@ -15,12 +16,22 @@ export default function Reports() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [fairs, setFairs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeReport, setActiveReport] = useState<'general' | 'operational' | 'customer' | 'product' | 'pending_deliveries' | 'receivables' | 'expenses' | 'sales_by_channel'>('general');
+  const [activeReport, setActiveReport] = useState<'general' | 'operational' | 'customer' | 'product' | 'product_by_customer' | 'pending_deliveries' | 'receivables' | 'expenses' | 'sales_by_channel'>('general');
 
   // Filters for Sales by Channel report
   const [channelFilterPreset, setChannelFilterPreset] = useState<'all' | 'today' | 'yesterday' | 'last7' | 'last30' | 'month' | 'custom'>('last30');
   const [channelDateStart, setChannelDateStart] = useState(format(subDays(new Date(), 30), 'yyyy-MM-dd'));
   const [channelDateEnd, setChannelDateEnd] = useState(format(new Date(), 'yyyy-MM-dd'));
+
+  // Filters for Product x Customer report
+  const [prodCustPreset, setProdCustPreset] = useState<'all' | 'today' | 'yesterday' | 'last7' | 'last30' | 'month' | 'custom'>('last30');
+  const [prodCustDateStart, setProdCustDateStart] = useState(format(subDays(new Date(), 30), 'yyyy-MM-dd'));
+  const [prodCustDateEnd, setProdCustDateEnd] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [prodCustSearchQuery, setProdCustSearchQuery] = useState('');
+  const [prodCustSelectedProduct, setProdCustSelectedProduct] = useState<string>('all');
+  const [prodCustSelectedCustomer, setProdCustSelectedCustomer] = useState<string>('all');
+  const [prodCustViewMode, setProdCustViewMode] = useState<'product' | 'customer' | 'detailed'>('product');
+  const [prodCustExpandedKeys, setProdCustExpandedKeys] = useState<Record<string, boolean>>({});
 
   // Filters for Expense report
   const [expenseFilterPreset, setExpenseFilterPreset] = useState<'week' | 'month' | 'custom'>('month');
@@ -221,8 +232,9 @@ export default function Reports() {
     .filter(s => ['paid', 'confirmed', 'delivered'].includes(s.status))
     .reduce((acc: any[], s) => {
       s.items.forEach(item => {
-        const normName = normalize(item.name);
-        const existing = acc.find(a => normalize(a.name) === normName);
+        const canonicalName = getCanonicalProductName(item.name);
+        const normName = normalizeProductName(item.name);
+        const existing = acc.find(a => normalizeProductName(a.name) === normName);
         const revenue = item.price * item.quantity;
         const cost = (item.cost || 0) * item.quantity;
         const profit = revenue - cost;
@@ -232,7 +244,7 @@ export default function Reports() {
           existing.cost += cost;
           existing.profit += profit;
         } else {
-          acc.push({ name: item.name, revenue, cost, profit });
+          acc.push({ name: canonicalName, revenue, cost, profit });
         }
       });
       return acc;
@@ -376,13 +388,14 @@ export default function Reports() {
     })
     .reduce((acc: any[], s) => {
       s.items.forEach(item => {
-        const normName = normalize(item.name);
-        const existing = acc.find(a => normalize(a.name) === normName);
+        const canonicalName = getCanonicalProductName(item.name);
+        const normName = normalizeProductName(item.name);
+        const existing = acc.find(a => normalizeProductName(a.name) === normName);
         if (existing) {
           existing.total += item.price * item.quantity;
           existing.quantity += item.quantity;
         } else {
-          acc.push({ name: item.name, total: item.price * item.quantity, quantity: item.quantity });
+          acc.push({ name: canonicalName, total: item.price * item.quantity, quantity: item.quantity });
         }
       });
       return acc;
@@ -394,13 +407,14 @@ export default function Reports() {
     .filter(s => ['paid', 'confirmed', 'delivered'].includes(s.status))
     .reduce((acc: any[], s) => {
       s.items.forEach(item => {
-        const normName = normalize(item.name);
-        const existing = acc.find(a => normalize(a.name) === normName);
+        const canonicalName = getCanonicalProductName(item.name);
+        const normName = normalizeProductName(item.name);
+        const existing = acc.find(a => normalizeProductName(a.name) === normName);
         if (existing) {
           existing.total += item.price * item.quantity;
           existing.quantity += item.quantity;
         } else {
-          acc.push({ name: item.name, total: item.price * item.quantity, quantity: item.quantity });
+          acc.push({ name: canonicalName, total: item.price * item.quantity, quantity: item.quantity });
         }
       });
       return acc;
@@ -409,14 +423,14 @@ export default function Reports() {
 
   // Average Prices with aggressive keys (utilizes all historical sales by default for better predictions)
   const averagePrices = allSalesByProduct.reduce((acc: any, p) => {
-    acc[normalize(p.name)] = p.total / p.quantity;
+    acc[normalizeProductName(p.name)] = p.total / p.quantity;
     return acc;
   }, {});
 
   // Helper to find average price with fuzzy fallback
   const getAveragePrice = (cropName: string) => {
     if (!cropName) return 0;
-    const normCrop = normalize(cropName);
+    const normCrop = normalizeProductName(cropName);
     
     // 1. Exact normalized match (e.g., "Milho Verde" === "Milho Verde")
     if (averagePrices[normCrop]) return averagePrices[normCrop];
@@ -434,7 +448,7 @@ export default function Reports() {
     // Extract significant words (length > 2) from the crop name
     const cropKeywords = cropName
       .split(/[\s-]+/)
-      .map(w => normalize(w))
+      .map(w => stripAccentsAndSpecial(w))
       .filter(w => w.length > 2);
 
     if (cropKeywords.length > 0) {
@@ -844,6 +858,342 @@ export default function Reports() {
     channelDailyDataMap[dateKey].totalAmt += amt;
   });
 
+  // ==========================================
+  // COMPUTATIONS FOR PRODUCT X CUSTOMER REPORT
+  // ==========================================
+  const isProdCustDateInInterval = (dDate: Date) => {
+    const todayDate = new Date();
+    if (prodCustPreset === 'all') return true;
+    if (prodCustPreset === 'today') {
+      return dDate >= startOfDay(todayDate) && dDate <= endOfDay(todayDate);
+    }
+    if (prodCustPreset === 'yesterday') {
+      const yesterday = subDays(todayDate, 1);
+      return dDate >= startOfDay(yesterday) && dDate <= endOfDay(yesterday);
+    }
+    if (prodCustPreset === 'last7') {
+      return dDate >= startOfDay(subDays(todayDate, 7)) && dDate <= endOfDay(todayDate);
+    }
+    if (prodCustPreset === 'last30') {
+      return dDate >= startOfDay(subDays(todayDate, 30)) && dDate <= endOfDay(todayDate);
+    }
+    if (prodCustPreset === 'month') {
+      return dDate >= startOfMonth(todayDate) && dDate <= endOfMonth(todayDate);
+    }
+    if (prodCustPreset === 'custom') {
+      if (prodCustDateStart) {
+        const start = startOfDay(new Date(prodCustDateStart + 'T00:00:00'));
+        if (dDate < start) return false;
+      }
+      if (prodCustDateEnd) {
+        const end = endOfDay(new Date(prodCustDateEnd + 'T23:59:59'));
+        if (dDate > end) return false;
+      }
+      return true;
+    }
+    return true;
+  };
+
+  // Extract all unique product and customer names from all sales & catalog for dropdown filters
+  const allProductOptions: string[] = Array.from(
+    new Set<string>(
+      sales
+        .flatMap(s => (s.items || []).map(item => getCanonicalProductName(item.name?.trim())))
+        .filter((item): item is string => !!item && item.length > 0)
+    )
+  ).sort((a, b) => a.localeCompare(b));
+
+  const allCustomerOptions: string[] = Array.from(
+    new Set<string>([
+      ...sales.map(s => s.customerName?.trim()).filter((name): name is string => !!name && name.length > 0),
+      ...customers.map(c => (c.companyName || c.contactName)?.trim()).filter((name): name is string => !!name && name.length > 0)
+    ])
+  ).sort((a, b) => a.localeCompare(b));
+
+  // Flatten valid sales items within the filtered date range and criteria
+  interface ProdCustItemFlat {
+    id: string;
+    saleId: string;
+    saleNumber: string;
+    saleDate: Date | null;
+    customerName: string;
+    customerPhone: string;
+    productName: string;
+    rawProductName?: string;
+    quantity: number;
+    unitPrice: number;
+    total: number;
+    status: string;
+    isDelivery: boolean;
+  }
+
+  const rawFilteredSalesForProdCust = sales.filter(s => {
+    if (s.status === 'cancelled') return false;
+    const sDate = parseFirebaseDate(s.createdAt);
+    if (!sDate) return false;
+    return isProdCustDateInInterval(sDate);
+  });
+
+  const flatSalesItemsForProdCust: ProdCustItemFlat[] = [];
+  rawFilteredSalesForProdCust.forEach((s, sIdx) => {
+    const sDate = parseFirebaseDate(s.createdAt);
+    const cName = s.customerName?.trim() || 'Cliente Não Identificado';
+    const cPhone = getCustomerPhone(s);
+    const saleNum = s.saleNumber || `#${sIdx + 1}`;
+    const isDel = s.isDelivery === true || !!s.deliveryAddress?.trim();
+
+    (s.items || []).forEach((item, itemIdx) => {
+      const rawPName = item.name?.trim() || 'Produto Sem Nome';
+      const canonicalPName = getCanonicalProductName(rawPName);
+      const qty = typeof item.quantity === 'number' ? item.quantity : Number(item.quantity) || 0;
+      const price = typeof item.price === 'number' ? item.price : Number(item.price) || 0;
+      const tot = qty * price;
+
+      // Filter by selected product (normalized comparison)
+      if (prodCustSelectedProduct !== 'all' && normalizeProductName(canonicalPName) !== normalizeProductName(prodCustSelectedProduct)) {
+        return;
+      }
+
+      // Filter by selected customer
+      if (prodCustSelectedCustomer !== 'all' && normalize(cName) !== normalize(prodCustSelectedCustomer)) {
+        return;
+      }
+
+      // Filter by search query
+      if (prodCustSearchQuery.trim()) {
+        const queryNorm = stripAccentsAndSpecial(prodCustSearchQuery);
+        const matchProd = normalizeProductName(canonicalPName).includes(queryNorm) || stripAccentsAndSpecial(rawPName).includes(queryNorm);
+        const matchCust = stripAccentsAndSpecial(cName).includes(queryNorm);
+        const matchSaleNum = stripAccentsAndSpecial(saleNum).includes(queryNorm);
+        const matchPhone = stripAccentsAndSpecial(cPhone).includes(queryNorm);
+        if (!matchProd && !matchCust && !matchSaleNum && !matchPhone) {
+          return;
+        }
+      }
+
+      flatSalesItemsForProdCust.push({
+        id: `${s.id}_${itemIdx}`,
+        saleId: s.id,
+        saleNumber: saleNum,
+        saleDate: sDate,
+        customerName: cName,
+        customerPhone: cPhone,
+        productName: canonicalPName,
+        rawProductName: rawPName,
+        quantity: qty,
+        unitPrice: price,
+        total: tot,
+        status: s.status,
+        isDelivery: isDel
+      });
+    });
+  });
+
+  // KPIs
+  const prodCustTotalRevenue = flatSalesItemsForProdCust.reduce((acc, i) => acc + i.total, 0);
+  const prodCustTotalQuantity = flatSalesItemsForProdCust.reduce((acc, i) => acc + i.quantity, 0);
+  const prodCustUniqueCustomers = new Set(flatSalesItemsForProdCust.map(i => normalize(i.customerName))).size;
+  const prodCustUniqueProducts = new Set(flatSalesItemsForProdCust.map(i => normalizeProductName(i.productName))).size;
+  const prodCustUniqueOrders = new Set(flatSalesItemsForProdCust.map(i => i.saleId)).size;
+
+  // Grouping 1: By Product (showing list of customers who bought this product)
+  interface ProductGroupedData {
+    productName: string;
+    totalQuantity: number;
+    totalRevenue: number;
+    avgPrice: number;
+    customersCount: number;
+    customers: {
+      customerName: string;
+      customerPhone: string;
+      quantity: number;
+      total: number;
+      avgPrice: number;
+      ordersCount: number;
+      lastDate: Date | null;
+      items: ProdCustItemFlat[];
+    }[];
+  }
+
+  const productsGroupedMap: Record<string, ProductGroupedData> = {};
+  flatSalesItemsForProdCust.forEach(item => {
+    const pKey = normalizeProductName(item.productName);
+    const canonicalName = getCanonicalProductName(item.productName);
+    if (!productsGroupedMap[pKey]) {
+      productsGroupedMap[pKey] = {
+        productName: canonicalName,
+        totalQuantity: 0,
+        totalRevenue: 0,
+        avgPrice: 0,
+        customersCount: 0,
+        customers: []
+      };
+    }
+    productsGroupedMap[pKey].totalQuantity += item.quantity;
+    productsGroupedMap[pKey].totalRevenue += item.total;
+
+    const cKey = normalize(item.customerName);
+    let custObj = productsGroupedMap[pKey].customers.find(c => normalize(c.customerName) === cKey);
+    if (!custObj) {
+      custObj = {
+        customerName: item.customerName,
+        customerPhone: item.customerPhone,
+        quantity: 0,
+        total: 0,
+        avgPrice: 0,
+        ordersCount: 0,
+        lastDate: item.saleDate,
+        items: []
+      };
+      productsGroupedMap[pKey].customers.push(custObj);
+    }
+    custObj.quantity += item.quantity;
+    custObj.total += item.total;
+    custObj.ordersCount += 1;
+    if (item.saleDate && (!custObj.lastDate || item.saleDate > custObj.lastDate)) {
+      custObj.lastDate = item.saleDate;
+    }
+    custObj.items.push(item);
+  });
+
+  const productsGroupedList: ProductGroupedData[] = Object.values(productsGroupedMap)
+    .map(p => ({
+      ...p,
+      avgPrice: p.totalQuantity > 0 ? p.totalRevenue / p.totalQuantity : 0,
+      customersCount: p.customers.length,
+      customers: p.customers
+        .map(c => ({
+          ...c,
+          avgPrice: c.quantity > 0 ? c.total / c.quantity : 0
+        }))
+        .sort((a, b) => b.total - a.total)
+    }))
+    .sort((a, b) => b.totalRevenue - a.totalRevenue);
+
+  // Grouping 2: By Customer (showing list of products this customer bought)
+  interface CustomerGroupedData {
+    customerName: string;
+    customerPhone: string;
+    totalQuantity: number;
+    totalRevenue: number;
+    productsCount: number;
+    ordersCount: number;
+    products: {
+      productName: string;
+      quantity: number;
+      total: number;
+      avgPrice: number;
+      ordersCount: number;
+      lastDate: Date | null;
+      items: ProdCustItemFlat[];
+    }[];
+  }
+
+  const customersGroupedMap: Record<string, CustomerGroupedData> = {};
+  flatSalesItemsForProdCust.forEach(item => {
+    const cKey = normalize(item.customerName);
+    if (!customersGroupedMap[cKey]) {
+      customersGroupedMap[cKey] = {
+        customerName: item.customerName,
+        customerPhone: item.customerPhone,
+        totalQuantity: 0,
+        totalRevenue: 0,
+        productsCount: 0,
+        ordersCount: 0,
+        products: []
+      };
+    }
+    customersGroupedMap[cKey].totalQuantity += item.quantity;
+    customersGroupedMap[cKey].totalRevenue += item.total;
+
+    const pKey = normalizeProductName(item.productName);
+    const canonicalName = getCanonicalProductName(item.productName);
+    let prodObj = customersGroupedMap[cKey].products.find(p => normalizeProductName(p.productName) === pKey);
+    if (!prodObj) {
+      prodObj = {
+        productName: canonicalName,
+        quantity: 0,
+        total: 0,
+        avgPrice: 0,
+        ordersCount: 0,
+        lastDate: item.saleDate,
+        items: []
+      };
+      customersGroupedMap[cKey].products.push(prodObj);
+    }
+    prodObj.quantity += item.quantity;
+    prodObj.total += item.total;
+    prodObj.ordersCount += 1;
+    if (item.saleDate && (!prodObj.lastDate || item.saleDate > prodObj.lastDate)) {
+      prodObj.lastDate = item.saleDate;
+    }
+    prodObj.items.push(item);
+  });
+
+  const customersGroupedList: CustomerGroupedData[] = Object.values(customersGroupedMap)
+    .map(c => {
+      const distinctOrders = new Set(c.products.flatMap(p => p.items.map(i => i.saleId))).size;
+      return {
+        ...c,
+        ordersCount: distinctOrders,
+        productsCount: c.products.length,
+        products: c.products
+          .map(p => ({
+            ...p,
+            avgPrice: p.quantity > 0 ? p.total / p.quantity : 0
+          }))
+          .sort((a, b) => b.total - a.total)
+      };
+    })
+    .sort((a, b) => b.totalRevenue - a.totalRevenue);
+
+  // Toggle row expansion
+  const toggleProdCustExpand = (key: string) => {
+    setProdCustExpandedKeys(prev => ({
+      ...prev,
+      [key]: !prev[key]
+    }));
+  };
+
+  const expandAllProdCust = (expand: boolean) => {
+    if (!expand) {
+      setProdCustExpandedKeys({});
+      return;
+    }
+    const newKeys: Record<string, boolean> = {};
+    if (prodCustViewMode === 'product') {
+      productsGroupedList.forEach(p => {
+        newKeys[normalize(p.productName)] = true;
+      });
+    } else {
+      customersGroupedList.forEach(c => {
+        newKeys[normalize(c.customerName)] = true;
+      });
+    }
+    setProdCustExpandedKeys(newKeys);
+  };
+
+  // Export CSV for Product x Customer
+  const exportProdCustCSV = () => {
+    if (flatSalesItemsForProdCust.length === 0) return;
+    const header = "Data da Venda;Pedido / Ref;Produto;Cliente;Telefone;Quantidade;Preço Unitário (R$);Total (R$);Tipo;Status\n";
+    const rows = flatSalesItemsForProdCust.map(i => {
+      const dateStr = i.saleDate ? format(i.saleDate, "dd/MM/yyyy HH:mm") : 'Sem data';
+      const typeStr = i.isDelivery ? 'Delivery' : 'Venda Direta';
+      return `"${dateStr}";"${i.saleNumber}";"${i.productName}";"${i.customerName}";"${i.customerPhone}";${i.quantity};${i.unitPrice.toFixed(2).replace('.', ',')};${i.total.toFixed(2).replace('.', ',')};"${typeStr}";"${i.status}"`;
+    }).join('\n');
+
+    const csvContent = "\uFEFF" + header + rows;
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `relatorio_produto_x_cliente_${prodCustPreset}_${format(new Date(), 'yyyyMMdd_HHmm')}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const sortedChannelDailyData = Object.values(channelDailyDataMap).sort((a, b) => a.date.localeCompare(b.date));
   const sortedChannelDailyDataDesc = Object.values(channelDailyDataMap).sort((a, b) => b.date.localeCompare(a.date));
 
@@ -877,11 +1227,12 @@ export default function Reports() {
           { id: 'general', label: 'Visão Geral', icon: Activity },
           { id: 'operational', label: 'Operacional', icon: Target },
           { id: 'sales_by_channel', label: 'Vendas por Canal', icon: BarChart3 },
-          { id: 'expenses', label: 'Despesas', icon: TrendingDown },
-          { id: 'pending_deliveries', label: 'Entregas Pendentes', icon: ShoppingBag },
-          { id: 'receivables', label: 'Valores a Receber', icon: DollarSign },
+          { id: 'product_by_customer', label: 'Produto x Cliente', icon: Layers },
           { id: 'customer', label: 'Vendas por Cliente', icon: User },
           { id: 'product', label: 'Vendas por Produto', icon: Package },
+          { id: 'pending_deliveries', label: 'Entregas Pendentes', icon: ShoppingBag },
+          { id: 'receivables', label: 'Valores a Receber', icon: DollarSign },
+          { id: 'expenses', label: 'Despesas', icon: TrendingDown },
         ].map((report) => (
           <button
             key={report.id}
@@ -2111,6 +2462,652 @@ export default function Reports() {
         </div>
       )}
 
+      {activeReport === 'product_by_customer' && (
+        <div className="space-y-6">
+          {/* Header & Main Controls Card */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-5">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+              <div>
+                <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
+                  <Layers className="text-emerald-600" size={22} />
+                  Relatório: Produto Vendido x Cliente
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Cruzamento minucioso de produtos comercializados por cliente com múltiplos modos de visualização e filtros por intervalo de datas.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={exportProdCustCSV}
+                  disabled={flatSalesItemsForProdCust.length === 0}
+                  className="flex items-center gap-2 px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl text-xs font-bold transition-all"
+                  title="Exportar dados filtrados em formato CSV"
+                >
+                  <Download size={14} />
+                  Exportar CSV ({flatSalesItemsForProdCust.length})
+                </button>
+                <button
+                  onClick={() => window.print()}
+                  className="flex items-center gap-2 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm shadow-emerald-200"
+                >
+                  <Printer size={14} />
+                  Imprimir PDF
+                </button>
+              </div>
+            </div>
+
+            {/* Filter Section */}
+            <div className="space-y-4">
+              {/* Presets and Custom Dates */}
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] font-black text-slate-400 uppercase tracking-wider mr-1">Período:</span>
+                  {[
+                    { id: 'all', label: 'Todas' },
+                    { id: 'today', label: 'Hoje' },
+                    { id: 'yesterday', label: 'Ontem' },
+                    { id: 'last7', label: '7 Dias' },
+                    { id: 'last30', label: '30 Dias' },
+                    { id: 'month', label: 'Este Mês' },
+                    { id: 'custom', label: 'Personalizado' },
+                  ].map(preset => (
+                    <button
+                      key={preset.id}
+                      onClick={() => setProdCustPreset(preset.id as any)}
+                      className={cn(
+                        "px-3 py-1.5 rounded-lg text-xs font-bold transition-all",
+                        prodCustPreset === preset.id
+                          ? "bg-emerald-600 text-white shadow-sm"
+                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                      )}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Custom Date Pickers */}
+                {prodCustPreset === 'custom' && (
+                  <div className="flex items-center gap-2 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
+                    <div className="flex items-center gap-1">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase">De:</span>
+                      <input
+                        type="date"
+                        value={prodCustDateStart}
+                        onChange={(e) => setProdCustDateStart(e.target.value)}
+                        className="px-2 py-1 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-700"
+                      />
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase">Até:</span>
+                      <input
+                        type="date"
+                        value={prodCustDateEnd}
+                        onChange={(e) => setProdCustDateEnd(e.target.value)}
+                        className="px-2 py-1 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-700"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Dropdowns and Search */}
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-3 pt-2">
+                {/* Select Product */}
+                <div className="md:col-span-4 flex flex-col gap-1">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                    Filtrar por Produto
+                  </label>
+                  <select
+                    value={prodCustSelectedProduct}
+                    onChange={(e) => setProdCustSelectedProduct(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500/20 focus:border-emerald-500 h-[38px] cursor-pointer"
+                  >
+                    <option value="all">Todos os Produtos ({allProductOptions.length})</option>
+                    {allProductOptions.map(pName => (
+                      <option key={pName} value={pName}>{pName}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Select Customer */}
+                <div className="md:col-span-4 flex flex-col gap-1">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                    Filtrar por Cliente
+                  </label>
+                  <select
+                    value={prodCustSelectedCustomer}
+                    onChange={(e) => setProdCustSelectedCustomer(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500/20 focus:border-emerald-500 h-[38px] cursor-pointer"
+                  >
+                    <option value="all">Todos os Clientes ({allCustomerOptions.length})</option>
+                    {allCustomerOptions.map(cName => (
+                      <option key={cName} value={cName}>{cName}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Search Bar */}
+                <div className="md:col-span-4 flex flex-col gap-1">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                    Buscar Geral
+                  </label>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-2.5 text-slate-400" size={15} />
+                    <input
+                      type="text"
+                      placeholder="Produto, cliente, pedido ou telefone..."
+                      value={prodCustSearchQuery}
+                      onChange={(e) => setProdCustSearchQuery(e.target.value)}
+                      className="w-full pl-9 pr-7 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500/20 focus:border-emerald-500 h-[38px]"
+                    />
+                    {prodCustSearchQuery && (
+                      <button
+                        onClick={() => setProdCustSearchQuery('')}
+                        className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 text-xs font-bold"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* View Mode Switcher */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-slate-100">
+                <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
+                  <button
+                    onClick={() => setProdCustViewMode('product')}
+                    className={cn(
+                      "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all",
+                      prodCustViewMode === 'product'
+                        ? "bg-white text-slate-900 shadow-sm"
+                        : "text-slate-600 hover:text-slate-900"
+                    )}
+                  >
+                    <Package size={14} className="text-emerald-600" />
+                    Agrupar por Produto
+                  </button>
+                  <button
+                    onClick={() => setProdCustViewMode('customer')}
+                    className={cn(
+                      "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all",
+                      prodCustViewMode === 'customer'
+                        ? "bg-white text-slate-900 shadow-sm"
+                        : "text-slate-600 hover:text-slate-900"
+                    )}
+                  >
+                    <User size={14} className="text-indigo-600" />
+                    Agrupar por Cliente
+                  </button>
+                  <button
+                    onClick={() => setProdCustViewMode('detailed')}
+                    className={cn(
+                      "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all",
+                      prodCustViewMode === 'detailed'
+                        ? "bg-white text-slate-900 shadow-sm"
+                        : "text-slate-600 hover:text-slate-900"
+                    )}
+                  >
+                    <ClipboardList size={14} className="text-amber-600" />
+                    Lista Detalhada ({flatSalesItemsForProdCust.length})
+                  </button>
+                </div>
+
+                {prodCustViewMode !== 'detailed' && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => expandAllProdCust(true)}
+                      className="text-[11px] font-bold text-emerald-700 hover:text-emerald-800 px-2.5 py-1 bg-emerald-50 rounded-lg transition-colors cursor-pointer"
+                    >
+                      + Expandir Todos
+                    </button>
+                    <button
+                      onClick={() => expandAllProdCust(false)}
+                      className="text-[11px] font-bold text-slate-600 hover:text-slate-800 px-2.5 py-1 bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                    >
+                      - Recolher Todos
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* KPI Dashboard */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-start gap-3">
+              <div className="p-2.5 bg-emerald-50 text-emerald-600 rounded-xl">
+                <DollarSign size={20} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Faturamento</p>
+                <h4 className="text-lg font-black text-emerald-700 mt-0.5 font-mono">
+                  R$ {prodCustTotalRevenue.toFixed(2)}
+                </h4>
+                <p className="text-[9px] text-slate-400 mt-0.5">Total no período</p>
+              </div>
+            </div>
+
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-start gap-3">
+              <div className="p-2.5 bg-blue-50 text-blue-600 rounded-xl">
+                <Package size={20} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Volume Vendido</p>
+                <h4 className="text-lg font-black text-slate-900 mt-0.5 font-mono">
+                  {prodCustTotalQuantity} <span className="text-xs font-normal text-slate-500">itens</span>
+                </h4>
+                <p className="text-[9px] text-slate-400 mt-0.5">Soma de unidades</p>
+              </div>
+            </div>
+
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-start gap-3">
+              <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl">
+                <Users size={20} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Clientes</p>
+                <h4 className="text-lg font-black text-slate-900 mt-0.5 font-mono">
+                  {prodCustUniqueCustomers}
+                </h4>
+                <p className="text-[9px] text-slate-400 mt-0.5">Clientes compradores</p>
+              </div>
+            </div>
+
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-start gap-3">
+              <div className="p-2.5 bg-amber-50 text-amber-600 rounded-xl">
+                <Tag size={20} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Variedade</p>
+                <h4 className="text-lg font-black text-slate-900 mt-0.5 font-mono">
+                  {prodCustUniqueProducts}
+                </h4>
+                <p className="text-[9px] text-slate-400 mt-0.5">Produtos distintos</p>
+              </div>
+            </div>
+
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-start gap-3">
+              <div className="p-2.5 bg-purple-50 text-purple-600 rounded-xl">
+                <ShoppingBag size={20} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Pedidos / Vendas</p>
+                <h4 className="text-lg font-black text-slate-900 mt-0.5 font-mono">
+                  {prodCustUniqueOrders}
+                </h4>
+                <p className="text-[9px] text-slate-400 mt-0.5">
+                  Ticket Médio: R$ {(prodCustTotalRevenue / (prodCustUniqueOrders || 1)).toFixed(2)}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* MAIN DATA TABLES BASED ON VIEW MODE */}
+
+          {/* MODE 1: GROUPED BY PRODUCT */}
+          {prodCustViewMode === 'product' && (
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden space-y-4">
+              <div className="p-4 md:p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                <div>
+                  <h4 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                    <Package className="text-emerald-600" size={16} />
+                    Produtos Comercializados e seus Compradores ({productsGroupedList.length})
+                  </h4>
+                  <p className="text-[11px] text-slate-500">Clique na linha do produto para ver o detalhamento de clientes que compraram.</p>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto px-4 md:px-5 pb-5">
+                <table className="w-full text-left border-collapse border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200">
+                      <th className="px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-widest w-[40px] text-center"></th>
+                      <th className="px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-widest">Produto</th>
+                      <th className="px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-widest text-center">Qtd. Vendida</th>
+                      <th className="px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-widest text-center">Preço Médio</th>
+                      <th className="px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-widest text-center">Clientes</th>
+                      <th className="px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-widest text-right">Faturamento Total</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-sm bg-white">
+                    {productsGroupedList.map((prod, idx) => {
+                      const isExpanded = !!prodCustExpandedKeys[normalize(prod.productName)];
+                      return (
+                        <React.Fragment key={idx}>
+                          <tr
+                            onClick={() => toggleProdCustExpand(normalize(prod.productName))}
+                            className="hover:bg-slate-50/80 transition-colors cursor-pointer group"
+                          >
+                            <td className="px-4 py-3.5 text-center text-slate-400">
+                              {isExpanded ? (
+                                <ChevronDown size={18} className="text-emerald-600 inline transition-transform" />
+                              ) : (
+                                <ChevronRight size={18} className="text-slate-400 group-hover:text-slate-600 inline transition-transform" />
+                              )}
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <span className="font-black text-slate-900 group-hover:text-emerald-700 transition-colors">
+                                {prod.productName}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5 text-center font-mono font-bold text-slate-700 bg-slate-50/40">
+                              {prod.totalQuantity} un
+                            </td>
+                            <td className="px-4 py-3.5 text-center font-mono font-bold text-slate-600">
+                              R$ {prod.avgPrice.toFixed(2)}
+                            </td>
+                            <td className="px-4 py-3.5 text-center">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-indigo-50 text-indigo-700">
+                                {prod.customersCount} cliente{prod.customersCount !== 1 ? 's' : ''}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5 text-right font-black text-emerald-600 font-mono text-base">
+                              R$ {prod.totalRevenue.toFixed(2)}
+                            </td>
+                          </tr>
+
+                          {/* Expanded Nested Subtable */}
+                          {isExpanded && (
+                            <tr className="bg-slate-50/80">
+                              <td colSpan={6} className="p-3 md:p-5">
+                                <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-3">
+                                  <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                                    <span className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                                      <Users size={14} className="text-indigo-600" />
+                                      Clientes que compraram {prod.productName} ({prod.customers.length})
+                                    </span>
+                                    <span className="text-xs font-mono font-bold text-slate-500">
+                                      {prod.totalQuantity} unidades • R$ {prod.totalRevenue.toFixed(2)}
+                                    </span>
+                                  </div>
+
+                                  <div className="overflow-x-auto">
+                                    <table className="w-full text-left text-xs">
+                                      <thead>
+                                        <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase">
+                                          <th className="py-2 px-3">Cliente</th>
+                                          <th className="py-2 px-3">Contato</th>
+                                          <th className="py-2 px-3 text-center">Qtd. Comprada</th>
+                                          <th className="py-2 px-3 text-center">Preço Médio</th>
+                                          <th className="py-2 px-3 text-right">Total Gasto</th>
+                                          <th className="py-2 px-3 text-center">Nº Compras</th>
+                                          <th className="py-2 px-3 text-right">Última Compra</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-slate-100">
+                                        {prod.customers.map((c, cIdx) => (
+                                          <tr key={cIdx} className="hover:bg-slate-50/60">
+                                            <td className="py-2.5 px-3 font-bold text-slate-800">
+                                              {c.customerName}
+                                            </td>
+                                            <td className="py-2.5 px-3 text-slate-500 font-mono">
+                                              {c.customerPhone || '—'}
+                                            </td>
+                                            <td className="py-2.5 px-3 text-center font-bold text-slate-700 font-mono">
+                                              {c.quantity} un
+                                            </td>
+                                            <td className="py-2.5 px-3 text-center text-slate-600 font-mono">
+                                              R$ {c.avgPrice.toFixed(2)}
+                                            </td>
+                                            <td className="py-2.5 px-3 text-right font-black text-emerald-600 font-mono">
+                                              R$ {c.total.toFixed(2)}
+                                            </td>
+                                            <td className="py-2.5 px-3 text-center text-slate-500">
+                                              {c.ordersCount}x
+                                            </td>
+                                            <td className="py-2.5 px-3 text-right text-slate-500 font-mono">
+                                              {c.lastDate ? format(c.lastDate, "dd/MM/yyyy") : '—'}
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+
+                    {productsGroupedList.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="px-6 py-12 text-center text-slate-400 italic">
+                          Nenhum produto encontrado com os filtros selecionados.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* MODE 2: GROUPED BY CUSTOMER */}
+          {prodCustViewMode === 'customer' && (
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden space-y-4">
+              <div className="p-4 md:p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                <div>
+                  <h4 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                    <User className="text-indigo-600" size={16} />
+                    Clientes e os Produtos Adquiridos ({customersGroupedList.length})
+                  </h4>
+                  <p className="text-[11px] text-slate-500">Clique no cliente para ver a lista de produtos comprados por ele.</p>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto px-4 md:px-5 pb-5">
+                <table className="w-full text-left border-collapse border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200">
+                      <th className="px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-widest w-[40px] text-center"></th>
+                      <th className="px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-widest">Cliente / Contato</th>
+                      <th className="px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-widest text-center">Total de Itens</th>
+                      <th className="px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-widest text-center">Variedade</th>
+                      <th className="px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-widest text-center">Pedidos</th>
+                      <th className="px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-widest text-right">Faturamento Total</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-sm bg-white">
+                    {customersGroupedList.map((cust, idx) => {
+                      const isExpanded = !!prodCustExpandedKeys[normalize(cust.customerName)];
+                      return (
+                        <React.Fragment key={idx}>
+                          <tr
+                            onClick={() => toggleProdCustExpand(normalize(cust.customerName))}
+                            className="hover:bg-slate-50/80 transition-colors cursor-pointer group"
+                          >
+                            <td className="px-4 py-3.5 text-center text-slate-400">
+                              {isExpanded ? (
+                                <ChevronDown size={18} className="text-indigo-600 inline transition-transform" />
+                              ) : (
+                                <ChevronRight size={18} className="text-slate-400 group-hover:text-slate-600 inline transition-transform" />
+                              )}
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <div className="font-black text-slate-900 group-hover:text-indigo-700 transition-colors">
+                                {cust.customerName}
+                              </div>
+                              {cust.customerPhone && (
+                                <div className="text-[11px] text-slate-400 font-mono">
+                                  {cust.customerPhone}
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-4 py-3.5 text-center font-mono font-bold text-slate-700 bg-slate-50/40">
+                              {cust.totalQuantity} un
+                            </td>
+                            <td className="px-4 py-3.5 text-center">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-amber-50 text-amber-700">
+                                {cust.productsCount} produto{cust.productsCount !== 1 ? 's' : ''}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5 text-center text-slate-600 font-bold font-mono">
+                              {cust.ordersCount}x
+                            </td>
+                            <td className="px-4 py-3.5 text-right font-black text-emerald-600 font-mono text-base">
+                              R$ {cust.totalRevenue.toFixed(2)}
+                            </td>
+                          </tr>
+
+                          {/* Expanded Nested Subtable */}
+                          {isExpanded && (
+                            <tr className="bg-slate-50/80">
+                              <td colSpan={6} className="p-3 md:p-5">
+                                <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-3">
+                                  <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                                    <span className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                                      <Package size={14} className="text-emerald-600" />
+                                      Produtos comprados por {cust.customerName} ({cust.products.length})
+                                    </span>
+                                    <span className="text-xs font-mono font-bold text-slate-500">
+                                      {cust.totalQuantity} itens • Total: R$ {cust.totalRevenue.toFixed(2)}
+                                    </span>
+                                  </div>
+
+                                  <div className="overflow-x-auto">
+                                    <table className="w-full text-left text-xs">
+                                      <thead>
+                                        <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase">
+                                          <th className="py-2 px-3">Produto</th>
+                                          <th className="py-2 px-3 text-center">Qtd. Comprada</th>
+                                          <th className="py-2 px-3 text-center">Preço Médio</th>
+                                          <th className="py-2 px-3 text-right">Total Gasto</th>
+                                          <th className="py-2 px-3 text-center">Vezes Comprado</th>
+                                          <th className="py-2 px-3 text-right">Última Compra</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-slate-100">
+                                        {cust.products.map((p, pIdx) => (
+                                          <tr key={pIdx} className="hover:bg-slate-50/60">
+                                            <td className="py-2.5 px-3 font-bold text-slate-800">
+                                              {p.productName}
+                                            </td>
+                                            <td className="py-2.5 px-3 text-center font-bold text-slate-700 font-mono">
+                                              {p.quantity} un
+                                            </td>
+                                            <td className="py-2.5 px-3 text-center text-slate-600 font-mono">
+                                              R$ {p.avgPrice.toFixed(2)}
+                                            </td>
+                                            <td className="py-2.5 px-3 text-right font-black text-emerald-600 font-mono">
+                                              R$ {p.total.toFixed(2)}
+                                            </td>
+                                            <td className="py-2.5 px-3 text-center text-slate-500">
+                                              {p.ordersCount}x
+                                            </td>
+                                            <td className="py-2.5 px-3 text-right text-slate-500 font-mono">
+                                              {p.lastDate ? format(p.lastDate, "dd/MM/yyyy") : '—'}
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+
+                    {customersGroupedList.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="px-6 py-12 text-center text-slate-400 italic">
+                          Nenhum cliente encontrado com os filtros selecionados.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* MODE 3: DETAILED FLAT TABLE */}
+          {prodCustViewMode === 'detailed' && (
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden space-y-4">
+              <div className="p-4 md:p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                <div>
+                  <h4 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                    <ClipboardList className="text-amber-600" size={16} />
+                    Histórico Detalhado Item a Item ({flatSalesItemsForProdCust.length} lançamentos)
+                  </h4>
+                  <p className="text-[11px] text-slate-500">Listagem individual de todos os produtos vendidos com referência ao pedido original.</p>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto px-4 md:px-5 pb-5">
+                <table className="w-full text-left border-collapse border border-slate-200 rounded-xl overflow-hidden shadow-sm text-xs">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200">
+                      <th className="px-3.5 py-3 font-bold text-slate-400 uppercase tracking-widest">Data</th>
+                      <th className="px-3.5 py-3 font-bold text-slate-400 uppercase tracking-widest">Pedido</th>
+                      <th className="px-3.5 py-3 font-bold text-slate-400 uppercase tracking-widest">Produto</th>
+                      <th className="px-3.5 py-3 font-bold text-slate-400 uppercase tracking-widest">Cliente</th>
+                      <th className="px-3.5 py-3 font-bold text-slate-400 uppercase tracking-widest text-center">Qtd</th>
+                      <th className="px-3.5 py-3 font-bold text-slate-400 uppercase tracking-widest text-center">Preço Unit.</th>
+                      <th className="px-3.5 py-3 font-bold text-slate-400 uppercase tracking-widest text-right">Total</th>
+                      <th className="px-3.5 py-3 font-bold text-slate-400 uppercase tracking-widest text-center">Canal</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {flatSalesItemsForProdCust.map((item) => (
+                      <tr key={item.id} className="hover:bg-slate-50/60 transition-colors">
+                        <td className="px-3.5 py-2.5 font-mono text-slate-500 whitespace-nowrap">
+                          {item.saleDate ? format(item.saleDate, "dd/MM/yy HH:mm") : '—'}
+                        </td>
+                        <td className="px-3.5 py-2.5 font-mono font-bold text-slate-700">
+                          {item.saleNumber}
+                        </td>
+                        <td className="px-3.5 py-2.5 font-bold text-slate-900">
+                          {item.productName}
+                        </td>
+                        <td className="px-3.5 py-2.5">
+                          <div className="font-bold text-slate-800">{item.customerName}</div>
+                          {item.customerPhone && (
+                            <div className="text-[10px] text-slate-400 font-mono">{item.customerPhone}</div>
+                          )}
+                        </td>
+                        <td className="px-3.5 py-2.5 text-center font-bold font-mono text-slate-700 bg-slate-50/40">
+                          {item.quantity}
+                        </td>
+                        <td className="px-3.5 py-2.5 text-center font-mono text-slate-600">
+                          R$ {item.unitPrice.toFixed(2)}
+                        </td>
+                        <td className="px-3.5 py-2.5 text-right font-black text-emerald-600 font-mono">
+                          R$ {item.total.toFixed(2)}
+                        </td>
+                        <td className="px-3.5 py-2.5 text-center">
+                          <span className={cn(
+                            "px-2 py-0.5 rounded-full text-[10px] font-bold",
+                            item.isDelivery ? "bg-blue-50 text-blue-700" : "bg-emerald-50 text-emerald-700"
+                          )}>
+                            {item.isDelivery ? 'Delivery' : 'Direta'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+
+                    {flatSalesItemsForProdCust.length === 0 && (
+                      <tr>
+                        <td colSpan={8} className="px-6 py-12 text-center text-slate-400 italic">
+                          Nenhum lançamento de produto encontrado no período.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {activeReport === 'pending_deliveries' && (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden space-y-4">
           <div className="p-4 md:p-5 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-50/50">
@@ -2728,120 +3725,231 @@ export default function Reports() {
       `}} />
 
       <div className="only-print-landscape font-sans p-2 bg-white text-slate-900 w-full">
-        {/* Header Compacto da Folha em Paisagem */}
-        <div className="border-b-[3px] border-slate-950 pb-2 flex justify-between items-end">
+        {activeReport === 'product_by_customer' ? (
           <div>
-            <h1 className="text-xl font-black text-slate-900 tracking-tight uppercase leading-none">Manifesto de Entregas Pendentes</h1>
-            <p className="text-[10px] text-slate-500 font-bold mt-1 uppercase">Logística de Despacho e Rotas em Campo</p>
-          </div>
-          <div className="text-right text-[10px] text-slate-600 font-medium">
-            <p className="font-bold">Emissão: <span className="font-mono">{format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}</span></p>
-            <p className="mt-0.5">
-              <b>Período:</b> {
-                deliveryFilterPreset === 'all' ? 'Todas as Pendentes' :
-                deliveryFilterPreset === 'today' ? 'Hoje' :
-                deliveryFilterPreset === 'tomorrow' ? 'Amanhã' :
-                deliveryFilterPreset === 'next7' ? 'Próximos 7 Dias' :
-                `De ${deliveryDateStart ? safeFormatDate(deliveryDateStart) : 'Início'} até ${deliveryDateEnd ? safeFormatDate(deliveryDateEnd) : 'Fim'}`
-              }
-            </p>
-          </div>
-        </div>
+            {/* Header Impressão Produto x Cliente */}
+            <div className="border-b-[3px] border-slate-950 pb-2 flex justify-between items-end">
+              <div>
+                <h1 className="text-xl font-black text-slate-900 tracking-tight uppercase leading-none">
+                  Relatório: Produto Vendido x Cliente
+                </h1>
+                <p className="text-[10px] text-slate-500 font-bold mt-1 uppercase">
+                  Consolidado de Produtos e Compradores
+                </p>
+              </div>
+              <div className="text-right text-[10px] text-slate-600 font-medium">
+                <p className="font-bold">Emissão: <span className="font-mono">{format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}</span></p>
+                <p className="mt-0.5">
+                  <b>Período:</b> {
+                    prodCustPreset === 'all' ? 'Todo o Histórico' :
+                    prodCustPreset === 'today' ? 'Hoje' :
+                    prodCustPreset === 'yesterday' ? 'Ontem' :
+                    prodCustPreset === 'last7' ? 'Últimos 7 Dias' :
+                    prodCustPreset === 'last30' ? 'Últimos 30 Dias' :
+                    prodCustPreset === 'month' ? 'Este Mês' :
+                    `De ${prodCustDateStart ? safeFormatDate(prodCustDateStart) : 'Início'} até ${prodCustDateEnd ? safeFormatDate(prodCustDateEnd) : 'Fim'}`
+                  }
+                </p>
+              </div>
+            </div>
 
-        {/* Resumo e Indicadores do Manifesto */}
-        <div className="flex justify-between items-center text-[10px] border border-slate-300 px-4 py-2 rounded-lg bg-slate-50 my-2.5">
-          <div>
-            <span className="font-bold text-slate-500 uppercase tracking-wider text-[9px]">Total de Remessas:</span>{' '}
-            <span className="font-black text-slate-800 text-xs">
-              {filteredPendingDeliveries.length} {filteredPendingDeliveries.length === 1 ? 'pedido em rota' : 'pedidos em rota'}
-            </span>
-          </div>
-          <div className="text-right">
-            <span className="font-bold text-slate-500 uppercase tracking-wider text-[9px]">Valor Total a Receber:</span>{' '}
-            <span className="font-black text-emerald-800 text-xs font-mono">
-              R$ {filteredPendingDeliveries.reduce((acc, s) => acc + s.total, 0).toFixed(2)}
-            </span>
-          </div>
-        </div>
+            {/* Resumo de Indicadores */}
+            <div className="grid grid-cols-4 gap-2 text-[10px] border border-slate-300 px-4 py-2 rounded-lg bg-slate-50 my-2.5">
+              <div>
+                <span className="font-bold text-slate-500 uppercase tracking-wider text-[9px]">Faturamento:</span>{' '}
+                <span className="font-black text-emerald-800 text-xs font-mono">
+                  R$ {prodCustTotalRevenue.toFixed(2)}
+                </span>
+              </div>
+              <div>
+                <span className="font-bold text-slate-500 uppercase tracking-wider text-[9px]">Qtd. Itens:</span>{' '}
+                <span className="font-black text-slate-800 text-xs font-mono">
+                  {prodCustTotalQuantity} un
+                </span>
+              </div>
+              <div>
+                <span className="font-bold text-slate-500 uppercase tracking-wider text-[9px]">Clientes:</span>{' '}
+                <span className="font-black text-slate-800 text-xs">
+                  {prodCustUniqueCustomers} compradores
+                </span>
+              </div>
+              <div>
+                <span className="font-bold text-slate-500 uppercase tracking-wider text-[9px]">Produtos:</span>{' '}
+                <span className="font-black text-slate-800 text-xs">
+                  {prodCustUniqueProducts} variedades
+                </span>
+              </div>
+            </div>
 
-        {/* Tabela de Alto Contraste Paisagem baseada na Visualização da Tela */}
-        <table className="w-full text-left border-collapse border-2 border-slate-900">
-          <thead>
-            <tr className="bg-slate-100 text-[10px] font-black uppercase text-slate-700 tracking-wider border-b-2 border-slate-900">
-              <th className="py-1.5 px-2 border border-slate-400 text-center w-[6%] font-mono">Nº / Ref</th>
-              <th className="py-1.5 px-2 border border-slate-400 w-[18%]">Cliente / Contato</th>
-              <th className="py-1.5 px-2 border border-slate-400 w-[11%]">Previsão</th>
-              <th className="py-1.5 px-2 border border-slate-400 w-[26%]">Endereço de Entrega</th>
-              <th className="py-1.5 px-2 border border-slate-400 w-[21%]">Itens do Pedido</th>
-              <th className="py-1.5 px-2 border border-slate-400 w-[11%]">Observações / Instruções</th>
-              <th className="py-1.5 px-2 border border-slate-400 text-right w-[7%]">Total</th>
-            </tr>
-          </thead>
-          <tbody className="text-[10px] divide-y divide-slate-400">
-            {filteredPendingDeliveries.map((s, idx) => {
-              const dDate = parseFirebaseDate(s.deliveryDate);
-              const pmStr = s.paymentMethods && s.paymentMethods.length > 0 
-                ? s.paymentMethods.map(pm => pm.method).join(', ') 
-                : 'Pagar na Entrega';
-
-              return (
-                <tr key={s.id} className="print-item-row text-slate-900 border-b-2 border-slate-950">
-                  {/* Número Seq/Ref do Pedido */}
-                  <td className="py-6 px-3 border border-slate-400 text-center font-mono font-black bg-slate-50">
-                    #{s.saleNumber || `${idx + 1}`}
-                  </td>
-
-                  {/* Cliente e Celular */}
-                  <td className="py-6 px-3 border border-slate-400">
-                    <div className="font-black text-slate-955 text-[11px] leading-tight">{s.customerName}</div>
-                    {getCustomerPhone(s) && (
-                      <div className="text-[9px] text-slate-500 font-bold mt-1 font-mono">{getCustomerPhone(s)}</div>
-                    )}
-                  </td>
-
-                  {/* Previsão de Entrega */}
-                  <td className="py-6 px-3 border border-slate-400 font-bold text-slate-700 whitespace-nowrap text-center">
-                    {dDate ? safeFormatDate(s.deliveryDate, "dd/MM/yyyy") : <span className="text-slate-400 italic">Não agendado</span>}
-                  </td>
-
-                  {/* Endereço de Entrega */}
-                  <td className="py-6 px-3 border border-slate-400 font-extrabold text-[10px] leading-snug uppercase text-slate-900">
-                    {s.deliveryAddress || <span className="text-slate-500 italic lowercase font-medium">Retirada Local / Horta</span>}
-                  </td>
-
-                  {/* Itens do Pedido */}
-                  <td className="py-6 px-3 border border-slate-400">
-                    <div className="flex flex-wrap gap-1 font-mono text-[9px]">
-                      {s.items.map((item, i) => {
-                        const qty = typeof item.quantity === 'number' ? item.quantity : Number(item.quantity) || 0;
-                        return (
-                          <span key={i} className="bg-slate-100 border border-slate-300 text-slate-900 px-1.5 py-0.5 rounded font-bold whitespace-nowrap">
-                            {qty}x {item.name}
-                          </span>
-                        );
-                      })}
-                    </div>
-                  </td>
-
-                  {/* Observações */}
-                  <td className="py-6 px-3 border border-slate-400 text-[9px] leading-tight text-slate-700 italic font-medium">
-                    {s.observations?.trim() ? s.observations : "—"}
-                  </td>
-
-                  {/* Total e Forma de Cobrança */}
-                  <td className="py-6 px-3 border border-slate-400 text-right font-mono whitespace-nowrap">
-                    <div className="font-black text-[11px] text-slate-950">R$ {s.total.toFixed(2)}</div>
-                    <div className="text-[7.5px] text-slate-500 font-extrabold font-sans uppercase tracking-tighter mt-1">{pmStr}</div>
-                  </td>
+            {/* Tabela de Impressão */}
+            <table className="w-full text-left border-collapse border-2 border-slate-900 text-[10px]">
+              <thead>
+                <tr className="bg-slate-100 font-black uppercase text-slate-700 tracking-wider border-b-2 border-slate-900">
+                  <th className="py-1.5 px-2 border border-slate-400 w-[12%]">Data</th>
+                  <th className="py-1.5 px-2 border border-slate-400 w-[8%] font-mono">Pedido</th>
+                  <th className="py-1.5 px-2 border border-slate-400 w-[25%]">Produto</th>
+                  <th className="py-1.5 px-2 border border-slate-400 w-[25%]">Cliente / Contato</th>
+                  <th className="py-1.5 px-2 border border-slate-400 text-center w-[8%]">Qtd</th>
+                  <th className="py-1.5 px-2 border border-slate-400 text-right w-[10%]">Preço Unit.</th>
+                  <th className="py-1.5 px-2 border border-slate-400 text-right w-[12%]">Total</th>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              </thead>
+              <tbody className="divide-y divide-slate-400">
+                {flatSalesItemsForProdCust.map((item) => (
+                  <tr key={item.id} className="print-item-row text-slate-900 border-b border-slate-300">
+                    <td className="py-1.5 px-2 border border-slate-400 font-mono">
+                      {item.saleDate ? format(item.saleDate, "dd/MM/yyyy HH:mm") : '—'}
+                    </td>
+                    <td className="py-1.5 px-2 border border-slate-400 font-mono font-bold">
+                      {item.saleNumber}
+                    </td>
+                    <td className="py-1.5 px-2 border border-slate-400 font-bold">
+                      {item.productName}
+                    </td>
+                    <td className="py-1.5 px-2 border border-slate-400">
+                      <div className="font-bold">{item.customerName}</div>
+                      {item.customerPhone && (
+                        <div className="text-[8px] text-slate-500 font-mono">{item.customerPhone}</div>
+                      )}
+                    </td>
+                    <td className="py-1.5 px-2 border border-slate-400 text-center font-mono font-bold bg-slate-50">
+                      {item.quantity}
+                    </td>
+                    <td className="py-1.5 px-2 border border-slate-400 text-right font-mono">
+                      R$ {item.unitPrice.toFixed(2)}
+                    </td>
+                    <td className="py-1.5 px-2 border border-slate-400 text-right font-mono font-bold text-slate-950">
+                      R$ {item.total.toFixed(2)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
 
-        {filteredPendingDeliveries.length === 0 && (
-          <div className="text-center py-8 text-slate-400 italic font-bold border border-dashed border-slate-300 rounded-lg text-xs mt-4">
-            Nenhuma entrega pendente encontrada para este intervalo selecionado.
+            {flatSalesItemsForProdCust.length === 0 && (
+              <div className="text-center py-8 text-slate-400 italic font-bold border border-dashed border-slate-300 rounded-lg text-xs mt-4">
+                Nenhum produto vendido encontrado para este intervalo selecionado.
+              </div>
+            )}
+          </div>
+        ) : (
+          <div>
+            {/* Header Compacto da Folha em Paisagem */}
+            <div className="border-b-[3px] border-slate-950 pb-2 flex justify-between items-end">
+              <div>
+                <h1 className="text-xl font-black text-slate-900 tracking-tight uppercase leading-none">Manifesto de Entregas Pendentes</h1>
+                <p className="text-[10px] text-slate-500 font-bold mt-1 uppercase">Logística de Despacho e Rotas em Campo</p>
+              </div>
+              <div className="text-right text-[10px] text-slate-600 font-medium">
+                <p className="font-bold">Emissão: <span className="font-mono">{format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}</span></p>
+                <p className="mt-0.5">
+                  <b>Período:</b> {
+                    deliveryFilterPreset === 'all' ? 'Todas as Pendentes' :
+                    deliveryFilterPreset === 'today' ? 'Hoje' :
+                    deliveryFilterPreset === 'tomorrow' ? 'Amanhã' :
+                    deliveryFilterPreset === 'next7' ? 'Próximos 7 Dias' :
+                    `De ${deliveryDateStart ? safeFormatDate(deliveryDateStart) : 'Início'} até ${deliveryDateEnd ? safeFormatDate(deliveryDateEnd) : 'Fim'}`
+                  }
+                </p>
+              </div>
+            </div>
+
+            {/* Resumo e Indicadores do Manifesto */}
+            <div className="flex justify-between items-center text-[10px] border border-slate-300 px-4 py-2 rounded-lg bg-slate-50 my-2.5">
+              <div>
+                <span className="font-bold text-slate-500 uppercase tracking-wider text-[9px]">Total de Remessas:</span>{' '}
+                <span className="font-black text-slate-800 text-xs">
+                  {filteredPendingDeliveries.length} {filteredPendingDeliveries.length === 1 ? 'pedido em rota' : 'pedidos em rota'}
+                </span>
+              </div>
+              <div className="text-right">
+                <span className="font-bold text-slate-500 uppercase tracking-wider text-[9px]">Valor Total a Receber:</span>{' '}
+                <span className="font-black text-emerald-800 text-xs font-mono">
+                  R$ {filteredPendingDeliveries.reduce((acc, s) => acc + s.total, 0).toFixed(2)}
+                </span>
+              </div>
+            </div>
+
+            {/* Tabela de Alto Contraste Paisagem baseada na Visualização da Tela */}
+            <table className="w-full text-left border-collapse border-2 border-slate-900">
+              <thead>
+                <tr className="bg-slate-100 text-[10px] font-black uppercase text-slate-700 tracking-wider border-b-2 border-slate-900">
+                  <th className="py-1.5 px-2 border border-slate-400 text-center w-[6%] font-mono">Nº / Ref</th>
+                  <th className="py-1.5 px-2 border border-slate-400 w-[18%]">Cliente / Contato</th>
+                  <th className="py-1.5 px-2 border border-slate-400 w-[11%]">Previsão</th>
+                  <th className="py-1.5 px-2 border border-slate-400 w-[26%]">Endereço de Entrega</th>
+                  <th className="py-1.5 px-2 border border-slate-400 w-[21%]">Itens do Pedido</th>
+                  <th className="py-1.5 px-2 border border-slate-400 w-[11%]">Observações / Instruções</th>
+                  <th className="py-1.5 px-2 border border-slate-400 text-right w-[7%]">Total</th>
+                </tr>
+              </thead>
+              <tbody className="text-[10px] divide-y divide-slate-400">
+                {filteredPendingDeliveries.map((s, idx) => {
+                  const dDate = parseFirebaseDate(s.deliveryDate);
+                  const pmStr = s.paymentMethods && s.paymentMethods.length > 0 
+                    ? s.paymentMethods.map(pm => pm.method).join(', ') 
+                    : 'Pagar na Entrega';
+
+                  return (
+                    <tr key={s.id} className="print-item-row text-slate-900 border-b-2 border-slate-950">
+                      {/* Número Seq/Ref do Pedido */}
+                      <td className="py-6 px-3 border border-slate-400 text-center font-mono font-black bg-slate-50">
+                        #{s.saleNumber || `${idx + 1}`}
+                      </td>
+
+                      {/* Cliente e Celular */}
+                      <td className="py-6 px-3 border border-slate-400">
+                        <div className="font-black text-slate-955 text-[11px] leading-tight">{s.customerName}</div>
+                        {getCustomerPhone(s) && (
+                          <div className="text-[9px] text-slate-500 font-bold mt-1 font-mono">{getCustomerPhone(s)}</div>
+                        )}
+                      </td>
+
+                      {/* Previsão de Entrega */}
+                      <td className="py-6 px-3 border border-slate-400 font-bold text-slate-700 whitespace-nowrap text-center">
+                        {dDate ? safeFormatDate(s.deliveryDate, "dd/MM/yyyy") : <span className="text-slate-400 italic">Não agendado</span>}
+                      </td>
+
+                      {/* Endereço de Entrega */}
+                      <td className="py-6 px-3 border border-slate-400 font-extrabold text-[10px] leading-snug uppercase text-slate-900">
+                        {s.deliveryAddress || <span className="text-slate-500 italic lowercase font-medium">Retirada Local / Horta</span>}
+                      </td>
+
+                      {/* Itens do Pedido */}
+                      <td className="py-6 px-3 border border-slate-400">
+                        <div className="flex flex-wrap gap-1 font-mono text-[9px]">
+                          {s.items.map((item, i) => {
+                            const qty = typeof item.quantity === 'number' ? item.quantity : Number(item.quantity) || 0;
+                            return (
+                              <span key={i} className="bg-slate-100 border border-slate-300 text-slate-900 px-1.5 py-0.5 rounded font-bold whitespace-nowrap">
+                                {qty}x {item.name}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </td>
+
+                      {/* Observações */}
+                      <td className="py-6 px-3 border border-slate-400 text-[9px] leading-tight text-slate-700 italic font-medium">
+                        {s.observations?.trim() ? s.observations : "—"}
+                      </td>
+
+                      {/* Total e Forma de Cobrança */}
+                      <td className="py-6 px-3 border border-slate-400 text-right font-mono whitespace-nowrap">
+                        <div className="font-black text-[11px] text-slate-950">R$ {s.total.toFixed(2)}</div>
+                        <div className="text-[7.5px] text-slate-500 font-extrabold font-sans uppercase tracking-tighter mt-1">{pmStr}</div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+
+            {filteredPendingDeliveries.length === 0 && (
+              <div className="text-center py-8 text-slate-400 italic font-bold border border-dashed border-slate-300 rounded-lg text-xs mt-4">
+                Nenhuma entrega pendente encontrada para este intervalo selecionado.
+              </div>
+            )}
           </div>
         )}
       </div>

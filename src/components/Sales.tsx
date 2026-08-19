@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { collection, query, onSnapshot, addDoc, updateDoc, doc, serverTimestamp, orderBy, getDoc, increment, where, deleteDoc, getDocs, limit, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Sale, SaleStatus, InventoryItem, SaleItem, Customer, Production, PaymentMethod, ProduceCatalogItem } from '../types';
-import { Plus, Search, Filter, ShoppingCart, CheckCircle, XCircle, Clock, ChevronDown, Trash2, Package, X, Calendar, CreditCard, DollarSign, Edit2, Store, Truck, RotateCcw, AlertTriangle, RefreshCw, ClipboardList, Sparkles, Phone } from 'lucide-react';
+import { Plus, Search, Filter, ShoppingCart, CheckCircle, XCircle, Clock, ChevronDown, Trash2, Package, X, Calendar, CreditCard, DollarSign, Edit2, Store, Truck, RotateCcw, AlertTriangle, RefreshCw, ClipboardList, Sparkles, Phone, Scale } from 'lucide-react';
+import KgSalesManager from './KgSalesManager';
 
 export function isPhoneMatch(typedPhone?: string, candidatePhone?: string): boolean {
   if (!typedPhone || !candidatePhone) return false;
@@ -129,7 +130,7 @@ export default function Sales() {
   const [editCustomerSearchTerm, setEditCustomerSearchTerm] = useState('');
 
   // New Fair (Modo Feira) States
-  const [activeTab, setActiveTab] = useState<'individual' | 'feira' | 'delivery' | 'colheita'>('individual');
+  const [activeTab, setActiveTab] = useState<'individual' | 'feira' | 'delivery' | 'kg_sales' | 'colheita'>('individual');
 
   // Venda Delivery States
   const [deliveryClientName, setDeliveryClientName] = useState('');
@@ -1191,11 +1192,11 @@ export default function Sales() {
       </header>
 
       {/* Tabs Seletoras */}
-      <div className="flex bg-slate-100 p-1 rounded-2xl w-full max-w-3xl shadow-sm border border-slate-200">
+      <div className="flex flex-wrap bg-slate-100 p-1 rounded-2xl w-full max-w-4xl shadow-sm border border-slate-200 gap-1 sm:gap-0">
         <button
           onClick={() => setActiveTab('individual')}
           className={cn(
-            "flex-1 flex items-center justify-center gap-1.5 md:gap-2 py-3 rounded-xl transition-all cursor-pointer",
+            "flex-1 min-w-[120px] flex items-center justify-center gap-1.5 md:gap-2 py-3 rounded-xl transition-all cursor-pointer",
             activeTab === 'individual' 
               ? "bg-white text-emerald-700 shadow-md" 
               : "text-slate-500 hover:text-slate-800"
@@ -1209,7 +1210,7 @@ export default function Sales() {
         <button
           onClick={() => setActiveTab('feira')}
           className={cn(
-            "flex-1 flex items-center justify-center gap-1.5 md:gap-2 py-3 rounded-xl transition-all cursor-pointer",
+            "flex-1 min-w-[100px] flex items-center justify-center gap-1.5 md:gap-2 py-3 rounded-xl transition-all cursor-pointer",
             activeTab === 'feira' 
               ? "bg-white text-emerald-700 shadow-md" 
               : "text-slate-500 hover:text-slate-800"
@@ -1223,7 +1224,7 @@ export default function Sales() {
         <button
           onClick={() => setActiveTab('delivery')}
           className={cn(
-            "flex-1 flex items-center justify-center gap-1.5 md:gap-2 py-3 rounded-xl transition-all cursor-pointer",
+            "flex-1 min-w-[110px] flex items-center justify-center gap-1.5 md:gap-2 py-3 rounded-xl transition-all cursor-pointer",
             activeTab === 'delivery' 
               ? "bg-white text-emerald-700 shadow-md" 
               : "text-slate-500 hover:text-slate-800"
@@ -1235,9 +1236,23 @@ export default function Sales() {
           </span>
         </button>
         <button
+          onClick={() => setActiveTab('kg_sales')}
+          className={cn(
+            "flex-1 min-w-[130px] flex items-center justify-center gap-1.5 md:gap-2 py-3 rounded-xl transition-all cursor-pointer",
+            activeTab === 'kg_sales' 
+              ? "bg-white text-emerald-700 shadow-md font-black" 
+              : "text-slate-500 hover:text-slate-800 font-bold"
+          )}
+        >
+          <Scale size={15} className={activeTab === 'kg_sales' ? "text-emerald-600" : "text-slate-400"} />
+          <span className="text-[11px] sm:text-xs md:text-sm">
+            Venda por KG <span className="hidden lg:inline">& Revenda</span>
+          </span>
+        </button>
+        <button
           onClick={() => setActiveTab('colheita')}
           className={cn(
-            "flex-1 flex items-center justify-center gap-1.5 md:gap-2 py-3 rounded-xl transition-all cursor-pointer",
+            "flex-1 min-w-[110px] flex items-center justify-center gap-1.5 md:gap-2 py-3 rounded-xl transition-all cursor-pointer",
             activeTab === 'colheita' 
               ? "bg-white text-emerald-700 shadow-md" 
               : "text-slate-500 hover:text-slate-800"
@@ -1843,6 +1858,15 @@ export default function Sales() {
             </div>
           </div>
         </div>
+      )}
+
+      {activeTab === 'kg_sales' && (
+        <KgSalesManager
+          sales={sales}
+          produceCatalog={produceCatalog}
+          inventory={inventory}
+          customers={customers}
+        />
       )}
 
       {activeTab === 'colheita' && (

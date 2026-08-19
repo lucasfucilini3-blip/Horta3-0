@@ -23,6 +23,7 @@ const getDeliveryDate = (sale: Sale): Date | null => {
 
 export default function HarvestReport({ sales, produceCatalog, inventory }: HarvestReportProps) {
   const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'tomorrow' | 'week' | 'custom'>('all');
+  const [originFilter, setOriginFilter] = useState<'all' | 'own' | 'third_party'>('all');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
@@ -114,21 +115,29 @@ export default function HarvestReport({ sales, produceCatalog, inventory }: Harv
       name: string;
       totalQty: number;
       unit: string;
+      source: 'own_production' | 'third_party';
       customers: Array<{ customerName: string; quantity: number; deliveryDate: any; isDelivery: boolean; observations?: string }>;
     }> = {};
 
     pendingSales.forEach(sale => {
       sale.items.forEach(item => {
+        const itemSource: 'own_production' | 'third_party' = item.source === 'third_party' ? 'third_party' : 'own_production';
+        
+        // Filter by origin if selected
+        if (originFilter === 'own' && itemSource === 'third_party') return;
+        if (originFilter === 'third_party' && itemSource === 'own_production') return;
+
         const canonicalName = getCanonicalProductName(item.name);
-        const normKey = normalizeProductName(item.name);
+        const itemUnit = item.unit || findUnitForProduct(canonicalName) || findUnitForProduct(item.name);
+        const normKey = `${normalizeProductName(item.name)}_${itemUnit}_${itemSource}`;
         const qty = item.quantity;
         
         if (!aggregation[normKey]) {
-          const unit = findUnitForProduct(canonicalName) || findUnitForProduct(item.name);
           aggregation[normKey] = {
             name: canonicalName,
             totalQty: 0,
-            unit,
+            unit: itemUnit,
+            source: itemSource,
             customers: []
           };
         }
@@ -239,8 +248,42 @@ export default function HarvestReport({ sales, produceCatalog, inventory }: Harv
             </div>
           </div>
 
+          {/* Filtro de Origem do Produto */}
+          <div className="space-y-2 lg:w-72">
+            <label className="block text-xs font-black uppercase text-slate-400 tracking-wider">Origem do Produto</label>
+            <div className="flex bg-slate-100 p-1 rounded-2xl border border-slate-200">
+              <button
+                type="button"
+                onClick={() => setOriginFilter('all')}
+                className={`flex-1 py-2 px-2 text-[11px] font-bold rounded-xl transition-all cursor-pointer ${
+                  originFilter === 'all' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                Todos
+              </button>
+              <button
+                type="button"
+                onClick={() => setOriginFilter('own')}
+                className={`flex-1 py-2 px-2 text-[11px] font-bold rounded-xl transition-all cursor-pointer ${
+                  originFilter === 'own' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                🌿 Horta
+              </button>
+              <button
+                type="button"
+                onClick={() => setOriginFilter('third_party')}
+                className={`flex-1 py-2 px-2 text-[11px] font-bold rounded-xl transition-all cursor-pointer ${
+                  originFilter === 'third_party' ? 'bg-white text-amber-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                🛒 Terceiros
+              </button>
+            </div>
+          </div>
+
           {/* Busca de Produto */}
-          <div className="space-y-2 lg:w-80">
+          <div className="space-y-2 lg:w-72">
             <label className="block text-xs font-black uppercase text-slate-400 tracking-wider">Buscar por Produto</label>
             <div className="relative">
               <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
@@ -348,14 +391,17 @@ export default function HarvestReport({ sales, produceCatalog, inventory }: Harv
             {aggregatedItems.map((item) => (
               <tr key={item.name} className="hover:bg-gray-50">
                 <td className="border border-gray-300 p-2 text-xs font-bold">{item.name}</td>
-                <td className="border border-gray-300 p-2 text-center text-xs font-black">{item.totalQty} {formatUnit(item.unit, item.totalQty)}</td>
+                <td className="border border-gray-300 p-2 text-center text-xs font-black">
+                  {Number.isInteger(item.totalQty) ? item.totalQty : item.totalQty.toFixed(2)} {formatUnit(item.unit, item.totalQty)}
+                </td>
                 <td className="border border-gray-300 p-2 text-xs text-gray-700">
                   <div className="space-y-1">
                     {item.customers.map((c, idx) => {
                       const cDate = c.deliveryDate ? (c.deliveryDate.toDate ? c.deliveryDate.toDate() : new Date(c.deliveryDate)) : null;
+                      const cQtyFormatted = Number.isInteger(c.quantity) ? c.quantity : c.quantity.toFixed(2);
                       return (
                         <div key={idx} className="text-[10px]">
-                          • <b>{c.customerName}</b> ({c.isDelivery ? 'Delivery' : 'Venda Normal'}): {c.quantity} {formatUnit(item.unit, c.quantity)}
+                          • <b>{c.customerName}</b> ({c.isDelivery ? 'Delivery' : 'Venda Normal'}): {cQtyFormatted} {formatUnit(item.unit, c.quantity)}
                           {cDate && ` (Entrega: ${format(cDate, 'dd/MM/yy')})`}
                           {c.observations && <span className="text-gray-500 block pl-2 font-medium">Obs: {c.observations}</span>}
                         </div>
@@ -423,9 +469,18 @@ export default function HarvestReport({ sales, produceCatalog, inventory }: Harv
                       className="flex-1 min-w-0 cursor-pointer"
                       onClick={() => setExpandedProduct(isExpanded ? null : item.name)}
                     >
-                      <span className={`text-sm md:text-base font-black text-slate-800 block truncate ${isChecked ? 'line-through text-slate-400 font-bold' : ''}`}>
-                        {item.name}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-sm md:text-base font-black text-slate-800 block truncate ${isChecked ? 'line-through text-slate-400 font-bold' : ''}`}>
+                          {item.name}
+                        </span>
+                        <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-md border ${
+                          item.source === 'third_party' 
+                            ? 'bg-amber-50 text-amber-700 border-amber-200' 
+                            : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        }`}>
+                          {item.source === 'third_party' ? '🛒 Terceiro / Revenda' : '🌿 Horta'}
+                        </span>
+                      </div>
                       <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wider block mt-0.5">
                         {item.customers.length} {item.customers.length === 1 ? 'pedido' : 'pedidos pendentes'}
                       </span>
@@ -439,7 +494,7 @@ export default function HarvestReport({ sales, produceCatalog, inventory }: Harv
                     <span className={`text-base md:text-lg font-black px-4 py-1.5 rounded-xl ${
                       isChecked ? 'bg-slate-100 text-slate-400' : 'bg-emerald-50 text-emerald-800 border border-emerald-100'
                     }`}>
-                      {item.totalQty} {formatUnit(item.unit, item.totalQty)}
+                      {Number.isInteger(item.totalQty) ? item.totalQty : item.totalQty.toFixed(2)} {formatUnit(item.unit, item.totalQty)}
                     </span>
                     <ChevronDown 
                       size={18} 

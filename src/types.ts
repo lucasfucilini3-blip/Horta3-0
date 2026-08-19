@@ -103,7 +103,14 @@ export interface SaleItem {
   name: string;
   quantity: number;
   price: number;
-  cost?: number; // Custo unitário no momento da venda
+  cost?: number; // Custo unitário / de compra no momento da venda
+  source?: 'own_production' | 'third_party'; // 'own_production' = Horta Própria, 'third_party' = Compra de Terceiros / Revenda
+  unit?: string; // kg, un, pct, cx, etc.
+  estimatedCost?: number; // Custo de compra estimado
+  purchased?: boolean; // Se o item de terceiros já foi comprado/adquirido
+  supplierNotes?: string; // Fornecedor / observação da compra
+  originalRequestedQty?: number; // Quantidade solicitada inicialmente pelo cliente
+  actualWeightedQty?: number; // Quantidade real após pesagem na balança
 }
 
 export interface PaymentMethod {
@@ -119,6 +126,12 @@ export interface Sale {
   deliveryAddress?: string;
   observations?: string;
   isDelivery?: boolean;
+  isKgMode?: boolean; // Modo de entrega/venda por KG & Revenda mista
+  thirdPartyPurchased?: boolean; // Se todas as compras de terceiros foram efetuadas
+  totalCost?: number; // Custo total (compras de terceiros + custo de produção)
+  estimatedProfit?: number; // Lucro bruto previsto
+  profitMargin?: number; // Margem de lucro (%)
+  supplierExpenseRecorded?: boolean; // Se a despesa de compra de terceiros já foi lançada no financeiro
   items: SaleItem[];
   total: number;
   status: SaleStatus;

@@ -127,9 +127,23 @@ export default function HarvestReport({ sales, produceCatalog, inventory }: Harv
         if (originFilter === 'own' && itemSource === 'third_party') return;
         if (originFilter === 'third_party' && itemSource === 'own_production') return;
 
-        const canonicalName = getCanonicalProductName(item.name);
-        const itemUnit = item.unit || findUnitForProduct(canonicalName) || findUnitForProduct(item.name);
-        const normKey = `${normalizeProductName(item.name)}_${itemUnit}_${itemSource}`;
+        // Try to find catalog or inventory name first if itemId exists to resolve full name
+        let rawProductName = item.name;
+        if (item.itemId) {
+          const cat = produceCatalog.find(c => c.id === item.itemId);
+          if (cat && cat.name) {
+            rawProductName = cat.name;
+          } else {
+            const inv = inventory.find(i => i.id === item.itemId);
+            if (inv && inv.name) {
+              rawProductName = inv.name;
+            }
+          }
+        }
+
+        const canonicalName = getCanonicalProductName(rawProductName);
+        const itemUnit = item.unit || findUnitForProduct(canonicalName) || findUnitForProduct(rawProductName);
+        const normKey = `${normalizeProductName(canonicalName)}_${itemUnit}_${itemSource}`;
         const qty = item.quantity;
         
         if (!aggregation[normKey]) {

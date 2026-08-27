@@ -465,8 +465,8 @@ export default function HarvestReport({ sales, produceCatalog, inventory }: Harv
                 }`}
               >
                 {/* Cabeçalho do Card */}
-                <div className="flex items-center justify-between p-4 gap-4">
-                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                <div className="flex items-center justify-between p-3 sm:p-4 gap-2 sm:gap-4">
+                  <div className="flex items-center gap-2.5 sm:gap-3 flex-1 min-w-0">
                     <button
                       type="button"
                       onClick={() => handleToggleProduct(item.name)}
@@ -483,36 +483,36 @@ export default function HarvestReport({ sales, produceCatalog, inventory }: Harv
                       className="flex-1 min-w-0 cursor-pointer"
                       onClick={() => setExpandedProduct(isExpanded ? null : item.name)}
                     >
-                      <div className="flex items-center gap-2">
-                        <span className={`text-sm md:text-base font-black text-slate-800 block truncate ${isChecked ? 'line-through text-slate-400 font-bold' : ''}`}>
-                          {item.name}
-                        </span>
-                        <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-md border ${
+                      <span className={`text-sm sm:text-base font-black text-slate-800 block leading-tight break-words ${isChecked ? 'line-through text-slate-400 font-bold' : ''}`}>
+                        {item.name}
+                      </span>
+                      <div className="flex items-center flex-wrap gap-1.5 mt-1">
+                        <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-md border shrink-0 ${
                           item.source === 'third_party' 
                             ? 'bg-amber-50 text-amber-700 border-amber-200' 
                             : 'bg-emerald-50 text-emerald-700 border-emerald-200'
                         }`}>
                           {item.source === 'third_party' ? '🛒 Terceiro / Revenda' : '🌿 Horta'}
                         </span>
+                        <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wider shrink-0">
+                          • {item.customers.length} {item.customers.length === 1 ? 'pedido' : 'pedidos'}
+                        </span>
                       </div>
-                      <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wider block mt-0.5">
-                        {item.customers.length} {item.customers.length === 1 ? 'pedido' : 'pedidos pendentes'}
-                      </span>
                     </div>
                   </div>
 
                   <div 
-                    className="flex items-center gap-3 shrink-0 cursor-pointer"
+                    className="flex items-center gap-1.5 sm:gap-3 shrink-0 cursor-pointer"
                     onClick={() => setExpandedProduct(isExpanded ? null : item.name)}
                   >
-                    <span className={`text-base md:text-lg font-black px-4 py-1.5 rounded-xl ${
+                    <span className={`text-xs sm:text-base md:text-lg font-black px-2.5 sm:px-4 py-1 sm:py-1.5 rounded-xl whitespace-nowrap ${
                       isChecked ? 'bg-slate-100 text-slate-400' : 'bg-emerald-50 text-emerald-800 border border-emerald-100'
                     }`}>
                       {Number.isInteger(item.totalQty) ? item.totalQty : item.totalQty.toFixed(2)} {formatUnit(item.unit, item.totalQty)}
                     </span>
                     <ChevronDown 
-                      size={18} 
-                      className={`text-slate-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} 
+                      size={16} 
+                      className={`text-slate-400 transition-transform sm:w-[18px] sm:h-[18px] shrink-0 ${isExpanded ? 'rotate-180' : ''}`} 
                     />
                   </div>
                 </div>

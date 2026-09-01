@@ -1,11 +1,13 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Sale, 
   SaleItem, 
   ProduceCatalogItem, 
   InventoryItem, 
   Customer, 
-  PaymentMethod 
+  PaymentMethod,
+  ThirdPartyPurchase,
+  ThirdPartyStockItem
 } from '../types';
 import { 
   Plus, 
@@ -34,62 +36,82 @@ import {
   Package,
   Layers,
   ArrowRight,
-  Info
+  Info,
+  Building2,
+  User,
+  UserCheck,
+  UserPlus,
+  X,
+  Edit3,
+  Save,
+  Settings,
+  RotateCcw,
+  SlidersHorizontal,
+  Shuffle
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import { collection, addDoc, updateDoc, deleteDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, Timestamp, query, orderBy, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { getCanonicalProductName, normalizeProductName } from '../productUtils';
-import { cn } from '../App';
+import { cn, handleFirestoreError, OperationType } from '../App';
 
-interface KgSalesManagerProps {
+export interface KgSalesManagerProps {
   sales: Sale[];
   produceCatalog: ProduceCatalogItem[];
   inventory: InventoryItem[];
   customers: Customer[];
-  onRefreshSales?: () => void;
 }
 
-// Lista de sugestões de produtos populares de terceiros para compra/revenda (todos em kg por padrão)
-const POPULAR_THIRD_PARTY_ITEMS = [
-  { name: 'Alface Americana (Revenda)', defaultCost: 6.00, defaultPrice: 12.00, unit: 'kg' },
-  { name: 'Alface Crespa (Revenda)', defaultCost: 5.00, defaultPrice: 10.00, unit: 'kg' },
-  { name: 'Rúcula (Revenda)', defaultCost: 7.00, defaultPrice: 14.00, unit: 'kg' },
-  { name: 'Couve Manteiga (Revenda)', defaultCost: 5.00, defaultPrice: 10.00, unit: 'kg' },
-  { name: 'Espinafre (Revenda)', defaultCost: 6.00, defaultPrice: 12.00, unit: 'kg' },
-  { name: 'Agrião (Revenda)', defaultCost: 6.00, defaultPrice: 12.00, unit: 'kg' },
-  { name: 'Repolho Verde', defaultCost: 2.50, defaultPrice: 5.00, unit: 'kg' },
-  { name: 'Repolho Roxo', defaultCost: 3.50, defaultPrice: 7.00, unit: 'kg' },
-  { name: 'Brócolis Ninja', defaultCost: 7.00, defaultPrice: 14.00, unit: 'kg' },
-  { name: 'Couve-Flor', defaultCost: 6.00, defaultPrice: 12.00, unit: 'kg' },
-  { name: 'Tomate Italiano', defaultCost: 4.50, defaultPrice: 8.50, unit: 'kg' },
-  { name: 'Tomate Carmem / Longa Vida', defaultCost: 4.00, defaultPrice: 7.50, unit: 'kg' },
-  { name: 'Tomate Cereja', defaultCost: 6.00, defaultPrice: 12.00, unit: 'kg' },
-  { name: 'Batata Inglesa', defaultCost: 3.50, defaultPrice: 6.00, unit: 'kg' },
-  { name: 'Batata Doce', defaultCost: 3.00, defaultPrice: 5.50, unit: 'kg' },
-  { name: 'Cenoura Especial', defaultCost: 3.80, defaultPrice: 6.50, unit: 'kg' },
-  { name: 'Beterraba', defaultCost: 3.50, defaultPrice: 6.00, unit: 'kg' },
-  { name: 'Cebola Roxa', defaultCost: 4.50, defaultPrice: 7.90, unit: 'kg' },
-  { name: 'Cebola Nacional', defaultCost: 3.20, defaultPrice: 5.80, unit: 'kg' },
-  { name: 'Pimentão Verde', defaultCost: 4.00, defaultPrice: 7.00, unit: 'kg' },
-  { name: 'Pimentão Vermelho/Amarelo', defaultCost: 8.00, defaultPrice: 15.00, unit: 'kg' },
-  { name: 'Abobrinha Italiana', defaultCost: 3.20, defaultPrice: 6.00, unit: 'kg' },
-  { name: 'Abobrinha Menina', defaultCost: 3.50, defaultPrice: 6.50, unit: 'kg' },
-  { name: 'Chuchu', defaultCost: 2.00, defaultPrice: 4.50, unit: 'kg' },
-  { name: 'Pepino Japonês', defaultCost: 3.50, defaultPrice: 6.90, unit: 'kg' },
-  { name: 'Mandioca / Aipim Descascado', defaultCost: 4.00, defaultPrice: 8.00, unit: 'kg' },
-  { name: 'Alho Roxo', defaultCost: 18.00, defaultPrice: 32.00, unit: 'kg' },
-  { name: 'Banana Prata', defaultCost: 3.50, defaultPrice: 6.50, unit: 'kg' },
-  { name: 'Banana Nanica', defaultCost: 2.80, defaultPrice: 5.50, unit: 'kg' },
-  { name: 'Laranja Pera', defaultCost: 2.50, defaultPrice: 4.90, unit: 'kg' },
-  { name: 'Limão Taiti', defaultCost: 3.00, defaultPrice: 6.00, unit: 'kg' },
-  { name: 'Maçã Gala', defaultCost: 5.50, defaultPrice: 9.90, unit: 'kg' },
-  { name: 'Mamão Formosa', defaultCost: 3.80, defaultPrice: 7.00, unit: 'kg' },
-  { name: 'Melancia', defaultCost: 1.80, defaultPrice: 3.50, unit: 'kg' },
-  { name: 'Melão Amarelo', defaultCost: 3.80, defaultPrice: 7.00, unit: 'kg' },
-  { name: 'Ovos Caipira (Dúzia)', defaultCost: 9.00, defaultPrice: 15.00, unit: 'dz' }
+export interface ThirdPartyPreset {
+  id: string;
+  name: string;
+  defaultCost: number;
+  defaultPrice: number;
+  unit: string;
+}
+
+// Lista padrão inicial de sugestões de produtos de terceiros para compra/revenda
+export const DEFAULT_POPULAR_THIRD_PARTY_ITEMS: ThirdPartyPreset[] = [
+  { id: 'tp_1', name: 'Alface Americana (Revenda)', defaultCost: 6.00, defaultPrice: 12.00, unit: 'kg' },
+  { id: 'tp_2', name: 'Alface Crespa (Revenda)', defaultCost: 5.00, defaultPrice: 10.00, unit: 'kg' },
+  { id: 'tp_3', name: 'Rúcula (Revenda)', defaultCost: 7.00, defaultPrice: 14.00, unit: 'kg' },
+  { id: 'tp_4', name: 'Couve Manteiga (Revenda)', defaultCost: 5.00, defaultPrice: 10.00, unit: 'kg' },
+  { id: 'tp_5', name: 'Espinafre (Revenda)', defaultCost: 6.00, defaultPrice: 12.00, unit: 'kg' },
+  { id: 'tp_6', name: 'Agrião (Revenda)', defaultCost: 6.00, defaultPrice: 12.00, unit: 'kg' },
+  { id: 'tp_7', name: 'Repolho Verde', defaultCost: 2.50, defaultPrice: 5.00, unit: 'kg' },
+  { id: 'tp_8', name: 'Repolho Roxo', defaultCost: 3.50, defaultPrice: 7.00, unit: 'kg' },
+  { id: 'tp_9', name: 'Brócolis Ninja', defaultCost: 7.00, defaultPrice: 14.00, unit: 'kg' },
+  { id: 'tp_10', name: 'Couve-Flor', defaultCost: 6.00, defaultPrice: 12.00, unit: 'kg' },
+  { id: 'tp_11', name: 'Tomate Italiano', defaultCost: 4.50, defaultPrice: 8.50, unit: 'kg' },
+  { id: 'tp_12', name: 'Tomate Carmem / Longa Vida', defaultCost: 4.00, defaultPrice: 7.50, unit: 'kg' },
+  { id: 'tp_13', name: 'Tomate Cereja', defaultCost: 6.00, defaultPrice: 12.00, unit: 'kg' },
+  { id: 'tp_14', name: 'Batata Inglesa', defaultCost: 3.50, defaultPrice: 6.00, unit: 'kg' },
+  { id: 'tp_15', name: 'Batata Doce', defaultCost: 3.00, defaultPrice: 5.50, unit: 'kg' },
+  { id: 'tp_16', name: 'Cenoura Especial', defaultCost: 3.80, defaultPrice: 6.50, unit: 'kg' },
+  { id: 'tp_17', name: 'Beterraba', defaultCost: 3.50, defaultPrice: 6.00, unit: 'kg' },
+  { id: 'tp_18', name: 'Cebola Roxa', defaultCost: 4.50, defaultPrice: 7.90, unit: 'kg' },
+  { id: 'tp_19', name: 'Cebola Nacional', defaultCost: 3.20, defaultPrice: 5.80, unit: 'kg' },
+  { id: 'tp_20', name: 'Pimentão Verde', defaultCost: 4.00, defaultPrice: 7.00, unit: 'kg' },
+  { id: 'tp_21', name: 'Pimentão Vermelho/Amarelo', defaultCost: 8.00, defaultPrice: 15.00, unit: 'kg' },
+  { id: 'tp_22', name: 'Abobrinha Italiana', defaultCost: 3.20, defaultPrice: 6.00, unit: 'kg' },
+  { id: 'tp_23', name: 'Abobrinha Menina', defaultCost: 3.50, defaultPrice: 6.50, unit: 'kg' },
+  { id: 'tp_24', name: 'Chuchu', defaultCost: 2.00, defaultPrice: 4.50, unit: 'kg' },
+  { id: 'tp_25', name: 'Pepino Japonês', defaultCost: 3.50, defaultPrice: 6.90, unit: 'kg' },
+  { id: 'tp_26', name: 'Mandioca / Aipim Descascado', defaultCost: 4.00, defaultPrice: 8.00, unit: 'kg' },
+  { id: 'tp_27', name: 'Alho Roxo', defaultCost: 18.00, defaultPrice: 32.00, unit: 'kg' },
+  { id: 'tp_28', name: 'Banana Prata', defaultCost: 3.50, defaultPrice: 6.50, unit: 'kg' },
+  { id: 'tp_29', name: 'Banana Nanica', defaultCost: 2.80, defaultPrice: 5.50, unit: 'kg' },
+  { id: 'tp_30', name: 'Laranja Pera', defaultCost: 2.50, defaultPrice: 4.90, unit: 'kg' },
+  { id: 'tp_31', name: 'Limão Taiti', defaultCost: 3.00, defaultPrice: 6.00, unit: 'kg' },
+  { id: 'tp_32', name: 'Maçã Gala', defaultCost: 5.50, defaultPrice: 9.90, unit: 'kg' },
+  { id: 'tp_33', name: 'Mamão Formosa', defaultCost: 3.80, defaultPrice: 7.00, unit: 'kg' },
+  { id: 'tp_34', name: 'Melancia', defaultCost: 1.80, defaultPrice: 3.50, unit: 'kg' },
+  { id: 'tp_35', name: 'Melão Amarelo', defaultCost: 3.80, defaultPrice: 7.00, unit: 'kg' },
+  { id: 'tp_36', name: 'Ovos Caipira (Dúzia)', defaultCost: 9.00, defaultPrice: 15.00, unit: 'dz' }
 ];
+
+const POPULAR_THIRD_PARTY_ITEMS = DEFAULT_POPULAR_THIRD_PARTY_ITEMS;
 
 export default function KgSalesManager({
   sales,
@@ -118,6 +140,15 @@ export default function KgSalesManager({
   const [expenseSavedFeedback, setExpenseSavedFeedback] = useState(false);
 
   // Estados do Formulário de Pedido por KG
+  const [selectedCustomerId, setSelectedCustomerId] = useState('');
+  const [customerSearchTerm, setCustomerSearchTerm] = useState('');
+  const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
+  const [isQuickAddCustomerOpen, setIsQuickAddCustomerOpen] = useState(false);
+  const [newCustomerCompanyName, setNewCustomerCompanyName] = useState('');
+  const [newCustomerContactName, setNewCustomerContactName] = useState('');
+  const [newCustomerPhone, setNewCustomerPhone] = useState('');
+  const [quickSavingCustomer, setQuickSavingCustomer] = useState(false);
+
   const [clientPhone, setClientPhone] = useState('');
   const [clientName, setClientName] = useState('');
   const [clientAddress, setClientAddress] = useState('');
@@ -127,8 +158,132 @@ export default function KgSalesManager({
   );
   const [orderItems, setOrderItems] = useState<SaleItem[]>([]);
   const [paymentOption, setPaymentOption] = useState('Pagar na Entrega');
-  const [productOriginTab, setProductOriginTab] = useState<'own' | 'third_party'>('own');
+  const [productOriginTab, setProductOriginTab] = useState<'own' | 'third_stock' | 'mixed' | 'third_custom'>('own');
   const [productSearch, setProductSearch] = useState('');
+
+  // Compras de Terceiros reais do Firestore para cálculo de estoque
+  const [thirdPartyPurchases, setThirdPartyPurchases] = useState<ThirdPartyPurchase[]>([]);
+
+  useEffect(() => {
+    const q = query(collection(db, 'third_party_purchases'), orderBy('purchaseDate', 'desc'));
+    const unsub = onSnapshot(q, (snapshot) => {
+      const docs = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as ThirdPartyPurchase));
+      setThirdPartyPurchases(docs);
+    }, (err) => {
+      console.error("Erro ao escutar compras em KgSalesManager:", err);
+    });
+    return () => unsub();
+  }, []);
+
+  // Estoque Dinâmico Calculado de Produtos Comprados de Terceiros
+  const calculatedThirdPartyStock = useMemo(() => {
+    const stockMap = new Map<string, {
+      name: string;
+      canonicalName: string;
+      unit: string;
+      totalPurchased: number;
+      totalSold: number;
+      currentStock: number;
+      averageCost: number;
+      latestCost: number;
+      lastSupplier?: string;
+    }>();
+
+    // 1. Somar compras cadastradas
+    (thirdPartyPurchases || []).forEach(p => {
+      (p.items || []).forEach(it => {
+        const canonical = getCanonicalProductName(it.name);
+        const key = `${normalizeProductName(canonical)}_${it.unit || 'kg'}`;
+        if (!stockMap.has(key)) {
+          stockMap.set(key, {
+            name: it.name,
+            canonicalName: canonical,
+            unit: it.unit || 'kg',
+            totalPurchased: 0,
+            totalSold: 0,
+            currentStock: 0,
+            averageCost: it.unitCost || 0,
+            latestCost: it.unitCost || 0,
+            lastSupplier: p.supplierName
+          });
+        }
+        const item = stockMap.get(key)!;
+        const prevQty = item.totalPurchased;
+        const newQty = prevQty + (Number(it.quantity) || 0);
+        const prevVal = prevQty * item.averageCost;
+        const newVal = prevVal + ((Number(it.quantity) || 0) * (Number(it.unitCost) || 0));
+        item.totalPurchased = newQty;
+        item.averageCost = newQty > 0 ? Number((newVal / newQty).toFixed(2)) : (it.unitCost || 0);
+        item.latestCost = it.unitCost || item.averageCost;
+        if (p.supplierName) item.lastSupplier = p.supplierName;
+      });
+    });
+
+    // 2. Deduzir vendas realizadas
+    (sales || []).forEach(s => {
+      if (s.status === 'cancelled') return;
+      (s.items || []).forEach(it => {
+        if (it.source === 'third_party') {
+          const canonical = getCanonicalProductName(it.name);
+          const key = `${normalizeProductName(canonical)}_${it.unit || 'kg'}`;
+          if (!stockMap.has(key)) {
+            stockMap.set(key, {
+              name: it.name,
+              canonicalName: canonical,
+              unit: it.unit || 'kg',
+              totalPurchased: 0,
+              totalSold: 0,
+              currentStock: 0,
+              averageCost: Number(it.cost || it.estimatedCost || 0),
+              latestCost: Number(it.cost || it.estimatedCost || 0)
+            });
+          }
+          const item = stockMap.get(key)!;
+          item.totalSold += (Number(it.actualWeightedQty || it.quantity) || 0);
+        }
+      });
+    });
+
+    stockMap.forEach(item => {
+      item.currentStock = Number((item.totalPurchased - item.totalSold).toFixed(2));
+    });
+
+    return Array.from(stockMap.values()).sort((a, b) => a.canonicalName.localeCompare(b.canonicalName, 'pt-BR'));
+  }, [thirdPartyPurchases, sales]);
+
+  // Estados para Composição de Item Misto (Horta Própria + Estoque de Terceiros)
+  const [mixedSelectedProduct, setMixedSelectedProduct] = useState('');
+  const [mixedTotalRequestedQty, setMixedTotalRequestedQty] = useState<number | ''>('');
+  const [mixedSalePrice, setMixedSalePrice] = useState<number | ''>('');
+  const [mixedOwnQty, setMixedOwnQty] = useState<number | ''>('');
+  const [mixedThirdQty, setMixedThirdQty] = useState<number | ''>('');
+  const [mixedThirdCost, setMixedThirdCost] = useState<number | ''>('');
+  const [mixedUnit, setMixedUnit] = useState('kg');
+
+  // Clientes cadastrados filtrados
+  const filteredRegisteredCustomers = useMemo(() => {
+    const term = customerSearchTerm.toLowerCase().trim();
+    if (!term) return customers;
+    return customers.filter(c => 
+      (c.companyName || '').toLowerCase().includes(term) ||
+      (c.contactName || '').toLowerCase().includes(term) ||
+      (c.phone || '').replace(/\D/g, '').includes(term.replace(/\D/g, ''))
+    );
+  }, [customers, customerSearchTerm]);
+
+  // Cliente cadastrado selecionado
+  const currentSelectedCustomer = useMemo(() => {
+    if (selectedCustomerId) {
+      return customers.find(c => c.id === selectedCustomerId) || null;
+    }
+    if (clientName) {
+      return customers.find(c => 
+        (c.companyName && c.companyName.trim().toLowerCase() === clientName.trim().toLowerCase()) ||
+        (c.contactName && c.contactName.trim().toLowerCase() === clientName.trim().toLowerCase())
+      ) || null;
+    }
+    return null;
+  }, [customers, selectedCustomerId, clientName]);
 
   // Itens customizados de terceiros digitados na hora
   const [customItemName, setCustomItemName] = useState('');
@@ -137,6 +292,37 @@ export default function KgSalesManager({
   const [customItemCost, setCustomItemCost] = useState<number | ''>('');
   const [customItemPrice, setCustomItemPrice] = useState<number | ''>('');
   const [customItemSupplierNotes, setCustomItemSupplierNotes] = useState('');
+  const [saveToPresets, setSaveToPresets] = useState(false);
+
+  // Produtos pré-salvos de terceiros (armazenados em localStorage para permitir edição, exclusão e novos cadastros sem limites de valor)
+  const [thirdPartyPresets, setThirdPartyPresets] = useState<ThirdPartyPreset[]>(() => {
+    try {
+      const saved = localStorage.getItem('kg_sales_third_party_presets');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {
+      console.error('Error loading third party presets from localStorage', e);
+    }
+    return DEFAULT_POPULAR_THIRD_PARTY_ITEMS;
+  });
+
+  const [isPresetsManagerOpen, setIsPresetsManagerOpen] = useState(false);
+  const [presetSearch, setPresetSearch] = useState('');
+  const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
+  const [editingPresetData, setEditingPresetData] = useState<{ name: string; defaultCost: number; defaultPrice: number; unit: string } | null>(null);
+  const [newPresetForm, setNewPresetForm] = useState<{ name: string; defaultCost: number | ''; defaultPrice: number | ''; unit: string }>({
+    name: '',
+    defaultCost: '',
+    defaultPrice: '',
+    unit: 'kg'
+  });
+
+  // Edição de custos na lista consolidada de compras e nos cards de pedidos
+  const [shoppingListCosts, setShoppingListCosts] = useState<Record<string, number>>({});
+  const [editingCardItemCost, setEditingCardItemCost] = useState<{ saleId: string; itemIndex: number; cost: number } | null>(null);
+  const [costUpdatedFeedbackKey, setCostUpdatedFeedbackKey] = useState<string | null>(null);
 
   // Catálogo deduplicado
   const uniqueCatalog = useMemo(() => {
@@ -322,24 +508,89 @@ export default function KgSalesManager({
     return Array.from(productMap.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [filteredKgSales]);
 
+  // Selecionar cliente cadastrado
+  const handleSelectCustomer = (customer: Customer) => {
+    setSelectedCustomerId(customer.id);
+    const displayName = customer.companyName || customer.contactName;
+    setClientName(displayName);
+    setClientPhone(customer.phone || '');
+    setIsCustomerDropdownOpen(false);
+    setCustomerSearchTerm('');
+    setError(null);
+
+    // Auto-preencher endereço de entregas anteriores deste cliente se disponível
+    const prevSale = sales.find(s => 
+      (s.customerName && s.customerName.toLowerCase() === displayName.toLowerCase()) ||
+      (customer.phone && s.customerPhone && s.customerPhone.replace(/\D/g, '') === customer.phone.replace(/\D/g, ''))
+    );
+    if (prevSale) {
+      if (prevSale.deliveryAddress && !clientAddress) setClientAddress(prevSale.deliveryAddress);
+      if (prevSale.observations && !clientNotes) setClientNotes(prevSale.observations);
+    }
+  };
+
+  // Cadastrar novo cliente rapidamente no Firestore
+  const handleQuickCreateCustomer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCustomerCompanyName.trim() && !newCustomerContactName.trim()) {
+      setError('Informe a empresa / razão social ou contato do cliente.');
+      return;
+    }
+    setQuickSavingCustomer(true);
+    setError(null);
+    try {
+      const compName = newCustomerCompanyName.trim() || newCustomerContactName.trim();
+      const contName = newCustomerContactName.trim() || newCustomerCompanyName.trim();
+      const phoneVal = newCustomerPhone.trim() || '';
+
+      const docRef = await addDoc(collection(db, 'customers'), {
+        companyName: compName,
+        contactName: contName,
+        phone: phoneVal
+      });
+
+      setSelectedCustomerId(docRef.id);
+      setClientName(compName);
+      setClientPhone(phoneVal);
+      setIsQuickAddCustomerOpen(false);
+      setIsCustomerDropdownOpen(false);
+      setNewCustomerCompanyName('');
+      setNewCustomerContactName('');
+      setNewCustomerPhone('');
+    } catch (err: any) {
+      console.error("Erro ao cadastrar cliente:", err);
+      setError('Erro ao cadastrar cliente: ' + (err.message || 'Erro'));
+      handleFirestoreError(err, OperationType.WRITE, 'customers');
+    } finally {
+      setQuickSavingCustomer(false);
+    }
+  };
+
   // Auto-preenchimento ao digitar telefone
   const handlePhoneChange = (phoneVal: string) => {
     setClientPhone(phoneVal);
     const clean = phoneVal.replace(/\D/g, '');
     if (clean.length >= 8) {
-      // 1. Procura em vendas anteriores
-      const prevSale = sales.find(s => s.customerPhone && s.customerPhone.replace(/\D/g, '').includes(clean));
-      if (prevSale) {
-        if (!clientName && prevSale.customerName) setClientName(prevSale.customerName);
-        if (!clientAddress && prevSale.deliveryAddress) setClientAddress(prevSale.deliveryAddress);
-        if (!clientNotes && prevSale.observations) setClientNotes(prevSale.observations);
+      // 1. Procura em clientes cadastrados
+      const matchedCust = customers.find(c => c.phone && c.phone.replace(/\D/g, '').includes(clean));
+      if (matchedCust) {
+        handleSelectCustomer(matchedCust);
         return;
       }
 
-      // 2. Procura em clientes cadastrados
-      const prevCust = customers.find(c => c.phone && c.phone.replace(/\D/g, '').includes(clean));
-      if (prevCust) {
-        if (!clientName) setClientName(prevCust.companyName || prevCust.contactName);
+      // 2. Procura em vendas anteriores
+      const prevSale = sales.find(s => s.customerPhone && s.customerPhone.replace(/\D/g, '').includes(clean));
+      if (prevSale) {
+        if (!clientName && prevSale.customerName) {
+          const cust = customers.find(c => c.companyName?.toLowerCase() === prevSale.customerName?.toLowerCase());
+          if (cust) {
+            handleSelectCustomer(cust);
+          } else {
+            setClientName(prevSale.customerName);
+          }
+        }
+        if (!clientAddress && prevSale.deliveryAddress) setClientAddress(prevSale.deliveryAddress);
+        if (!clientNotes && prevSale.observations) setClientNotes(prevSale.observations);
       }
     }
   };
@@ -347,8 +598,17 @@ export default function KgSalesManager({
   // Abrir Modal de Novo Pedido
   const handleOpenNewOrderModal = (saleToEdit?: Sale) => {
     setError(null);
+    setIsQuickAddCustomerOpen(false);
+    setIsCustomerDropdownOpen(false);
+    setCustomerSearchTerm('');
     if (saleToEdit) {
       setEditingSale(saleToEdit);
+      const matched = customers.find(c => 
+        (c.companyName && saleToEdit.customerName && c.companyName.toLowerCase() === saleToEdit.customerName.toLowerCase()) ||
+        (c.contactName && saleToEdit.customerName && c.contactName.toLowerCase() === saleToEdit.customerName.toLowerCase()) ||
+        (c.phone && saleToEdit.customerPhone && c.phone.replace(/\D/g, '') === saleToEdit.customerPhone.replace(/\D/g, ''))
+      );
+      setSelectedCustomerId(matched ? matched.id : '');
       setClientName(saleToEdit.customerName || '');
       setClientPhone(saleToEdit.customerPhone || '');
       setClientAddress(saleToEdit.deliveryAddress || '');
@@ -359,6 +619,7 @@ export default function KgSalesManager({
       setPaymentOption(saleToEdit.paymentMethods?.[0]?.method || 'Pagar na Entrega');
     } else {
       setEditingSale(null);
+      setSelectedCustomerId('');
       setClientName('');
       setClientPhone('');
       setClientAddress('');
@@ -397,8 +658,168 @@ export default function KgSalesManager({
     }
   };
 
+  // Salvar presets atualizados no LocalStorage
+  const handleSavePresetsToStorage = (updated: ThirdPartyPreset[]) => {
+    setThirdPartyPresets(updated);
+    try {
+      localStorage.setItem('kg_sales_third_party_presets', JSON.stringify(updated));
+    } catch (e) {
+      console.error('Erro ao salvar produtos pré-salvos no localStorage', e);
+    }
+  };
+
+  // Cadastrar novo produto pré-salvo
+  const handleAddPreset = () => {
+    if (!newPresetForm.name.trim()) {
+      return;
+    }
+    const cost = Number(newPresetForm.defaultCost) || 0;
+    const price = Number(newPresetForm.defaultPrice) || 0;
+    const canonical = getCanonicalProductName(newPresetForm.name.trim());
+
+    const newPreset: ThirdPartyPreset = {
+      id: `preset_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+      name: canonical,
+      defaultCost: cost,
+      defaultPrice: price,
+      unit: newPresetForm.unit || 'kg'
+    };
+
+    const updated = [newPreset, ...thirdPartyPresets];
+    handleSavePresetsToStorage(updated);
+    setNewPresetForm({ name: '', defaultCost: '', defaultPrice: '', unit: 'kg' });
+  };
+
+  // Atualizar produto pré-salvo existente
+  const handleUpdatePreset = (id: string, updatedFields: Partial<ThirdPartyPreset>) => {
+    const updated = thirdPartyPresets.map(p => p.id === id ? { ...p, ...updatedFields } : p);
+    handleSavePresetsToStorage(updated);
+    if (editingPresetId === id && editingPresetData) {
+      setEditingPresetData({ ...editingPresetData, ...updatedFields });
+    }
+  };
+
+  // Excluir produto pré-salvo
+  const handleDeletePreset = (id: string) => {
+    const updated = thirdPartyPresets.filter(p => p.id !== id);
+    handleSavePresetsToStorage(updated);
+    if (editingPresetId === id) {
+      setEditingPresetId(null);
+      setEditingPresetData(null);
+    }
+  };
+
+  // Restaurar lista padrão de fábrica
+  const handleResetPresetsToDefault = () => {
+    if (window.confirm('Deseja restaurar a lista padrão de produtos de terceiros? Todas as suas edições e produtos personalizados serão redefinidos para os padrões de fábrica.')) {
+      handleSavePresetsToStorage(DEFAULT_POPULAR_THIRD_PARTY_ITEMS);
+      setEditingPresetId(null);
+      setEditingPresetData(null);
+    }
+  };
+
+  // Adicionar item direto do estoque comprado de terceiros
+  const handleAddThirdPartyStockItem = (stockItem: { canonicalName: string; name: string; unit: string; currentStock: number; averageCost: number; latestCost: number; lastSupplier?: string }) => {
+    const canonical = stockItem.canonicalName;
+    const existingIndex = orderItems.findIndex(
+      i => normalizeProductName(i.name) === normalizeProductName(canonical) && i.source === 'third_party'
+    );
+
+    const costToUse = stockItem.latestCost || stockItem.averageCost || 0;
+    // Preço sugerido padrão de venda: busca preset ou dobra o custo
+    const matchedPreset = thirdPartyPresets.find(p => normalizeProductName(p.name) === normalizeProductName(canonical));
+    const suggestedPrice = matchedPreset?.defaultPrice || (costToUse > 0 ? costToUse * 1.8 : 10.00);
+
+    if (existingIndex >= 0) {
+      const updated = [...orderItems];
+      updated[existingIndex].quantity = (Number(updated[existingIndex].quantity) || 0) + 1;
+      setOrderItems(updated);
+    } else {
+      const newItem: SaleItem = {
+        itemId: `third_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+        name: `${canonical} (Revenda)`,
+        quantity: 1,
+        unit: stockItem.unit || 'kg',
+        price: Number(suggestedPrice.toFixed(2)),
+        cost: Number(costToUse.toFixed(2)),
+        estimatedCost: Number(costToUse.toFixed(2)),
+        source: 'third_party',
+        purchased: stockItem.currentStock > 0, // se tem em estoque, já está comprado
+        supplierNotes: stockItem.lastSupplier ? `Fornecedor: ${stockItem.lastSupplier}` : undefined,
+        originalRequestedQty: 1
+      };
+      setOrderItems([...orderItems, newItem]);
+    }
+  };
+
+  // Adicionar composição mista (X kg Horta Própria + Y kg Terceiro Comprado)
+  const handleAddMixedItem = () => {
+    if (!mixedSelectedProduct.trim()) {
+      setError('Selecione ou digite o nome do produto para a composição.');
+      return;
+    }
+
+    const ownQ = Number(mixedOwnQty) || 0;
+    const thirdQ = Number(mixedThirdQty) || 0;
+    const sPrice = Number(mixedSalePrice) || 0;
+    const tCost = Number(mixedThirdCost) || 0;
+
+    if (ownQ <= 0 && thirdQ <= 0) {
+      setError('Informe a quantidade de produção própria ou a quantidade de terceiros.');
+      return;
+    }
+
+    if (sPrice <= 0) {
+      setError('Informe o preço unitário de venda por kg para o cliente.');
+      return;
+    }
+
+    const canonical = getCanonicalProductName(mixedSelectedProduct.trim());
+    const newItems: SaleItem[] = [];
+
+    if (ownQ > 0) {
+      newItems.push({
+        itemId: `own_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+        name: `${canonical} (Horta Própria)`,
+        quantity: ownQ,
+        unit: mixedUnit || 'kg',
+        price: sPrice,
+        cost: 0,
+        source: 'own_production',
+        purchased: true,
+        originalRequestedQty: ownQ
+      });
+    }
+
+    if (thirdQ > 0) {
+      newItems.push({
+        itemId: `third_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+        name: `${canonical} (Revenda)`,
+        quantity: thirdQ,
+        unit: mixedUnit || 'kg',
+        price: sPrice,
+        cost: tCost,
+        estimatedCost: tCost,
+        source: 'third_party',
+        purchased: false,
+        originalRequestedQty: thirdQ
+      });
+    }
+
+    setOrderItems([...orderItems, ...newItems]);
+
+    // Limpar campos
+    setMixedSelectedProduct('');
+    setMixedTotalRequestedQty('');
+    setMixedOwnQty('');
+    setMixedThirdQty('');
+    setMixedSalePrice('');
+    setMixedThirdCost('');
+    setError(null);
+  };
+
   // Adicionar item sugerido de terceiros
-  const handleAddSuggestedThirdParty = (item: typeof POPULAR_THIRD_PARTY_ITEMS[0]) => {
+  const handleAddSuggestedThirdParty = (item: ThirdPartyPreset) => {
     const canonical = getCanonicalProductName(item.name);
     const existingIndex = orderItems.findIndex(
       i => normalizeProductName(i.name) === normalizeProductName(canonical) && i.source === 'third_party'
@@ -414,9 +835,9 @@ export default function KgSalesManager({
         name: canonical,
         quantity: 1,
         unit: item.unit || 'kg',
-        price: item.defaultPrice,
-        cost: item.defaultCost,
-        estimatedCost: item.defaultCost,
+        price: Number(item.defaultPrice) || 0,
+        cost: Number(item.defaultCost) || 0,
+        estimatedCost: Number(item.defaultCost) || 0,
         source: 'third_party',
         purchased: false,
         originalRequestedQty: 1
@@ -451,11 +872,28 @@ export default function KgSalesManager({
     };
 
     setOrderItems([...orderItems, newItem]);
+
+    // Se o usuário optou por salvar nos pré-salvos
+    if (saveToPresets) {
+      const alreadyExists = thirdPartyPresets.some(p => normalizeProductName(p.name) === normalizeProductName(canonical));
+      if (!alreadyExists) {
+        const newPreset: ThirdPartyPreset = {
+          id: `preset_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+          name: canonical,
+          defaultCost: cost,
+          defaultPrice: price,
+          unit: customItemUnit.trim() || 'kg'
+        };
+        handleSavePresetsToStorage([newPreset, ...thirdPartyPresets]);
+      }
+    }
+
     setCustomItemName('');
     setCustomItemQty('');
     setCustomItemCost('');
     setCustomItemPrice('');
     setCustomItemSupplierNotes('');
+    setSaveToPresets(false);
     setError(null);
   };
 
@@ -509,10 +947,19 @@ export default function KgSalesManager({
   // Salvar Pedido por KG no Firestore
   const handleSaveKgOrder = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!clientName.trim()) {
-      setError('Informe o nome do cliente.');
+
+    // Validação obrigatória de cliente previamente cadastrado
+    const matchedCustomer = customers.find(c => 
+      (selectedCustomerId && c.id === selectedCustomerId) ||
+      (clientName && c.companyName?.trim().toLowerCase() === clientName.trim().toLowerCase()) ||
+      (clientName && c.contactName?.trim().toLowerCase() === clientName.trim().toLowerCase())
+    );
+
+    if (!matchedCustomer) {
+      setError('⚠️ Na Venda por KG (vendas de alto valor), é obrigatório selecionar um cliente cadastrado. Selecione um cliente da lista ou clique em "+ Cadastrar Novo Cliente".');
       return;
     }
+
     if (orderItems.length === 0) {
       setError('Adicione pelo menos um produto ao pedido.');
       return;
@@ -522,31 +969,73 @@ export default function KgSalesManager({
     setError(null);
 
     try {
-      const deliveryDateObj = deliveryDateInput ? new Date(deliveryDateInput + 'T12:00:00') : new Date();
+      let deliveryDateObj: Date = new Date();
+      if (deliveryDateInput && deliveryDateInput.trim()) {
+        const d = new Date(deliveryDateInput + 'T12:00:00');
+        if (!isNaN(d.getTime())) {
+          deliveryDateObj = d;
+        }
+      }
+
       const allThirdPurchased = !orderItems.some(i => i.source === 'third_party' && !i.purchased);
 
-      const saleData: Partial<Sale> = {
+      // Sanitiza rigorosamente cada item para evitar valores undefined que corrompem o Firestore
+      const sanitizedItems: SaleItem[] = orderItems.map((item, idx) => {
+        const qty = Number(item.quantity) || 1;
+        const price = Number(item.price) || 0;
+        const cost = Number(item.cost ?? item.estimatedCost ?? 0);
+        const estimatedCost = Number(item.estimatedCost ?? item.cost ?? 0);
+
+        const cleanItem: SaleItem = {
+          itemId: String(item.itemId || `kg_item_${idx}_${Date.now()}`),
+          name: String(item.name || 'Produto').trim(),
+          quantity: qty,
+          unit: String(item.unit || 'kg').trim(),
+          price: price,
+          cost: cost,
+          estimatedCost: estimatedCost,
+          source: item.source === 'third_party' ? 'third_party' : 'own_production',
+          purchased: Boolean(item.purchased),
+          supplierNotes: String(item.supplierNotes || '').trim(),
+          originalRequestedQty: Number(item.originalRequestedQty ?? qty)
+        };
+
+        if (item.actualWeightedQty !== undefined && item.actualWeightedQty !== null) {
+          cleanItem.actualWeightedQty = Number(item.actualWeightedQty);
+        }
+
+        return cleanItem;
+      });
+
+      const subtotal = Number(orderSummary.subtotal) || 0;
+      const totalCost = Number(orderSummary.totalCost) || 0;
+      const profit = Number(orderSummary.profit) || 0;
+      const margin = isNaN(orderSummary.margin) ? 0 : Number(orderSummary.margin);
+
+      const saleData: any = {
         customerName: clientName.trim(),
-        customerPhone: clientPhone.trim() || undefined,
-        deliveryAddress: clientAddress.trim() || undefined,
-        observations: clientNotes.trim() || undefined,
+        customerPhone: clientPhone.trim() || '',
+        deliveryAddress: clientAddress.trim() || '',
+        observations: clientNotes.trim() || '',
         isDelivery: true,
         isKgMode: true,
-        items: orderItems,
-        total: orderSummary.subtotal,
-        totalCost: orderSummary.totalCost,
-        estimatedProfit: orderSummary.profit,
-        profitMargin: orderSummary.margin,
+        items: sanitizedItems,
+        total: subtotal,
+        totalCost: totalCost,
+        estimatedProfit: profit,
+        profitMargin: margin,
         thirdPartyPurchased: allThirdPurchased,
         deliveryDate: deliveryDateObj,
         status: editingSale ? editingSale.status : 'ordered',
-        paymentMethods: [{ method: paymentOption, amount: orderSummary.subtotal }]
+        paymentMethods: [{ method: paymentOption || 'Pagar na Entrega', amount: subtotal }]
       };
 
       if (editingSale) {
         await updateDoc(doc(db, 'sales', editingSale.id), saleData);
       } else {
-        const saleNumber = `KG-${Date.now().toString().slice(-4)}`;
+        const dateStr = format(new Date(), 'yyyyMMdd');
+        const randomStr = Math.random().toString(36).substring(2, 6).toUpperCase();
+        const saleNumber = `KG-${dateStr}-${randomStr}`;
         await addDoc(collection(db, 'sales'), {
           ...saleData,
           saleNumber,
@@ -555,9 +1044,12 @@ export default function KgSalesManager({
       }
 
       setIsNewOrderModalOpen(false);
+      setEditingSale(null);
     } catch (err: any) {
-      console.error(err);
-      setError('Erro ao salvar pedido: ' + (err.message || 'Erro desconhecido'));
+      console.error("Erro ao salvar pedido por KG:", err);
+      const errMsg = err?.message || 'Erro desconhecido ao salvar pedido';
+      setError('Erro ao salvar pedido: ' + errMsg);
+      handleFirestoreError(err, OperationType.WRITE, 'sales');
     } finally {
       setSaving(false);
     }
@@ -571,7 +1063,10 @@ export default function KgSalesManager({
     try {
       const updatedItems = [...sale.items];
       if (updatedItems[itemIndex]) {
-        updatedItems[itemIndex].purchased = !currentVal;
+        updatedItems[itemIndex] = {
+          ...updatedItems[itemIndex],
+          purchased: !currentVal
+        };
       }
       const allPurchased = !updatedItems.some(i => i.source === 'third_party' && !i.purchased);
       await updateDoc(doc(db, 'sales', saleId), {
@@ -580,18 +1075,112 @@ export default function KgSalesManager({
       });
     } catch (err) {
       console.error(err);
+      handleFirestoreError(err, OperationType.WRITE, 'sales');
+    }
+  };
+
+  // Atualizar Custo de Compra de um item específico de um pedido
+  const handleUpdateSingleItemCost = async (saleId: string, itemIndex: number, newCost: number) => {
+    const sale = sales.find(s => s.id === saleId);
+    if (!sale) return;
+
+    try {
+      const updatedItems = [...sale.items];
+      if (updatedItems[itemIndex]) {
+        updatedItems[itemIndex] = {
+          ...updatedItems[itemIndex],
+          cost: newCost,
+          estimatedCost: newCost
+        };
+      }
+
+      let newTotalCost = 0;
+      updatedItems.forEach(i => {
+        const q = Number(i.quantity) || 0;
+        const c = Number(i.cost || i.estimatedCost || 0);
+        if (i.source === 'third_party') {
+          newTotalCost += q * c;
+        }
+      });
+
+      const profit = (sale.total || 0) - newTotalCost;
+      const margin = (sale.total || 0) > 0 ? (profit / (sale.total || 0)) * 100 : 0;
+
+      await updateDoc(doc(db, 'sales', saleId), {
+        items: updatedItems,
+        totalCost: newTotalCost,
+        estimatedProfit: profit,
+        profitMargin: margin
+      });
+
+      setEditingCardItemCost(null);
+      setCostUpdatedFeedbackKey(`${saleId}_${itemIndex}`);
+      setTimeout(() => setCostUpdatedFeedbackKey(null), 3000);
+    } catch (err: any) {
+      console.error("Erro ao atualizar custo do item:", err);
+      handleFirestoreError(err, OperationType.WRITE, 'sales');
+    }
+  };
+
+  // Atualizar Custo de Compra de um produto consolidado (em todos os pedidos pendentes)
+  const handleUpdateConsolidatedProductCost = async (productName: string, newCost: number) => {
+    try {
+      const normTarget = normalizeProductName(productName);
+      for (const sale of sales) {
+        if (sale.status === 'cancelled' || sale.status === 'paid') continue;
+        let hasMatch = false;
+        const updatedItems = sale.items.map(item => {
+          if (item.source === 'third_party' && normalizeProductName(item.name) === normTarget) {
+            hasMatch = true;
+            return {
+              ...item,
+              cost: newCost,
+              estimatedCost: newCost
+            };
+          }
+          return item;
+        });
+
+        if (hasMatch) {
+          let newTotalCost = 0;
+          updatedItems.forEach(i => {
+            const q = Number(i.quantity) || 0;
+            const c = Number(i.cost || i.estimatedCost || 0);
+            if (i.source === 'third_party') {
+              newTotalCost += q * c;
+            }
+          });
+
+          const profit = (sale.total || 0) - newTotalCost;
+          const margin = (sale.total || 0) > 0 ? (profit / (sale.total || 0)) * 100 : 0;
+
+          await updateDoc(doc(db, 'sales', sale.id), {
+            items: updatedItems,
+            totalCost: newTotalCost,
+            estimatedProfit: profit,
+            profitMargin: margin
+          });
+        }
+      }
+
+      setCostUpdatedFeedbackKey(normTarget);
+      setTimeout(() => setCostUpdatedFeedbackKey(null), 3000);
+    } catch (err: any) {
+      console.error("Erro ao atualizar custo consolidado do produto:", err);
+      handleFirestoreError(err, OperationType.WRITE, 'sales');
     }
   };
 
   // Marcar TODOS os itens de um produto consolidado como "Comprados"
-  const handleToggleConsolidatedProduct = async (productOrders: { saleId: string; quantity: number; purchased: boolean }[], targetPurchased: boolean) => {
+  const handleToggleConsolidatedProduct = async (productName: string, productOrders: { saleId: string; quantity: number; purchased: boolean }[], targetPurchased: boolean) => {
     try {
+      const normTarget = normalizeProductName(productName);
       for (const order of productOrders) {
         const sale = sales.find(s => s.id === order.saleId);
         if (!sale) continue;
 
         const updatedItems = sale.items.map(item => {
-          if (item.source === 'third_party' && normalizeProductName(item.name) === normalizeProductName(sale.items.find(i => i.source === 'third_party')?.name || '')) {
+          if (item.source === 'third_party' && normalizeProductName(item.name) === normTarget) {
             return { ...item, purchased: targetPurchased };
           }
           return item;
@@ -605,6 +1194,7 @@ export default function KgSalesManager({
       }
     } catch (err) {
       console.error(err);
+      handleFirestoreError(err, OperationType.WRITE, 'sales');
     }
   };
 
@@ -623,6 +1213,7 @@ export default function KgSalesManager({
   const handleSaveWeighing = async () => {
     if (!selectedSaleForWeighing) return;
     setSaving(true);
+    setError(null);
     try {
       let newTotal = 0;
       let newTotalCost = 0;
@@ -660,6 +1251,7 @@ export default function KgSalesManager({
     } catch (err: any) {
       console.error(err);
       setError('Erro ao salvar pesagem: ' + (err.message || 'Erro desconhecido'));
+      handleFirestoreError(err, OperationType.WRITE, 'sales');
     } finally {
       setSaving(false);
     }
@@ -672,6 +1264,7 @@ export default function KgSalesManager({
     if (totalExpense <= 0) return;
 
     setSaving(true);
+    setError(null);
     try {
       const summaryText = consolidatedShoppingList.map(p => `${p.name} (${p.totalQuantity} ${p.unit})`).join(', ');
       await addDoc(collection(db, 'transactions'), {
@@ -679,7 +1272,7 @@ export default function KgSalesManager({
         amount: totalExpense,
         description: `Compras de Terceiros p/ Revenda: ${summaryText.slice(0, 100)}`,
         category: 'Mercadorias para Revenda',
-        date: new Date()
+        date: serverTimestamp()
       });
 
       setExpenseSavedFeedback(true);
@@ -687,6 +1280,7 @@ export default function KgSalesManager({
     } catch (err: any) {
       console.error(err);
       setError('Erro ao lançar despesa no financeiro: ' + (err.message || 'Erro'));
+      handleFirestoreError(err, OperationType.WRITE, 'transactions');
     } finally {
       setSaving(false);
     }
@@ -709,15 +1303,16 @@ export default function KgSalesManager({
         // Lança receita no financeiro se ainda não foi lançada
         await addDoc(collection(db, 'transactions'), {
           type: 'income',
-          amount: sale.total,
-          description: `Venda por KG / Entrega - ${sale.customerName} (${sale.saleNumber || ''})`,
+          amount: Number(sale.total) || 0,
+          description: `Venda por KG / Entrega - ${sale.customerName || 'Cliente'} (${sale.saleNumber || ''})`,
           category: 'Venda de Produção e Revenda',
-          date: new Date(),
+          date: serverTimestamp(),
           relatedSaleId: sale.id
         });
       }
     } catch (err) {
       console.error(err);
+      handleFirestoreError(err, OperationType.WRITE, 'sales');
     }
   };
 
@@ -728,6 +1323,7 @@ export default function KgSalesManager({
         await deleteDoc(doc(db, 'sales', saleId));
       } catch (err) {
         console.error(err);
+        handleFirestoreError(err, OperationType.DELETE, 'sales');
       }
     }
   };
@@ -1066,9 +1662,13 @@ export default function KgSalesManager({
                           const itemTotalCost = Number(item.quantity) * itemCost;
                           const itemProfit = itemTotal - itemTotalCost;
 
+                          const isEditingThisCost = editingCardItemCost?.saleId === sale.id && editingCardItemCost?.itemIndex === originalItemIdx;
+                          const feedbackKey = `${sale.id}_${originalItemIdx}`;
+                          const isUpdatedFeedback = costUpdatedFeedbackKey === feedbackKey;
+
                           return (
-                            <div key={idx} className="flex items-center justify-between text-xs bg-white p-2 rounded-xl border border-amber-100/80 shadow-2xs gap-2">
-                              <div className="flex items-center gap-2 min-w-0">
+                            <div key={idx} className="flex flex-col sm:flex-row sm:items-center justify-between text-xs bg-white p-2.5 rounded-xl border border-amber-100/80 shadow-2xs gap-2">
+                              <div className="flex items-center gap-2 min-w-0 flex-1">
                                 <button
                                   type="button"
                                   onClick={() => handleToggleItemPurchased(sale.id, originalItemIdx, !!item.purchased)}
@@ -1080,15 +1680,73 @@ export default function KgSalesManager({
                                 >
                                   {item.purchased && <Check size={12} className="stroke-[3]" />}
                                 </button>
-                                <div className="truncate">
-                                  <span className={cn("font-bold block truncate", item.purchased ? "line-through text-slate-400" : "text-slate-800")}>
-                                    {item.name}
-                                  </span>
-                                  <span className="text-[10px] text-slate-400 block">
-                                    Custo: R$ {itemCost.toFixed(2)} | Venda: R$ {(item.price || 0).toFixed(2)}
-                                  </span>
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-2">
+                                    <span className={cn("font-bold block truncate", item.purchased ? "line-through text-slate-400" : "text-slate-800")}>
+                                      {item.name}
+                                    </span>
+                                    {isUpdatedFeedback && (
+                                      <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
+                                        Custo salvo!
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  {isEditingThisCost ? (
+                                    <div className="flex items-center gap-1.5 mt-1">
+                                      <span className="text-[10px] font-bold text-amber-800">Custo R$:</span>
+                                      <input
+                                        type="number"
+                                        step="0.01"
+                                        min="0"
+                                        value={editingCardItemCost.cost}
+                                        onChange={(e) => setEditingCardItemCost({
+                                          ...editingCardItemCost,
+                                          cost: parseFloat(e.target.value) || 0
+                                        })}
+                                        className="w-24 px-2 py-0.5 bg-amber-50 border border-amber-300 rounded font-black text-xs text-slate-800 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                        autoFocus
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() => handleUpdateSingleItemCost(sale.id, originalItemIdx, editingCardItemCost.cost)}
+                                        className="p-1.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 cursor-pointer"
+                                        title="Salvar novo custo"
+                                      >
+                                        <Save size={12} />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setEditingCardItemCost(null)}
+                                        className="p-1.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                                      >
+                                        ✕
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div className="flex items-center gap-1.5 text-[10px] text-slate-500 mt-0.5">
+                                      <span className="font-semibold">
+                                        Custo: <strong className="text-amber-800">R$ {itemCost.toFixed(2)}</strong>/{item.unit || 'kg'}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => setEditingCardItemCost({
+                                          saleId: sale.id,
+                                          itemIndex: originalItemIdx,
+                                          cost: itemCost
+                                        })}
+                                        className="p-0.5 text-amber-700 hover:text-amber-900 hover:bg-amber-100 rounded transition-colors cursor-pointer"
+                                        title="Editar custo de compra deste produto"
+                                      >
+                                        <Edit3 size={11} />
+                                      </button>
+                                      <span className="text-slate-300">|</span>
+                                      <span>Venda: R$ {(item.price || 0).toFixed(2)}</span>
+                                    </div>
+                                  )}
                                 </div>
                               </div>
+
                               <div className="text-right shrink-0">
                                 <span className="font-extrabold text-slate-700 block">{Number(item.quantity).toFixed(2)} {item.unit || 'kg'}</span>
                                 <span className="font-bold text-amber-700 block">R$ {itemTotal.toFixed(2)} <span className="text-[10px] text-emerald-600">(+R$ {itemProfit.toFixed(2)})</span></span>
@@ -1202,12 +1860,214 @@ export default function KgSalesManager({
             )}
 
             <form onSubmit={handleSaveKgOrder} className="space-y-6">
-              {/* PASSO 1: DADOS DO CLIENTE */}
-              <div className="bg-slate-50/70 p-4 md:p-5 rounded-2xl border border-slate-200 space-y-4">
-                <span className="text-xs font-black uppercase text-slate-400 tracking-wider block">
-                  1. Dados do Cliente e Entrega
-                </span>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {/* PASSO 1: DADOS DO CLIENTE CADASTRADO (OBRIGATÓRIO) */}
+              <div className="bg-slate-50/80 p-4 md:p-5 rounded-2xl border border-slate-200 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200/80 pb-3">
+                  <div className="flex items-center gap-2">
+                    <Building2 className="text-emerald-700" size={18} />
+                    <span className="text-xs font-black uppercase text-slate-800 tracking-wider">
+                      1. Cliente Cadastrado (Obrigatório - Vendas de Alto Valor)
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-bold px-2.5 py-0.5 bg-emerald-100 text-emerald-800 rounded-full border border-emerald-200/70 w-fit">
+                    Exclusivo Clientes Registrados
+                  </span>
+                </div>
+
+                {/* Exibição do Cliente Selecionado ou Campo de Busca/Seleção */}
+                {currentSelectedCustomer ? (
+                  <div className="bg-white border-2 border-emerald-500/40 rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-start gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-black shrink-0 border border-emerald-200">
+                        <UserCheck size={20} />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-black text-slate-900 text-base">
+                            {currentSelectedCustomer.companyName}
+                          </span>
+                          <span className="text-[10px] font-black uppercase px-2 py-0.5 bg-emerald-600 text-white rounded-md">
+                            Cliente Cadastrado
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 text-xs text-slate-500 mt-1 font-semibold flex-wrap">
+                          {currentSelectedCustomer.contactName && (
+                            <span className="flex items-center gap-1">
+                              <User size={13} className="text-slate-400" />
+                              Contato: <strong className="text-slate-700">{currentSelectedCustomer.contactName}</strong>
+                            </span>
+                          )}
+                          {currentSelectedCustomer.phone && (
+                            <span className="text-emerald-700 font-bold">
+                              📞 {currentSelectedCustomer.phone}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedCustomerId('');
+                        setClientName('');
+                        setClientPhone('');
+                        setIsCustomerDropdownOpen(true);
+                      }}
+                      className="px-3.5 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-600 font-bold text-xs transition-all cursor-pointer w-full sm:w-auto text-center shrink-0"
+                    >
+                      Trocar Cliente
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {/* Botão de Busca / Dropdown e Botão de Novo Cliente */}
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                      <div className="relative flex-1">
+                        <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                        <input
+                          type="text"
+                          placeholder="Buscar cliente cadastrado por empresa, contato ou telefone..."
+                          value={customerSearchTerm}
+                          onChange={(e) => {
+                            setCustomerSearchTerm(e.target.value);
+                            setIsCustomerDropdownOpen(true);
+                          }}
+                          onFocus={() => setIsCustomerDropdownOpen(true)}
+                          className="w-full pl-10 pr-10 py-3 bg-white border border-slate-300 rounded-xl text-sm font-bold text-slate-900 placeholder:text-slate-400 placeholder:font-normal focus:ring-2 focus:ring-emerald-500 outline-none"
+                        />
+                        {isCustomerDropdownOpen && (
+                          <button
+                            type="button"
+                            onClick={() => setIsCustomerDropdownOpen(false)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1"
+                          >
+                            <X size={16} />
+                          </button>
+                        )}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setIsQuickAddCustomerOpen(prev => !prev)}
+                        className="px-4 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer shrink-0"
+                      >
+                        <UserPlus size={16} />
+                        + Cadastrar Novo Cliente
+                      </button>
+                    </div>
+
+                    {/* Formulário Rápido de Cadastro de Cliente */}
+                    {isQuickAddCustomerOpen && (
+                      <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-black text-emerald-950 flex items-center gap-1.5">
+                            <UserPlus size={15} className="text-emerald-700" />
+                            Cadastrar Novo Cliente Rápido:
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setIsQuickAddCustomerOpen(false)}
+                            className="text-slate-400 hover:text-slate-600 text-xs font-bold cursor-pointer"
+                          >
+                            ✕ Fechar
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <div>
+                            <input
+                              type="text"
+                              placeholder="Empresa / Razão Social *"
+                              value={newCustomerCompanyName}
+                              onChange={(e) => setNewCustomerCompanyName(e.target.value)}
+                              className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold outline-none"
+                            />
+                          </div>
+                          <div>
+                            <input
+                              type="text"
+                              placeholder="Nome do Contato"
+                              value={newCustomerContactName}
+                              onChange={(e) => setNewCustomerContactName(e.target.value)}
+                              className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold outline-none"
+                            />
+                          </div>
+                          <div>
+                            <input
+                              type="text"
+                              placeholder="Telefone / WhatsApp"
+                              value={newCustomerPhone}
+                              onChange={(e) => setNewCustomerPhone(e.target.value)}
+                              className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold outline-none"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex justify-end gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => setIsQuickAddCustomerOpen(false)}
+                            className="px-3 py-1.5 text-xs text-slate-600 font-bold hover:bg-slate-200/50 rounded-lg cursor-pointer"
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            type="button"
+                            disabled={quickSavingCustomer}
+                            onClick={handleQuickCreateCustomer}
+                            className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black rounded-lg shadow-sm disabled:opacity-50 flex items-center gap-1 cursor-pointer"
+                          >
+                            {quickSavingCustomer ? 'Cadastrando...' : 'Salvar e Selecionar Cliente'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Menu Dropdown de Clientes Cadastrados */}
+                    {isCustomerDropdownOpen && (
+                      <div className="bg-white border border-slate-200 rounded-2xl shadow-xl max-h-60 overflow-y-auto divide-y divide-slate-100">
+                        {filteredRegisteredCustomers.length === 0 ? (
+                          <div className="p-4 text-center text-slate-400 text-xs font-medium space-y-1">
+                            <p>Nenhum cliente cadastrado encontrado com essa busca.</p>
+                            <p className="text-[11px] text-emerald-700 font-bold">
+                              Clique no botão "+ Cadastrar Novo Cliente" acima para registrar agora.
+                            </p>
+                          </div>
+                        ) : (
+                          filteredRegisteredCustomers.map(cust => (
+                            <button
+                              key={cust.id}
+                              type="button"
+                              onClick={() => handleSelectCustomer(cust)}
+                              className="w-full text-left p-3 hover:bg-emerald-50/60 transition-colors flex items-center justify-between group cursor-pointer"
+                            >
+                              <div>
+                                <div className="font-black text-slate-900 text-sm group-hover:text-emerald-800">
+                                  {cust.companyName}
+                                </div>
+                                <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5">
+                                  {cust.contactName && (
+                                    <span>Contato: <strong>{cust.contactName}</strong></span>
+                                  )}
+                                  {cust.phone && (
+                                    <span className="text-slate-400">({cust.phone})</span>
+                                  )}
+                                </div>
+                              </div>
+                              <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100 group-hover:bg-emerald-600 group-hover:text-white transition-all">
+                                Selecionar
+                              </span>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Campos complementares de Entrega */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
                   <div className="space-y-1">
                     <label className="text-xs font-bold text-slate-700">Telefone / WhatsApp</label>
                     <input
@@ -1220,24 +2080,23 @@ export default function KgSalesManager({
                   </div>
 
                   <div className="space-y-1 md:col-span-2">
-                    <label className="text-xs font-bold text-slate-700">Nome do Cliente *</label>
-                    <input
-                      type="text"
-                      placeholder="Ex: Restaurante Sabor Verde, Maria Silva..."
-                      value={clientName}
-                      onChange={(e) => setClientName(e.target.value)}
-                      required
-                      className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-emerald-500 outline-none"
-                    />
-                  </div>
-
-                  <div className="space-y-1 md:col-span-2">
                     <label className="text-xs font-bold text-slate-700">Endereço de Entrega</label>
                     <input
                       type="text"
                       placeholder="Rua, número, bairro..."
                       value={clientAddress}
                       onChange={(e) => setClientAddress(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-medium focus:ring-2 focus:ring-emerald-500 outline-none"
+                    />
+                  </div>
+
+                  <div className="space-y-1 md:col-span-2">
+                    <label className="text-xs font-bold text-slate-700">Observações do Pedido</label>
+                    <input
+                      type="text"
+                      placeholder="Instruções de entrega, detalhes..."
+                      value={clientNotes}
+                      onChange={(e) => setClientNotes(e.target.value)}
                       className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-medium focus:ring-2 focus:ring-emerald-500 outline-none"
                     />
                   </div>
@@ -1255,18 +2114,20 @@ export default function KgSalesManager({
                 </div>
               </div>
 
-              {/* PASSO 2: ESCOLHER PRODUTOS (HORTA vs TERCEIROS) */}
+              {/* PASSO 2: ESCOLHER PRODUTOS (HORTA vs ESTOQUE TERCEIROS vs MISTO vs LIVRE) */}
               <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-black uppercase text-slate-400 tracking-wider">
-                    2. Escolha os Produtos para o Pedido
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <span className="text-xs font-black uppercase text-slate-500 tracking-wider">
+                    2. Escolha a Origem dos Produtos para o Pedido
                   </span>
-                  <div className="flex bg-slate-100 p-1 rounded-xl">
+                  
+                  {/* Abas Modernas de Origem de Produtos */}
+                  <div className="grid grid-cols-2 sm:flex bg-slate-100 p-1 rounded-xl gap-1">
                     <button
                       type="button"
                       onClick={() => setProductOriginTab('own')}
                       className={cn(
-                        "px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer",
+                        "px-2.5 py-1.5 rounded-lg text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer",
                         productOriginTab === 'own' ? "bg-white text-emerald-700 shadow-sm" : "text-slate-500 hover:text-slate-900"
                       )}
                     >
@@ -1274,25 +2135,50 @@ export default function KgSalesManager({
                     </button>
                     <button
                       type="button"
-                      onClick={() => setProductOriginTab('third_party')}
+                      onClick={() => setProductOriginTab('third_stock')}
                       className={cn(
-                        "px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer",
-                        productOriginTab === 'third_party' ? "bg-white text-amber-700 shadow-sm" : "text-slate-500 hover:text-slate-900"
+                        "px-2.5 py-1.5 rounded-lg text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer relative",
+                        productOriginTab === 'third_stock' ? "bg-white text-blue-700 shadow-sm" : "text-slate-500 hover:text-slate-900"
                       )}
                     >
-                      🛒 Compra de Terceiros (Revenda)
+                      📦 Estoque de Terceiros
+                      {calculatedThirdPartyStock.filter(i => i.currentStock > 0).length > 0 && (
+                        <span className="w-2 h-2 rounded-full bg-blue-600 inline-block animate-pulse" />
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setProductOriginTab('mixed')}
+                      className={cn(
+                        "px-2.5 py-1.5 rounded-lg text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer",
+                        productOriginTab === 'mixed' ? "bg-white text-purple-700 shadow-sm" : "text-slate-500 hover:text-slate-900"
+                      )}
+                    >
+                      🔀 Item Misto (Próprio + Terceiro)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setProductOriginTab('third_custom')}
+                      className={cn(
+                        "px-2.5 py-1.5 rounded-lg text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer",
+                        productOriginTab === 'third_custom' ? "bg-white text-amber-700 shadow-sm" : "text-slate-500 hover:text-slate-900"
+                      )}
+                    >
+                      🛒 Compra Livre / Pré-Salvos
                     </button>
                   </div>
                 </div>
 
-                {/* ABA: HORTA PRÓPRIA */}
+                {/* ========================================================================= */}
+                {/* ABA 1: HORTA PRÓPRIA */}
+                {/* ========================================================================= */}
                 {productOriginTab === 'own' && (
                   <div className="space-y-3">
                     <div className="relative">
                       <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
                       <input
                         type="text"
-                        placeholder="Buscar produto do catálogo da horta..."
+                        placeholder="Buscar produto do catálogo da horta própria..."
                         value={productSearch}
                         onChange={(e) => setProductSearch(e.target.value)}
                         className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500"
@@ -1322,88 +2208,425 @@ export default function KgSalesManager({
                   </div>
                 )}
 
-                {/* ABA: COMPRA DE TERCEIROS / REVENDA */}
-                {productOriginTab === 'third_party' && (
-                  <div className="space-y-4">
-                    {/* Formulário Rápido de Inserção Livre */}
-                    <div className="bg-amber-50/50 p-4 rounded-2xl border border-amber-200/70 space-y-3">
-                      <span className="text-xs font-black text-amber-900 block">
-                        Cadastrar Novo Produto para Comprar de Fora:
+                {/* ========================================================================= */}
+                {/* ABA 2: ESTOQUE DE TERCEIROS COMPRADO */}
+                {/* ========================================================================= */}
+                {productOriginTab === 'third_stock' && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between bg-blue-50/70 p-3 rounded-2xl border border-blue-200 text-xs">
+                      <div className="flex items-center gap-2 text-blue-900">
+                        <Package size={16} className="text-blue-600 shrink-0" />
+                        <div>
+                          <span className="font-black">Produtos Comprados em Estoque:</span>
+                          <p className="text-[11px] text-blue-700">
+                            Itens registrados em compras anteriores de terceiros com saldo disponível.
+                          </p>
+                        </div>
+                      </div>
+                      <span className="text-xs font-black px-2.5 py-1 bg-white rounded-lg border border-blue-200 text-blue-800">
+                        {calculatedThirdPartyStock.filter(i => i.currentStock > 0).length} itens com saldo
                       </span>
-                      <div className="grid grid-cols-1 sm:grid-cols-6 gap-2">
-                        <div className="sm:col-span-2">
+                    </div>
+
+                    {calculatedThirdPartyStock.length === 0 ? (
+                      <div className="p-6 bg-slate-50 rounded-2xl border border-dashed border-slate-200 text-center space-y-2">
+                        <p className="text-xs font-bold text-slate-600">Nenhum produto comprado de terceiros registrado no estoque ainda.</p>
+                        <p className="text-[11px] text-slate-400">
+                          Lance compras na aba "Compras & Estoque Terceiros" ou adicione um item avulso na aba "🛒 Compra Livre".
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 max-h-56 overflow-y-auto p-1 bg-slate-50/50 rounded-2xl border border-slate-100">
+                        {calculatedThirdPartyStock.map((stk) => {
+                          const hasPositiveStock = stk.currentStock > 0;
+                          return (
+                            <button
+                              key={stk.canonicalName}
+                              type="button"
+                              onClick={() => handleAddThirdPartyStockItem(stk)}
+                              className={cn(
+                                "p-3 rounded-2xl border text-left transition-all flex flex-col justify-between cursor-pointer group",
+                                hasPositiveStock 
+                                  ? "bg-white border-blue-200 hover:border-blue-500 hover:bg-blue-50/30 shadow-2xs" 
+                                  : "bg-slate-50 border-slate-200 opacity-75 hover:opacity-100"
+                              )}
+                            >
+                              <div className="flex items-start justify-between gap-1">
+                                <span className="font-black text-xs text-slate-900 group-hover:text-blue-800 block truncate">
+                                  {stk.canonicalName}
+                                </span>
+                                <span className={cn(
+                                  "px-2 py-0.5 rounded-full text-[10px] font-black",
+                                  hasPositiveStock ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-600"
+                                )}>
+                                  {stk.currentStock} {stk.unit}
+                                </span>
+                              </div>
+
+                              <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-100 text-[10px]">
+                                <span className="text-amber-800 font-bold">
+                                  Custo: R$ {(stk.latestCost || stk.averageCost || 0).toFixed(2)}/{stk.unit}
+                                </span>
+                                <span className="text-blue-600 font-black group-hover:translate-x-0.5 transition-transform flex items-center gap-0.5">
+                                  + Usar <ArrowRight size={11} />
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ========================================================================= */}
+                {/* ABA 3: ITEM MISTO (HORTA PRÓPRIA + ESTOQUE TERCEIRO) */}
+                {/* ========================================================================= */}
+                {productOriginTab === 'mixed' && (
+                  <div className="bg-purple-50/70 p-4 rounded-2xl border border-purple-200 space-y-3.5">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center shrink-0">
+                        <Shuffle size={16} />
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-black text-purple-950">Compor Item Misto (Parte Próprio + Parte Terceiro)</h4>
+                        <p className="text-[11px] text-purple-800">
+                          Exemplo: Cliente pediu 15 kg. Você colheu 9 kg na horta e comprou 6 kg de terceiros.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 bg-white p-3.5 rounded-xl border border-purple-100">
+                      {/* Seleção do Produto */}
+                      <div className="sm:col-span-6 space-y-1">
+                        <label className="text-[10px] font-black text-slate-700 block">Produto Desejado *:</label>
+                        <input
+                          type="text"
+                          placeholder="Ex: Rúcula, Tomate, Alface Americana..."
+                          value={mixedSelectedProduct}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setMixedSelectedProduct(val);
+                            // Sugerir custo de terceiros se existir no estoque ou preset
+                            const matchedStock = calculatedThirdPartyStock.find(s => normalizeProductName(s.canonicalName) === normalizeProductName(val));
+                            if (matchedStock && (matchedStock.latestCost || matchedStock.averageCost)) {
+                              setMixedThirdCost(matchedStock.latestCost || matchedStock.averageCost);
+                            }
+                            const matchedPreset = thirdPartyPresets.find(p => normalizeProductName(p.name) === normalizeProductName(val));
+                            if (matchedPreset && matchedPreset.defaultPrice) {
+                              setMixedSalePrice(matchedPreset.defaultPrice);
+                            }
+                          }}
+                          list="mixed-products-list"
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        />
+                        <datalist id="mixed-products-list">
+                          {uniqueCatalog.map(c => <option key={c.id} value={c.name}>{c.name} (Horta)</option>)}
+                          {calculatedThirdPartyStock.map(s => <option key={s.canonicalName} value={s.canonicalName}>{s.canonicalName} (Estoque: {s.currentStock} {s.unit})</option>)}
+                          {thirdPartyPresets.map(p => <option key={p.id} value={p.name}>{p.name} (Revenda)</option>)}
+                        </datalist>
+                      </div>
+
+                      {/* Preço de Venda cobrado do Cliente */}
+                      <div className="sm:col-span-3 space-y-1">
+                        <label className="text-[10px] font-black text-slate-700 block">Preço Venda p/ Cliente *:</label>
+                        <div className="relative">
+                          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-emerald-700">R$</span>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            placeholder="Ex: 10.00"
+                            value={mixedSalePrice}
+                            onChange={(e) => setMixedSalePrice(e.target.value === '' ? '' : parseFloat(e.target.value))}
+                            className="w-full pl-7 pr-2 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-black text-emerald-950 focus:outline-none focus:ring-2 focus:ring-purple-500 text-right"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Unidade */}
+                      <div className="sm:col-span-3 space-y-1">
+                        <label className="text-[10px] font-black text-slate-700 block">Unidade:</label>
+                        <select
+                          value={mixedUnit}
+                          onChange={(e) => setMixedUnit(e.target.value)}
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500 cursor-pointer"
+                        >
+                          <option value="kg">kg (Quilograma)</option>
+                          <option value="un">un (Unidade)</option>
+                          <option value="dz">dz (Dúzia)</option>
+                          <option value="cx">cx (Caixa)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Divisão: Horta Própria vs Terceiros */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {/* Parcela 1: Horta Própria */}
+                      <div className="bg-emerald-50/80 p-3.5 rounded-xl border border-emerald-200 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-black text-emerald-950 flex items-center gap-1">
+                            🌿 Parcela Horta Própria:
+                          </span>
+                          <span className="text-[10px] text-emerald-800 font-bold bg-emerald-100 px-2 py-0.5 rounded-md">
+                            Custo R$ 0,00 (Próprio)
+                          </span>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-emerald-900 block">Quantidade da Horta ({mixedUnit}):</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            placeholder="Ex: 8.0"
+                            value={mixedOwnQty}
+                            onChange={(e) => setMixedOwnQty(e.target.value === '' ? '' : parseFloat(e.target.value))}
+                            className="w-full px-3 py-2 bg-white border border-emerald-300 rounded-xl text-xs font-black text-emerald-950 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-right"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Parcela 2: Terceiros Comprado */}
+                      <div className="bg-amber-50/80 p-3.5 rounded-xl border border-amber-200 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-black text-amber-950 flex items-center gap-1">
+                            🛒 Parcela de Terceiros (Revenda):
+                          </span>
+                          <span className="text-[10px] text-amber-800 font-bold bg-amber-100 px-2 py-0.5 rounded-md">
+                            Compra Externa
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-bold text-amber-900 block">Qtd Comprada ({mixedUnit}):</label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              placeholder="Ex: 7.0"
+                              value={mixedThirdQty}
+                              onChange={(e) => setMixedThirdQty(e.target.value === '' ? '' : parseFloat(e.target.value))}
+                              className="w-full px-2.5 py-2 bg-white border border-amber-300 rounded-xl text-xs font-black text-amber-950 focus:outline-none focus:ring-2 focus:ring-amber-500 text-right"
+                            />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-bold text-amber-900 block">Custo Unitário R$:</label>
+                            <div className="relative">
+                              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[11px] font-bold text-amber-800">R$</span>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                placeholder="Ex: 5.50"
+                                value={mixedThirdCost}
+                                onChange={(e) => setMixedThirdCost(e.target.value === '' ? '' : parseFloat(e.target.value))}
+                                className="w-full pl-6 pr-2 py-2 bg-white border border-amber-300 rounded-xl text-xs font-black text-amber-950 focus:outline-none focus:ring-2 focus:ring-amber-500 text-right"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Botão de Adicionar Composição */}
+                    <div className="flex items-center justify-between pt-1">
+                      <div className="text-xs font-bold text-purple-900">
+                        Total da Composição:{' '}
+                        <strong>
+                          {((Number(mixedOwnQty) || 0) + (Number(mixedThirdQty) || 0)).toFixed(2)} {mixedUnit}
+                        </strong>
+                        {Number(mixedSalePrice) > 0 && (
+                          <span className="text-purple-700 ml-2">
+                            • Valor Total:{' '}
+                            <strong>
+                              R$ {(((Number(mixedOwnQty) || 0) + (Number(mixedThirdQty) || 0)) * Number(mixedSalePrice)).toFixed(2)}
+                            </strong>
+                          </span>
+                        )}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleAddMixedItem}
+                        className="px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-black rounded-xl shadow-sm flex items-center gap-1.5 transition-all cursor-pointer"
+                      >
+                        <Plus size={14} /> Adicionar Composição ao Pedido
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* ========================================================================= */}
+                {/* ABA 4: COMPRA LIVRE / PRÉ-SALVOS */}
+                {/* ========================================================================= */}
+                {productOriginTab === 'third_custom' && (
+                  <div className="space-y-4">
+                    {/* Formulário de Inserção Livre com Custo e Preço de Venda sem limites */}
+                    <div className="bg-amber-50/60 p-4 rounded-2xl border border-amber-200/80 space-y-3 shadow-2xs">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                        <span className="text-xs font-black text-amber-950 flex items-center gap-1.5">
+                          🛒 Adicionar Produto de Terceiro (Compra Externa / Revenda):
+                        </span>
+                        <span className="text-[11px] text-amber-800 font-bold">
+                          Informe o preço cobrado do cliente e o custo real pago no fornecedor
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
+                        <div className="sm:col-span-4">
+                          <label className="text-[10px] font-extrabold text-amber-900 block mb-0.5">Nome do Produto *:</label>
                           <input
                             type="text"
-                            placeholder="Nome do produto (ex: Tomate Carmem)"
+                            placeholder="Ex: Tomate Carmem, Morango..."
                             value={customItemName}
                             onChange={(e) => setCustomItemName(e.target.value)}
-                            className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold outline-none"
+                            className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-amber-500"
                           />
                         </div>
-                        <div>
-                          <input
-                            type="number"
-                            step="0.01"
-                            placeholder="Qtd (kg)"
-                            value={customItemQty}
-                            onChange={(e) => setCustomItemQty(e.target.value === '' ? '' : parseFloat(e.target.value))}
-                            className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold outline-none"
-                          />
+
+                        <div className="sm:col-span-2">
+                          <label className="text-[10px] font-extrabold text-amber-900 block mb-0.5">Qtd Pedida:</label>
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              placeholder="Ex: 5"
+                              value={customItemQty}
+                              onChange={(e) => setCustomItemQty(e.target.value === '' ? '' : parseFloat(e.target.value))}
+                              className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-black outline-none focus:ring-2 focus:ring-amber-500 text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            />
+                            <select
+                              value={customItemUnit}
+                              onChange={(e) => setCustomItemUnit(e.target.value)}
+                              className="px-2 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none cursor-pointer"
+                            >
+                              <option value="kg">kg</option>
+                              <option value="un">un</option>
+                              <option value="dz">dz</option>
+                              <option value="pct">pct</option>
+                              <option value="cx">cx</option>
+                            </select>
+                          </div>
                         </div>
-                        <div>
-                          <input
-                            type="number"
-                            step="0.01"
-                            placeholder="Custo R$/kg"
-                            value={customItemCost}
-                            onChange={(e) => setCustomItemCost(e.target.value === '' ? '' : parseFloat(e.target.value))}
-                            className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold outline-none"
-                          />
+
+                        <div className="sm:col-span-2">
+                          <label className="text-[10px] font-extrabold text-amber-900 block mb-0.5">Custo Compra R$:</label>
+                          <div className="relative">
+                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-amber-800">R$</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              placeholder="Ex: 15.50"
+                              value={customItemCost}
+                              onChange={(e) => setCustomItemCost(e.target.value === '' ? '' : parseFloat(e.target.value))}
+                              className="w-full pl-7 pr-2 py-2 bg-white border border-amber-300 rounded-xl text-xs font-black text-amber-950 outline-none focus:ring-2 focus:ring-amber-500 text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            />
+                          </div>
                         </div>
-                        <div>
-                          <input
-                            type="number"
-                            step="0.01"
-                            placeholder="Venda R$/kg"
-                            value={customItemPrice}
-                            onChange={(e) => setCustomItemPrice(e.target.value === '' ? '' : parseFloat(e.target.value))}
-                            className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold outline-none"
-                          />
+
+                        <div className="sm:col-span-2">
+                          <label className="text-[10px] font-extrabold text-amber-900 block mb-0.5">Preço Venda R$ *:</label>
+                          <div className="relative">
+                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-emerald-800">R$</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              placeholder="Ex: 25.00"
+                              value={customItemPrice}
+                              onChange={(e) => setCustomItemPrice(e.target.value === '' ? '' : parseFloat(e.target.value))}
+                              className="w-full pl-7 pr-2 py-2 bg-white border border-emerald-400 rounded-xl text-xs font-black text-emerald-950 outline-none focus:ring-2 focus:ring-emerald-500 text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            />
+                          </div>
                         </div>
-                        <div>
+
+                        <div className="sm:col-span-2 flex items-end">
                           <button
                             type="button"
                             onClick={handleAddCustomThirdParty}
-                            className="w-full py-2 bg-amber-600 hover:bg-amber-700 text-white font-black text-xs rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1 shadow-sm"
+                            className="w-full py-2 bg-amber-600 hover:bg-amber-700 text-white font-black text-xs rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1 shadow-sm h-[38px]"
                           >
                             <Plus size={14} /> Adicionar
                           </button>
                         </div>
                       </div>
+
+                      <div className="flex items-center gap-2 pt-1 border-t border-amber-200/50">
+                        <label className="flex items-center gap-2 text-xs font-bold text-amber-900 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={saveToPresets}
+                            onChange={(e) => setSaveToPresets(e.target.checked)}
+                            className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 border-amber-300 rounded cursor-pointer"
+                          />
+                          <span>Salvar este item nos meus produtos pré-salvos para usar nos próximos pedidos</span>
+                        </label>
+                      </div>
                     </div>
 
-                    {/* Sugestões Populares */}
-                    <div className="space-y-1.5">
-                      <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
-                        Produtos Frequentes de Terceiros (Clique para adicionar):
-                      </span>
-                      <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto p-1.5 bg-slate-50 rounded-2xl border border-slate-100">
-                        {POPULAR_THIRD_PARTY_ITEMS.map((sug, i) => (
-                          <button
-                            key={i}
-                            type="button"
-                            onClick={() => handleAddSuggestedThirdParty(sug)}
-                            className="px-2.5 py-1.5 bg-white hover:bg-amber-50 hover:border-amber-300 border border-slate-200 rounded-xl text-xs font-medium text-slate-700 flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs"
+                    {/* Sugestões e Pré-Salvos com Botão para Gerenciar / Editar / Excluir */}
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-[11px] font-black text-slate-700 uppercase tracking-wider block">
+                          Produtos Pré-Salvos de Terceiros ({thirdPartyPresets.length} itens cadastrados):
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setIsPresetsManagerOpen(true)}
+                          className="px-3 py-1 bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs"
+                        >
+                          <SlidersHorizontal size={13} /> Gerenciar / Editar / Excluir Pré-Salvos
+                        </button>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-2 bg-slate-50 rounded-2xl border border-slate-200">
+                        {thirdPartyPresets.map((sug) => (
+                          <div
+                            key={sug.id}
+                            className="group bg-white hover:border-amber-400 border border-slate-200 rounded-xl p-2 text-xs transition-all shadow-2xs flex items-center gap-2"
                           >
-                            <span>{sug.name}</span>
-                            <span className="text-[10px] text-amber-700 font-extrabold">(R$ {sug.defaultPrice.toFixed(2)})</span>
-                            <Plus size={12} className="text-amber-600" />
-                          </button>
+                            <button
+                              type="button"
+                              onClick={() => handleAddSuggestedThirdParty(sug)}
+                              className="text-left flex items-center gap-2 cursor-pointer"
+                              title="Clique para adicionar ao pedido com preço e custo padrão"
+                            >
+                              <div>
+                                <span className="font-bold text-slate-800 block text-xs">{sug.name}</span>
+                                <div className="flex items-center gap-2 text-[10px] mt-0.5">
+                                  <span className="text-amber-800 font-bold">Custo: R$ {(sug.defaultCost || 0).toFixed(2)}</span>
+                                  <span className="text-slate-300">•</span>
+                                  <span className="text-emerald-700 font-black">Venda: R$ {(sug.defaultPrice || 0).toFixed(2)}/{sug.unit || 'kg'}</span>
+                                </div>
+                              </div>
+                              <div className="w-6 h-6 rounded-lg bg-amber-50 group-hover:bg-amber-600 group-hover:text-white text-amber-700 flex items-center justify-center transition-colors shrink-0">
+                                <Plus size={13} />
+                              </div>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (window.confirm(`Remover "${sug.name}" dos produtos pré-salvos?`)) {
+                                  handleDeletePreset(sug.id);
+                                }
+                              }}
+                              className="w-5 h-5 rounded text-slate-300 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center transition-colors cursor-pointer"
+                              title="Excluir produto pré-salvo"
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
                         ))}
                       </div>
                     </div>
                   </div>
                 )}
+              </div>
 
                 {/* PASSO 3: TABELA DE ITENS SELECIONADOS NO PEDIDO */}
                 <div className="space-y-2 pt-2">
@@ -1438,12 +2661,29 @@ export default function KgSalesManager({
                             )}
                           >
                             <div className="flex items-center gap-2 min-w-0">
-                              <span className={cn(
-                                "text-[10px] px-2 py-0.5 rounded-lg font-black uppercase tracking-wider",
-                                isThird ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"
-                              )}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const nextSource = isThird ? 'own_production' : 'third_party';
+                                  handleUpdateItemField(idx, 'source', nextSource);
+                                  if (nextSource === 'own_production') {
+                                    handleUpdateItemField(idx, 'cost', 0);
+                                    handleUpdateItemField(idx, 'estimatedCost', 0);
+                                    handleUpdateItemField(idx, 'purchased', true);
+                                  } else {
+                                    handleUpdateItemField(idx, 'purchased', false);
+                                  }
+                                }}
+                                className={cn(
+                                  "text-[10px] px-2 py-0.5 rounded-lg font-black uppercase tracking-wider cursor-pointer border transition-all",
+                                  isThird 
+                                    ? "bg-amber-100 text-amber-800 border-amber-300 hover:bg-amber-200" 
+                                    : "bg-emerald-100 text-emerald-800 border-emerald-300 hover:bg-emerald-200"
+                                )}
+                                title="Clique para alternar entre Horta e Terceiro"
+                              >
                                 {isThird ? '🛒 Terceiro' : '🌿 Horta'}
-                              </span>
+                              </button>
                               <span className="font-bold text-slate-900 text-sm truncate">{item.name}</span>
                             </div>
 
@@ -1454,10 +2694,10 @@ export default function KgSalesManager({
                                 <input
                                   type="number"
                                   step="0.01"
-                                  min="0.01"
+                                  min="0"
                                   value={item.quantity}
                                   onChange={(e) => handleUpdateItemField(idx, 'quantity', parseFloat(e.target.value) || 0)}
-                                  className="w-16 text-xs font-black text-slate-800 outline-none text-right"
+                                  className="w-20 text-xs font-black text-slate-800 outline-none text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                 />
                                 <select
                                   value={item.unit || 'kg'}
@@ -1474,31 +2714,34 @@ export default function KgSalesManager({
 
                               {/* Preço de Custo (se for terceiro) */}
                               {isThird && (
-                                <div className="flex items-center gap-1 bg-white px-2 py-1 rounded-xl border border-amber-200">
-                                  <label className="text-[10px] font-extrabold text-amber-700">Custo:</label>
+                                <div className="flex items-center gap-1.5 bg-amber-50 px-2.5 py-1 rounded-xl border-2 border-amber-400">
+                                  <label className="text-[10px] font-black text-amber-900">Custo R$:</label>
                                   <input
                                     type="number"
                                     step="0.01"
-                                    value={item.cost || item.estimatedCost || 0}
+                                    min="0"
+                                    value={item.cost !== undefined ? item.cost : (item.estimatedCost || 0)}
                                     onChange={(e) => {
-                                      const val = parseFloat(e.target.value) || 0;
+                                      const val = e.target.value === '' ? 0 : parseFloat(e.target.value);
                                       handleUpdateItemField(idx, 'cost', val);
                                       handleUpdateItemField(idx, 'estimatedCost', val);
                                     }}
-                                    className="w-14 text-xs font-black text-slate-800 outline-none text-right"
+                                    placeholder="0.00"
+                                    className="w-24 text-xs font-black text-amber-950 bg-white px-2 py-0.5 rounded border border-amber-300 outline-none text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                   />
                                 </div>
                               )}
 
                               {/* Preço de Venda */}
-                              <div className="flex items-center gap-1 bg-white px-2 py-1 rounded-xl border border-slate-200">
+                              <div className="flex items-center gap-1.5 bg-white px-2 py-1 rounded-xl border border-slate-200">
                                 <label className="text-[10px] font-extrabold text-slate-400">Venda:</label>
                                 <input
                                   type="number"
                                   step="0.01"
+                                  min="0"
                                   value={item.price}
                                   onChange={(e) => handleUpdateItemField(idx, 'price', parseFloat(e.target.value) || 0)}
-                                  className="w-14 text-xs font-black text-emerald-700 outline-none text-right"
+                                  className="w-20 text-xs font-black text-emerald-700 outline-none text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                 />
                               </div>
 
@@ -1525,7 +2768,6 @@ export default function KgSalesManager({
                     </div>
                   )}
                 </div>
-              </div>
 
               {/* PASSO 4: RESUMO FINANCEIRO E BOTÃO SALVAR */}
               <div className="bg-slate-900 text-white p-5 md:p-6 rounded-3xl space-y-4">
@@ -1640,47 +2882,119 @@ export default function KgSalesManager({
                   </div>
                 </div>
 
-                <div className="space-y-2 max-h-96 overflow-y-auto p-1">
-                  {consolidatedShoppingList.map((prod, idx) => (
-                    <div 
-                      key={idx}
-                      className={cn(
-                        "p-3.5 rounded-2xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3",
-                        prod.allPurchased ? "bg-slate-50 border-slate-200 opacity-70" : "bg-white border-amber-200/90 shadow-2xs"
-                      )}
-                    >
-                      <div className="flex items-center gap-3">
-                        <button
-                          type="button"
-                          onClick={() => handleToggleConsolidatedProduct(prod.orders, !prod.allPurchased)}
-                          className={cn(
-                            "w-6 h-6 rounded-lg flex items-center justify-center transition-all shrink-0 cursor-pointer",
-                            prod.allPurchased ? "bg-emerald-600 text-white" : "border-2 border-slate-300 bg-white hover:border-amber-500"
-                          )}
-                          title={prod.allPurchased ? "Item já comprado" : "Clique para marcar como comprado"}
-                        >
-                          {prod.allPurchased && <Check size={14} className="stroke-[3]" />}
-                        </button>
-                        <div>
-                          <span className={cn("text-sm font-black block", prod.allPurchased ? "line-through text-slate-400" : "text-slate-800")}>
-                            {prod.name}
-                          </span>
-                          <span className="text-[10px] text-slate-400 block">
-                            Pedidos de: {prod.orders.map(o => `${o.customerName} (${o.quantity.toFixed(1)}${prod.unit})`).join(', ')}
-                          </span>
+                <div className="space-y-2.5 max-h-[420px] overflow-y-auto p-1">
+                  {consolidatedShoppingList.map((prod, idx) => {
+                    const normKey = normalizeProductName(prod.name);
+                    const currentCost = shoppingListCosts[normKey] !== undefined 
+                      ? shoppingListCosts[normKey] 
+                      : (prod.totalQuantity > 0 ? prod.totalEstimatedCost / prod.totalQuantity : 0);
+                    const isFeedback = costUpdatedFeedbackKey === normKey;
+                    const itemTotalCost = prod.totalQuantity * currentCost;
+
+                    return (
+                      <div 
+                        key={idx}
+                        className={cn(
+                          "p-4 rounded-2xl border transition-all flex flex-col lg:flex-row lg:items-center justify-between gap-4",
+                          prod.allPurchased ? "bg-slate-50 border-slate-200 opacity-85" : "bg-white border-amber-200 shadow-2xs"
+                        )}
+                      >
+                        {/* 1. Nome do Produto e Pedidos dos Clientes */}
+                        <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleConsolidatedProduct(prod.name, prod.orders, !prod.allPurchased)}
+                            className={cn(
+                              "w-7 h-7 rounded-xl flex items-center justify-center transition-all shrink-0 cursor-pointer mt-0.5 sm:mt-0",
+                              prod.allPurchased ? "bg-emerald-600 text-white shadow-sm" : "border-2 border-slate-300 bg-white hover:border-amber-500"
+                            )}
+                            title={prod.allPurchased ? "Mercadoria comprada" : "Marcar como comprado"}
+                          >
+                            {prod.allPurchased && <Check size={16} className="stroke-[3]" />}
+                          </button>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={cn("text-base font-black truncate", prod.allPurchased ? "line-through text-slate-400" : "text-slate-900")}>
+                                {prod.name}
+                              </span>
+                              {prod.allPurchased ? (
+                                <span className="text-[10px] font-black uppercase text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                                  Comprado
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-black uppercase text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full">
+                                  A Comprar
+                                </span>
+                              )}
+                              {isFeedback && (
+                                <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-lg border border-emerald-300 animate-pulse">
+                                  ✓ Custo salvo nos pedidos!
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[11px] text-slate-500 block truncate mt-0.5">
+                              Clientes: {prod.orders.map(o => `${o.customerName} (${o.quantity.toFixed(1)}${prod.unit})`).join(', ')}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* 2. Quantidade e Valor que Estou Pagando no Produto */}
+                        <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0 pt-3 lg:pt-0 border-t lg:border-t-0 border-slate-100">
+                          {/* Quantidade a Comprar */}
+                          <div className="text-left sm:text-right bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 min-w-[90px]">
+                            <span className="text-[10px] font-bold text-slate-400 block uppercase">Quantidade:</span>
+                            <span className="text-sm font-black text-slate-800">
+                              {prod.totalQuantity.toFixed(2)} {prod.unit}
+                            </span>
+                          </div>
+
+                          {/* Valor que estou pagando no produto */}
+                          <div className="flex items-center gap-2 bg-amber-50/90 px-3 py-1.5 rounded-xl border-2 border-amber-300">
+                            <div>
+                              <label className="text-[10px] font-black text-amber-900 block leading-tight">
+                                Valor que estou pagando (R$/{prod.unit}):
+                              </label>
+                              <div className="flex items-center gap-1 mt-0.5">
+                                <span className="text-xs font-black text-amber-800">R$</span>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  value={currentCost || ''}
+                                  placeholder="0.00"
+                                  onChange={(e) => {
+                                    const val = e.target.value === '' ? 0 : parseFloat(e.target.value);
+                                    setShoppingListCosts({
+                                      ...shoppingListCosts,
+                                      [normKey]: val
+                                    });
+                                  }}
+                                  className="w-24 px-2 py-0.5 bg-white border border-amber-300 rounded font-black text-xs text-slate-900 outline-none text-right focus:ring-1 focus:ring-amber-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                />
+                              </div>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateConsolidatedProductCost(prod.name, currentCost)}
+                              className="px-2.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-[11px] font-black transition-all cursor-pointer flex items-center gap-1 shadow-xs"
+                              title="Salvar valor pago neste produto"
+                            >
+                              <Save size={12} /> Salvar
+                            </button>
+                          </div>
+
+                          {/* Total Pago */}
+                          <div className="text-right min-w-[95px]">
+                            <span className="text-[10px] font-bold text-slate-400 block uppercase">Total Pago:</span>
+                            <span className="text-sm font-black text-amber-900 block">
+                              R$ {itemTotalCost.toFixed(2)}
+                            </span>
+                          </div>
                         </div>
                       </div>
-
-                      <div className="text-right shrink-0">
-                        <span className="text-sm font-black text-amber-800 block">
-                          {prod.totalQuantity.toFixed(2)} {prod.unit}
-                        </span>
-                        <span className="text-[10px] font-bold text-slate-400 block">
-                          Custo estimado: R$ {prod.totalEstimatedCost.toFixed(2)}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 {/* RODAPÉ DO MODAL DE COMPRAS */}
@@ -1703,6 +3017,340 @@ export default function KgSalesManager({
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL: GERENCIAMENTO DE PRODUTOS PRÉ-SALVOS ================= */}
+      {isPresetsManagerOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white w-full max-w-3xl rounded-3xl shadow-2xl border border-slate-150 p-6 md:p-8 space-y-6 max-h-[92vh] overflow-y-auto">
+            {/* Cabeçalho */}
+            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-600 font-bold">
+                  <SlidersHorizontal size={22} />
+                </div>
+                <div>
+                  <h3 className="text-xl font-black text-slate-900">
+                    Gerenciar Produtos Pré-Salvos (Terceiros / Revenda)
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Edite os custos de compra e preços de venda padrão, exclua itens antigos ou cadastre novos produtos.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPresetsManagerOpen(false);
+                  setEditingPresetId(null);
+                  setEditingPresetData(null);
+                }}
+                className="w-9 h-9 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-500 font-bold flex items-center justify-center cursor-pointer transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Formulário: Cadastrar Novo Pré-Salvo */}
+            <div className="bg-amber-50/60 border border-amber-200/80 rounded-2xl p-4 space-y-3">
+              <span className="text-xs font-black uppercase text-amber-950 tracking-wider block">
+                + Cadastrar Novo Produto Pré-Salvo:
+              </span>
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
+                <div className="sm:col-span-4">
+                  <label className="text-[10px] font-extrabold text-amber-900 block mb-0.5">Nome do Produto:</label>
+                  <input
+                    type="text"
+                    placeholder="Ex: Pimentão Amarelo"
+                    value={newPresetForm.name}
+                    onChange={(e) => setNewPresetForm({ ...newPresetForm, name: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="text-[10px] font-extrabold text-amber-900 block mb-0.5">Custo R$:</label>
+                  <div className="relative">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-amber-800">R$</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      placeholder="Ex: 12.00"
+                      value={newPresetForm.defaultCost}
+                      onChange={(e) => setNewPresetForm({
+                        ...newPresetForm,
+                        defaultCost: e.target.value === '' ? '' : parseFloat(e.target.value)
+                      })}
+                      className="w-full pl-7 pr-2 py-2 bg-white border border-amber-300 rounded-xl text-xs font-black text-amber-950 outline-none focus:ring-2 focus:ring-amber-500 text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    />
+                  </div>
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="text-[10px] font-extrabold text-amber-900 block mb-0.5">Venda R$:</label>
+                  <div className="relative">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-emerald-800">R$</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      placeholder="Ex: 24.00"
+                      value={newPresetForm.defaultPrice}
+                      onChange={(e) => setNewPresetForm({
+                        ...newPresetForm,
+                        defaultPrice: e.target.value === '' ? '' : parseFloat(e.target.value)
+                      })}
+                      className="w-full pl-7 pr-2 py-2 bg-white border border-emerald-400 rounded-xl text-xs font-black text-emerald-950 outline-none focus:ring-2 focus:ring-emerald-500 text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    />
+                  </div>
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="text-[10px] font-extrabold text-amber-900 block mb-0.5">Unidade:</label>
+                  <select
+                    value={newPresetForm.unit}
+                    onChange={(e) => setNewPresetForm({ ...newPresetForm, unit: e.target.value })}
+                    className="w-full px-2 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none cursor-pointer h-[38px]"
+                  >
+                    <option value="kg">kg</option>
+                    <option value="un">un</option>
+                    <option value="dz">dz</option>
+                    <option value="pct">pct</option>
+                    <option value="cx">cx</option>
+                  </select>
+                </div>
+                <div className="sm:col-span-2 flex items-end">
+                  <button
+                    type="button"
+                    onClick={handleAddPreset}
+                    disabled={!newPresetForm.name.trim()}
+                    className="w-full py-2 bg-amber-600 hover:bg-amber-700 text-white font-black text-xs rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1 shadow-sm h-[38px] disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Plus size={14} /> Salvar
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Barra de Busca e Restaurar Padrões */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
+              <div className="relative flex-1">
+                <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Pesquisar produto pré-salvo..."
+                  value={presetSearch}
+                  onChange={(e) => setPresetSearch(e.target.value)}
+                  className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:bg-white focus:ring-2 focus:ring-amber-500"
+                />
+                {presetSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setPresetSearch('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={handleResetPresetsToDefault}
+                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+                title="Restaura a lista inicial de sugestões de fábrica"
+              >
+                <RotateCcw size={13} /> Restaurar Padrões de Fábrica
+              </button>
+            </div>
+
+            {/* Lista de Produtos Cadastrados */}
+            <div className="space-y-2 max-h-96 overflow-y-auto p-1">
+              {thirdPartyPresets
+                .filter(p => p.name.toLowerCase().includes(presetSearch.toLowerCase().trim()))
+                .map((preset) => {
+                  const isEditing = editingPresetId === preset.id;
+                  const unitCost = Number(preset.defaultCost) || 0;
+                  const unitPrice = Number(preset.defaultPrice) || 0;
+                  const unitProfit = unitPrice - unitCost;
+                  const profitMargin = unitPrice > 0 ? (unitProfit / unitPrice) * 100 : 0;
+
+                  if (isEditing && editingPresetData) {
+                    return (
+                      <div
+                        key={preset.id}
+                        className="p-3 bg-amber-50/80 border-2 border-amber-400 rounded-2xl space-y-2 shadow-xs"
+                      >
+                        <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                          <div className="sm:col-span-4">
+                            <label className="text-[10px] font-bold text-amber-900 block mb-0.5">Nome:</label>
+                            <input
+                              type="text"
+                              value={editingPresetData.name}
+                              onChange={(e) => setEditingPresetData({ ...editingPresetData, name: e.target.value })}
+                              className="w-full px-2.5 py-1.5 bg-white border border-amber-300 rounded-lg text-xs font-bold text-slate-900 outline-none"
+                            />
+                          </div>
+                          <div className="sm:col-span-2">
+                            <label className="text-[10px] font-bold text-amber-900 block mb-0.5">Custo R$:</label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={editingPresetData.defaultCost}
+                              onChange={(e) => setEditingPresetData({
+                                ...editingPresetData,
+                                defaultCost: parseFloat(e.target.value) || 0
+                              })}
+                              className="w-full px-2 py-1.5 bg-white border border-amber-300 rounded-lg text-xs font-black text-amber-950 outline-none text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            />
+                          </div>
+                          <div className="sm:col-span-2">
+                            <label className="text-[10px] font-bold text-amber-900 block mb-0.5">Venda R$:</label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={editingPresetData.defaultPrice}
+                              onChange={(e) => setEditingPresetData({
+                                ...editingPresetData,
+                                defaultPrice: parseFloat(e.target.value) || 0
+                              })}
+                              className="w-full px-2 py-1.5 bg-white border border-emerald-400 rounded-lg text-xs font-black text-emerald-950 outline-none text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            />
+                          </div>
+                          <div className="sm:col-span-2">
+                            <label className="text-[10px] font-bold text-amber-900 block mb-0.5">Unidade:</label>
+                            <select
+                              value={editingPresetData.unit}
+                              onChange={(e) => setEditingPresetData({ ...editingPresetData, unit: e.target.value })}
+                              className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-700 outline-none cursor-pointer"
+                            >
+                              <option value="kg">kg</option>
+                              <option value="un">un</option>
+                              <option value="dz">dz</option>
+                              <option value="pct">pct</option>
+                              <option value="cx">cx</option>
+                            </select>
+                          </div>
+                          <div className="sm:col-span-2 flex items-end gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                handleUpdatePreset(preset.id, editingPresetData);
+                                setEditingPresetId(null);
+                                setEditingPresetData(null);
+                              }}
+                              className="flex-1 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1 shadow-xs"
+                            >
+                              <Save size={13} /> Salvar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingPresetId(null);
+                                setEditingPresetData(null);
+                              }}
+                              className="p-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-bold cursor-pointer"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div
+                      key={preset.id}
+                      className="p-3 bg-white border border-slate-200 hover:border-amber-300 rounded-2xl flex items-center justify-between gap-3 shadow-2xs transition-all"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-900 text-sm">{preset.name}</span>
+                          <span className="text-[10px] font-black uppercase text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                            {preset.unit || 'kg'}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 mt-1">
+                          <span className="text-amber-900 font-extrabold">
+                            Custo de Compra: <strong className="text-amber-950 font-black">R$ {unitCost.toFixed(2)}</strong>/{preset.unit || 'kg'}
+                          </span>
+                          <span className="text-slate-300">•</span>
+                          <span className="text-emerald-700 font-extrabold">
+                            Preço de Venda: <strong className="text-emerald-900 font-black">R$ {unitPrice.toFixed(2)}</strong>/{preset.unit || 'kg'}
+                          </span>
+                          {unitPrice > 0 && (
+                            <>
+                              <span className="text-slate-300">•</span>
+                              <span className="text-slate-600 font-semibold">
+                                Margem: <strong className="text-emerald-600 font-bold">{profitMargin.toFixed(0)}%</strong> (Lucro R$ {unitProfit.toFixed(2)})
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingPresetId(preset.id);
+                            setEditingPresetData({
+                              name: preset.name,
+                              defaultCost: preset.defaultCost || 0,
+                              defaultPrice: preset.defaultPrice || 0,
+                              unit: preset.unit || 'kg'
+                            });
+                          }}
+                          className="px-2.5 py-1.5 bg-slate-50 hover:bg-amber-50 hover:text-amber-900 text-slate-600 rounded-xl text-xs font-bold border border-slate-200 flex items-center gap-1 transition-all cursor-pointer"
+                          title="Editar nome, custo ou preço"
+                        >
+                          <Edit2 size={13} /> Editar
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (window.confirm(`Tem certeza que deseja excluir "${preset.name}" da lista de pré-salvos?`)) {
+                              handleDeletePreset(preset.id);
+                            }
+                          }}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
+                          title="Excluir produto pré-salvo"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+
+              {thirdPartyPresets.filter(p => p.name.toLowerCase().includes(presetSearch.toLowerCase().trim())).length === 0 && (
+                <div className="p-8 text-center bg-slate-50 border border-dashed border-slate-200 rounded-2xl text-slate-400 text-xs">
+                  Nenhum produto pré-salvo encontrado para "{presetSearch}". Cadastre um novo produto acima.
+                </div>
+              )}
+            </div>
+
+            {/* Rodapé */}
+            <div className="border-t border-slate-100 pt-4 flex items-center justify-between">
+              <span className="text-xs text-slate-400">
+                Total de produtos cadastrados: <strong className="text-slate-700">{thirdPartyPresets.length}</strong>
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPresetsManagerOpen(false);
+                  setEditingPresetId(null);
+                  setEditingPresetData(null);
+                }}
+                className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-black text-xs rounded-xl transition-all cursor-pointer"
+              >
+                Concluir
+              </button>
+            </div>
           </div>
         </div>
       )}

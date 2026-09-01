@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { collection, query, onSnapshot, addDoc, updateDoc, doc, serverTimestamp, orderBy, getDoc, increment, where, deleteDoc, getDocs, limit, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Sale, SaleStatus, InventoryItem, SaleItem, Customer, Production, PaymentMethod, ProduceCatalogItem } from '../types';
-import { Plus, Search, Filter, ShoppingCart, CheckCircle, XCircle, Clock, ChevronDown, Trash2, Package, X, Calendar, CreditCard, DollarSign, Edit2, Store, Truck, RotateCcw, AlertTriangle, RefreshCw, ClipboardList, Sparkles, Phone, Scale } from 'lucide-react';
-import KgSalesManager from './KgSalesManager';
+import { Plus, Search, Filter, ShoppingCart, CheckCircle, XCircle, Clock, ChevronDown, Trash2, Package, X, Calendar, CreditCard, DollarSign, Edit2, Store, Truck, RotateCcw, AlertTriangle, RefreshCw, ClipboardList, Sparkles, Phone, Scale, Building2 } from 'lucide-react';
+import KgSalesManager, { DEFAULT_POPULAR_THIRD_PARTY_ITEMS } from './KgSalesManager';
+import ThirdPartyPurchases from './ThirdPartyPurchases';
+import { ThirdPartyPreset } from '../types';
 
 export function isPhoneMatch(typedPhone?: string, candidatePhone?: string): boolean {
   if (!typedPhone || !candidatePhone) return false;
@@ -129,8 +131,31 @@ export default function Sales() {
   const [showEditCustomerSuggestions, setShowEditCustomerSuggestions] = useState(false);
   const [editCustomerSearchTerm, setEditCustomerSearchTerm] = useState('');
 
-  // New Fair (Modo Feira) States
-  const [activeTab, setActiveTab] = useState<'individual' | 'feira' | 'delivery' | 'kg_sales' | 'colheita'>('individual');
+  // New Fair (Modo Feira) & Compras States
+  const [activeTab, setActiveTab] = useState<'individual' | 'feira' | 'delivery' | 'kg_sales' | 'purchases' | 'colheita'>('individual');
+
+  // Predefinições de Produtos de Terceiros (Revenda)
+  const [thirdPartyPresets, setThirdPartyPresets] = useState<ThirdPartyPreset[]>(() => {
+    try {
+      const saved = localStorage.getItem('kg_sales_third_party_presets');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {
+      console.error('Erro ao carregar predefinições de terceiros do localStorage', e);
+    }
+    return DEFAULT_POPULAR_THIRD_PARTY_ITEMS;
+  });
+
+  const handleUpdateThirdPartyPresets = (updated: ThirdPartyPreset[]) => {
+    setThirdPartyPresets(updated);
+    try {
+      localStorage.setItem('kg_sales_third_party_presets', JSON.stringify(updated));
+    } catch (e) {
+      console.error('Erro ao persistir predefinições', e);
+    }
+  };
 
   // Venda Delivery States
   const [deliveryClientName, setDeliveryClientName] = useState('');
@@ -1246,7 +1271,21 @@ export default function Sales() {
         >
           <Scale size={15} className={activeTab === 'kg_sales' ? "text-emerald-600" : "text-slate-400"} />
           <span className="text-[11px] sm:text-xs md:text-sm">
-            Venda por KG <span className="hidden lg:inline">& Revenda</span>
+            Venda por KG <span className="hidden lg:inline">& Misto</span>
+          </span>
+        </button>
+        <button
+          onClick={() => setActiveTab('purchases')}
+          className={cn(
+            "flex-1 min-w-[140px] flex items-center justify-center gap-1.5 md:gap-2 py-3 rounded-xl transition-all cursor-pointer",
+            activeTab === 'purchases' 
+              ? "bg-white text-emerald-700 shadow-md font-black" 
+              : "text-slate-500 hover:text-slate-800 font-bold"
+          )}
+        >
+          <Building2 size={15} className={activeTab === 'purchases' ? "text-emerald-600" : "text-slate-400"} />
+          <span className="text-[11px] sm:text-xs md:text-sm">
+            Compras <span className="hidden lg:inline">& Estoque</span> Terceiros
           </span>
         </button>
         <button
@@ -1866,6 +1905,16 @@ export default function Sales() {
           produceCatalog={produceCatalog}
           inventory={inventory}
           customers={customers}
+        />
+      )}
+
+      {activeTab === 'purchases' && (
+        <ThirdPartyPurchases
+          sales={sales}
+          produceCatalog={produceCatalog}
+          thirdPartyPresets={thirdPartyPresets}
+          presets={thirdPartyPresets}
+          onUpdatePresets={handleUpdateThirdPartyPresets}
         />
       )}
 

@@ -275,6 +275,38 @@
         "transplantedBed": { "type": "string" }
       },
       "required": ["crop", "plantingDate", "trayCount", "cellCount", "totalCells", "status", "createdAt"]
+    },
+    "ThirdPartyPurchase": {
+      "title": "Third-Party Purchase Order",
+      "description": "Purchase orders for third-party produce and payment tracking.",
+      "type": "object",
+      "properties": {
+        "supplierName": { "type": "string" },
+        "purchaseNumber": { "type": "string" },
+        "purchaseDate": { "type": "string", "format": "date-time" },
+        "dueDate": { "type": "string", "format": "date-time" },
+        "paymentStatus": { "type": "string", "enum": ["paid", "pending"] },
+        "paymentMethod": { "type": "string" },
+        "notes": { "type": "string" },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "quantity": { "type": "number" },
+              "unit": { "type": "string" },
+              "unitCost": { "type": "number" },
+              "totalCost": { "type": "number" }
+            }
+          }
+        },
+        "totalAmount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["supplierName", "items", "totalAmount", "paymentStatus"]
     }
   },
   "firestore": {
@@ -329,6 +361,10 @@
     "/fairs/{fairId}": {
       "schema": "Fair",
       "description": "Fairs and mobile market sales tracking."
+    },
+    "/third_party_purchases/{purchaseId}": {
+      "schema": "ThirdPartyPurchase",
+      "description": "Purchase orders for third-party produce and payment tracking."
     }
   }
 }

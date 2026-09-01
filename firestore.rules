@@ -193,6 +193,14 @@ service cloud.firestore {
              data.createdAt is timestamp;
     }
 
+    function isValidThirdPartyPurchase(data) {
+      return data.keys().hasAll(['supplierName', 'items', 'totalAmount', 'paymentStatus']) &&
+             data.supplierName is string && data.supplierName.size() > 0 &&
+             data.items is list &&
+             data.totalAmount is number &&
+             data.paymentStatus in ['paid', 'pending'];
+    }
+
     // ===============================================================
     // Match Rules
     // ===============================================================
@@ -233,13 +241,13 @@ service cloud.firestore {
     match /sales/{saleId} {
       allow read: if isAuthenticated();
       allow create, update: if isOwner() || (hasPermission('canManageSales') && isValidSale(request.resource.data));
-      allow delete: if isOwner();
+      allow delete: if isOwner() || hasPermission('canManageSales') || isAuthenticated();
     }
 
     match /transactions/{transactionId} {
       allow read: if hasPermission('canViewFinance') || isOwner();
-      allow create, update: if isOwner();
-      allow delete: if isOwner();
+      allow create, update: if isOwner() || ((hasPermission('canViewFinance') || hasPermission('canManageSales')) && isValidTransaction(request.resource.data));
+      allow delete: if isOwner() || hasPermission('canViewFinance') || hasPermission('canManageSales') || isAuthenticated();
     }
 
     match /customers/{customerId} {
@@ -289,6 +297,16 @@ service cloud.firestore {
 
     match /produce_catalog/{catalogId} {
       allow read, write: if isAuthenticated();
+    }
+
+    match /third_party_purchases/{purchaseId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAuthenticated();
+    }
+
+    match /third_party_stock_adjustments/{adjustmentId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAuthenticated();
     }
 
     match /system/{systemId} {

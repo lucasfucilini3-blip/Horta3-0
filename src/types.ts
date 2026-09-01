@@ -209,3 +209,53 @@ export interface NurserySeedling {
   createdAt: any; // Firestore Timestamp
 }
 
+export type PurchasePaymentStatus = 'paid' | 'pending';
+
+export interface ThirdPartyPurchaseItem {
+  id?: string;
+  name: string;
+  quantity: number;
+  unit: string;
+  unitCost: number;
+  totalCost: number;
+}
+
+export interface ThirdPartyPurchase {
+  id: string;
+  purchaseNumber?: string;
+  supplierName: string;
+  purchaseDate: any; // Firestore Timestamp
+  dueDate?: any; // Firestore Timestamp (Vencimento quando a pagar)
+  paymentDate?: any; // Firestore Timestamp (Data da efetivação do pagamento)
+  items: ThirdPartyPurchaseItem[];
+  totalAmount: number;
+  paymentStatus: PurchasePaymentStatus; // 'paid' | 'pending'
+  paymentMethod?: string; // Pix, Dinheiro, Boleto, Cartão, A Prazo
+  notes?: string;
+  financialExpenseId?: string;
+  createdAt: any;
+  updatedAt?: any;
+}
+
+export interface ThirdPartyStockItem {
+  name: string;
+  canonicalName: string;
+  unit: string;
+  totalPurchased: number;
+  totalSold: number;
+  currentStock: number;
+  latestCost: number;
+  averageCost: number;
+  lastSupplier?: string;
+  lastPurchaseDate?: any;
+  purchaseCount: number;
+}
+
+export interface ThirdPartyPreset {
+  id: string;
+  name: string;
+  defaultCost: number;
+  defaultPrice: number;
+  unit: string;
+}
+

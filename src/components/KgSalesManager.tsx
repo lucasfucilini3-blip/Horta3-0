@@ -53,7 +53,7 @@ import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { collection, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, Timestamp, query, orderBy, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
-import { getCanonicalProductName, normalizeProductName } from '../productUtils';
+import { getCanonicalProductName, normalizeProductName, calculateThirdPartyStock } from '../productUtils';
 import { cn, handleFirestoreError, OperationType } from '../App';
 
 export interface KgSalesManagerProps {
@@ -163,11 +163,17 @@ export default function KgSalesManager({
 
   // Compras de Terceiros reais do Firestore para cálculo de estoque
   const [thirdPartyPurchases, setThirdPartyPurchases] = useState<ThirdPartyPurchase[]>([]);
+  const [saleToDelete, setSaleToDelete] = useState<Sale | null>(null);
 
   useEffect(() => {
-    const q = query(collection(db, 'third_party_purchases'), orderBy('purchaseDate', 'desc'));
+    const q = collection(db, 'third_party_purchases');
     const unsub = onSnapshot(q, (snapshot) => {
       const docs = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as ThirdPartyPurchase));
+      docs.sort((a, b) => {
+        const tA = a.purchaseDate?.toDate ? a.purchaseDate.toDate().getTime() : (a.purchaseDate ? new Date(a.purchaseDate).getTime() : 0);
+        const tB = b.purchaseDate?.toDate ? b.purchaseDate.toDate().getTime() : (b.purchaseDate ? new Date(b.purchaseDate).getTime() : 0);
+        return tB - tA;
+      });
       setThirdPartyPurchases(docs);
     }, (err) => {
       console.error("Erro ao escutar compras em KgSalesManager:", err);
@@ -177,78 +183,7 @@ export default function KgSalesManager({
 
   // Estoque Dinâmico Calculado de Produtos Comprados de Terceiros
   const calculatedThirdPartyStock = useMemo(() => {
-    const stockMap = new Map<string, {
-      name: string;
-      canonicalName: string;
-      unit: string;
-      totalPurchased: number;
-      totalSold: number;
-      currentStock: number;
-      averageCost: number;
-      latestCost: number;
-      lastSupplier?: string;
-    }>();
-
-    // 1. Somar compras cadastradas
-    (thirdPartyPurchases || []).forEach(p => {
-      (p.items || []).forEach(it => {
-        const canonical = getCanonicalProductName(it.name);
-        const key = `${normalizeProductName(canonical)}_${it.unit || 'kg'}`;
-        if (!stockMap.has(key)) {
-          stockMap.set(key, {
-            name: it.name,
-            canonicalName: canonical,
-            unit: it.unit || 'kg',
-            totalPurchased: 0,
-            totalSold: 0,
-            currentStock: 0,
-            averageCost: it.unitCost || 0,
-            latestCost: it.unitCost || 0,
-            lastSupplier: p.supplierName
-          });
-        }
-        const item = stockMap.get(key)!;
-        const prevQty = item.totalPurchased;
-        const newQty = prevQty + (Number(it.quantity) || 0);
-        const prevVal = prevQty * item.averageCost;
-        const newVal = prevVal + ((Number(it.quantity) || 0) * (Number(it.unitCost) || 0));
-        item.totalPurchased = newQty;
-        item.averageCost = newQty > 0 ? Number((newVal / newQty).toFixed(2)) : (it.unitCost || 0);
-        item.latestCost = it.unitCost || item.averageCost;
-        if (p.supplierName) item.lastSupplier = p.supplierName;
-      });
-    });
-
-    // 2. Deduzir vendas realizadas
-    (sales || []).forEach(s => {
-      if (s.status === 'cancelled') return;
-      (s.items || []).forEach(it => {
-        if (it.source === 'third_party') {
-          const canonical = getCanonicalProductName(it.name);
-          const key = `${normalizeProductName(canonical)}_${it.unit || 'kg'}`;
-          if (!stockMap.has(key)) {
-            stockMap.set(key, {
-              name: it.name,
-              canonicalName: canonical,
-              unit: it.unit || 'kg',
-              totalPurchased: 0,
-              totalSold: 0,
-              currentStock: 0,
-              averageCost: Number(it.cost || it.estimatedCost || 0),
-              latestCost: Number(it.cost || it.estimatedCost || 0)
-            });
-          }
-          const item = stockMap.get(key)!;
-          item.totalSold += (Number(it.actualWeightedQty || it.quantity) || 0);
-        }
-      });
-    });
-
-    stockMap.forEach(item => {
-      item.currentStock = Number((item.totalPurchased - item.totalSold).toFixed(2));
-    });
-
-    return Array.from(stockMap.values()).sort((a, b) => a.canonicalName.localeCompare(b.canonicalName, 'pt-BR'));
+    return calculateThirdPartyStock(thirdPartyPurchases, sales);
   }, [thirdPartyPurchases, sales]);
 
   // Estados para Composição de Item Misto (Horta Própria + Estoque de Terceiros)
@@ -1316,15 +1251,15 @@ export default function KgSalesManager({
     }
   };
 
-  // Excluir Pedido
-  const handleDeleteSale = async (saleId: string) => {
-    if (confirm('Deseja realmente excluir este pedido por KG?')) {
-      try {
-        await deleteDoc(doc(db, 'sales', saleId));
-      } catch (err) {
-        console.error(err);
-        handleFirestoreError(err, OperationType.DELETE, 'sales');
-      }
+  // Excluir Pedido com modal
+  const handleDeleteSaleConfirmed = async () => {
+    if (!saleToDelete) return;
+    try {
+      await deleteDoc(doc(db, 'sales', saleToDelete.id));
+      setSaleToDelete(null);
+    } catch (err) {
+      console.error(err);
+      handleFirestoreError(err, OperationType.DELETE, 'sales');
     }
   };
 
@@ -1797,8 +1732,8 @@ export default function KgSalesManager({
                       <Edit2 size={16} />
                     </button>
                     <button
-                      onClick={() => handleDeleteSale(sale.id)}
-                      className="p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-600 rounded-xl transition-all"
+                      onClick={() => setSaleToDelete(sale)}
+                      className="p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-600 rounded-xl transition-all cursor-pointer"
                       title="Excluir Pedido"
                     >
                       <Trash2 size={16} />
@@ -2611,9 +2546,7 @@ export default function KgSalesManager({
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                if (window.confirm(`Remover "${sug.name}" dos produtos pré-salvos?`)) {
-                                  handleDeletePreset(sug.id);
-                                }
+                                handleDeletePreset(sug.id);
                               }}
                               className="w-5 h-5 rounded text-slate-300 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center transition-colors cursor-pointer"
                               title="Excluir produto pré-salvo"
@@ -3312,11 +3245,7 @@ export default function KgSalesManager({
 
                         <button
                           type="button"
-                          onClick={() => {
-                            if (window.confirm(`Tem certeza que deseja excluir "${preset.name}" da lista de pré-salvos?`)) {
-                              handleDeletePreset(preset.id);
-                            }
-                          }}
+                          onClick={() => handleDeletePreset(preset.id)}
                           className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
                           title="Excluir produto pré-salvo"
                         >
@@ -3455,6 +3384,60 @@ export default function KgSalesManager({
                   {saving ? 'Salvando...' : 'Confirmar Pesagem'}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Modal de Confirmação de Exclusão de Pedido */}
+      {saleToDelete && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-slate-100 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+                <Trash2 size={24} />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900">Excluir Pedido por KG</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Esta ação não pode ser desfeita.</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 rounded-2xl p-4 text-xs space-y-2 border border-slate-200/70">
+              <div className="flex justify-between text-slate-600">
+                <span>Cliente:</span>
+                <span className="font-black text-slate-900">{saleToDelete.customerName || 'Cliente sem nome'}</span>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span>Total:</span>
+                <span className="font-black text-rose-600">R$ {(saleToDelete.total || 0).toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span>Itens:</span>
+                <span className="font-medium text-slate-700 text-right truncate max-w-[220px]">
+                  {saleToDelete.items?.map(i => `${i.name} (${i.quantity} ${i.unit || 'kg'})`).join(', ') || 'Nenhum item'}
+                </span>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-500">
+              Ao excluir este pedido, os produtos de terceiros que estavam reservados retornarão imediatamente ao estoque disponível.
+            </p>
+
+            <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setSaleToDelete(null)}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteSaleConfirmed}
+                className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black shadow-lg shadow-rose-200 transition-all flex items-center gap-2 cursor-pointer"
+              >
+                <Trash2 size={16} /> Confirmar Exclusão
+              </button>
             </div>
           </div>
         </div>

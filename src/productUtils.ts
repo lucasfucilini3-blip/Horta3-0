@@ -1,3 +1,5 @@
+import { Sale, ThirdPartyPurchase, ThirdPartyStockItem } from './types';
+
 /**
  * Utility functions for product normalization, canonical naming, and synonym/abbreviation resolution.
  */
@@ -10,6 +12,56 @@ export function stripAccentsAndSpecial(str?: string | null): string {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * Strips all common packaging prefixes, unit annotations, and origin tags
+ * such as "(Revenda)", "(Terceiro)", "(Horta Própria)", "(Ceasa)", etc.
+ */
+export function cleanRawProductName(rawName?: string | null): string {
+  if (!rawName) return '';
+  let name = rawName.trim();
+
+  let prev = '';
+  // Repeat stripping until stable (handles chained tags like "Tomate (kg) (Revenda)")
+  while (prev !== name) {
+    prev = name;
+    name = name
+      // Strip leading non-alphanumeric punctuation
+      .replace(/^[-–—:.]\s*/, '')
+      // Strip common prefixes
+      .replace(/^(pct\.?|pacotes?|pcts?|pc\.?)\s+(de\s+)?/i, '')
+      .replace(/^(p[eé]s?)\s+(de\s+)?/i, '')
+      .replace(/^molho\s+(de\s+)?/i, '')
+      .replace(/^unidade\s+(de\s+)?/i, '')
+      .replace(/^(cx\.?|caixas?)\s+(de\s+)?/i, '')
+      // Strip parenthesized / bracketed / hyphenated units
+      .replace(/\s*[\(\[\-]\s*(pct|un|kg|mc|mç|pacote|pacotes|pe|pé|pés|cx|caixa|caixas|g|gramas?|dz|dúzia|duzia)\s*[\)\]]?/gi, '')
+      .replace(/\s*-\s*(pct|un|kg|mc|mç|pacote|pacotes|pe|pé|pés|cx|caixa|caixas|g|gramas?|dz|dúzia|duzia)$/gi, '')
+      // Strip origin or resale tags (Revenda, Terceiro, Horta Própria, etc.)
+      .replace(/\s*[\(\[\-]\s*(revenda|terceiros?|horta\s*pr[oó]pria|horta|produ[cç][aã]o\s*pr[oó]pria|ceasa)\s*[\)\]]?/gi, '')
+      .replace(/\s+(revenda|terceiros?|horta\s*pr[oó]pria|produ[cç][aã]o\s*pr[oó]pria|ceasa)$/gi, '')
+      .trim();
+  }
+
+  return name;
+}
+
+/**
+ * Standardizes units of measurement into consistent canonical abbreviations
+ */
+export function normalizeUnit(unit?: string | null): string {
+  if (!unit) return 'kg';
+  const u = unit.toLowerCase().trim();
+  if (u === 'quilo' || u === 'quilos' || u === 'kilo' || u === 'kilos' || u === 'kg') return 'kg';
+  if (u === 'unidade' || u === 'unidades' || u === 'und' || u === 'un') return 'un';
+  if (u === 'pacote' || u === 'pacotes' || u === 'pct' || u === 'pcts') return 'pct';
+  if (u === 'molho' || u === 'molhos' || u === 'mc' || u === 'mç') return 'mç';
+  if (u === 'caixa' || u === 'caixas' || u === 'cx') return 'cx';
+  if (u === 'pe' || u === 'pé' || u === 'pes' || u === 'pés') return 'pé';
+  if (u === 'duzia' || u === 'dúzia' || u === 'duzias' || u === 'dúzias' || u === 'dz') return 'dz';
+  if (u === 'g' || u === 'grama' || u === 'gramas') return 'g';
+  return u;
 }
 
 /**
@@ -32,25 +84,7 @@ export function stripAccentsAndSpecial(str?: string | null): string {
  */
 export function getCanonicalProductName(rawName?: string | null): string {
   if (!rawName) return '';
-  let name = rawName.trim();
-
-  // Strip prefixes like "pct ", "pct. ", "pacote ", "pacotes ", "pcts ", "pct de ", "pacote de ", "pc ", "molho de ", "unidade de ", "pé de ", "pes de ", "pés de ", "pe de "
-  name = name
-    .replace(/^(pct\.?|pacotes?|pcts?|pc\.?)\s+(de\s+)?/i, '')
-    .replace(/^(p[eé]s?)\s+(de\s+)?/i, '')
-    .replace(/^molho\s+(de\s+)?/i, '')
-    .replace(/^unidade\s+(de\s+)?/i, '')
-    .trim();
-
-  // Strip trailing unit tags like " (pct)", " - pct", " (un)", " (kg)", " (mç)", " (pé)", " (pés)"
-  name = name
-    .replace(/\s*\((pct|un|kg|mc|mç|pacote|pe|pé|pés)\)$/i, '')
-    .replace(/\s*-\s*(pct|un|kg|mc|mç|pacote|pe|pé|pés)$/i, '')
-    .trim();
-
-  // Remove leading non-alphanumeric punctuation
-  name = name.replace(/^[-–—:.]\s*/, '').trim();
-
+  const name = cleanRawProductName(rawName);
   const stripped = stripAccentsAndSpecial(name);
 
   // -------------------------------------------------------------
@@ -363,7 +397,140 @@ export function getCanonicalProductName(rawName?: string | null): string {
  */
 export function normalizeProductName(name?: string | null): string {
   if (!name) return '';
-  const canonical = getCanonicalProductName(name);
-  return stripAccentsAndSpecial(canonical);
+  const cleaned = cleanRawProductName(name);
+  const canonical = getCanonicalProductName(cleaned);
+  const stripped = stripAccentsAndSpecial(canonical);
+  // Residual cleanup for origin suffixes if any
+  return stripped
+    .replace(/(revenda|terceiros?|hortapropria|producaopropria|ceasa)$/g, '')
+    .trim();
 }
+
+/**
+ * Calculates dynamic real-time inventory for third-party purchased items.
+ * Deducts all sales that consume third-party items across both KG sales and regular orders.
+ */
+export function calculateThirdPartyStock(
+  purchases: ThirdPartyPurchase[] = [],
+  sales: Sale[] = []
+): ThirdPartyStockItem[] {
+  const stockMap = new Map<string, ThirdPartyStockItem>();
+
+  // 1. Somar todas as compras efetuadas
+  (purchases || []).forEach(purchase => {
+    const pDate = purchase.purchaseDate?.toDate
+      ? purchase.purchaseDate.toDate()
+      : (purchase.purchaseDate ? new Date(purchase.purchaseDate) : null);
+
+    (purchase.items || []).forEach(item => {
+      if (!item.name || !item.name.trim()) return;
+      const canonical = getCanonicalProductName(item.name);
+      const normName = normalizeProductName(canonical);
+      const normUnit = normalizeUnit(item.unit);
+      const key = `${normName}_${normUnit}`;
+
+      const qty = Number(item.quantity) || 0;
+      const unitCost = Number(item.unitCost) || 0;
+
+      if (!stockMap.has(key)) {
+        stockMap.set(key, {
+          name: canonical,
+          canonicalName: canonical,
+          unit: normUnit,
+          totalPurchased: 0,
+          totalSold: 0,
+          currentStock: 0,
+          latestCost: unitCost,
+          averageCost: unitCost,
+          lastSupplier: purchase.supplierName,
+          lastPurchaseDate: pDate,
+          purchaseCount: 0
+        });
+      }
+
+      const current = stockMap.get(key)!;
+      const prevTotalQty = current.totalPurchased;
+      const newTotalQty = prevTotalQty + qty;
+
+      // Custo médio ponderado
+      const prevTotalValue = prevTotalQty * current.averageCost;
+      const newTotalValue = prevTotalValue + (qty * unitCost);
+      const newAverageCost = newTotalQty > 0 ? (newTotalValue / newTotalQty) : unitCost;
+
+      current.totalPurchased = Number(newTotalQty.toFixed(2));
+      current.averageCost = Number(newAverageCost.toFixed(2));
+      current.latestCost = unitCost > 0 ? unitCost : current.latestCost;
+      current.purchaseCount += 1;
+
+      if (purchase.supplierName) current.lastSupplier = purchase.supplierName;
+      if (pDate && (!current.lastPurchaseDate || pDate > current.lastPurchaseDate)) {
+        current.lastPurchaseDate = pDate;
+      }
+    });
+  });
+
+  // 2. Deduzir as vendas realizadas que consumiram itens de terceiros
+  (sales || []).forEach(sale => {
+    if (sale.status === 'cancelled') return; // Vendas canceladas não consomem estoque
+
+    (sale.items || []).forEach(item => {
+      if (!item.name || !item.name.trim()) return;
+
+      const isThirdParty = item.source === 'third_party' || 
+        (item.name && item.name.toLowerCase().includes('revenda')) || 
+        (item.name && item.name.toLowerCase().includes('terceiro'));
+
+      if (isThirdParty) {
+        const canonical = getCanonicalProductName(item.name);
+        const normName = normalizeProductName(canonical);
+        const normUnit = normalizeUnit(item.unit);
+        const key = `${normName}_${normUnit}`;
+
+        // Tenta encontrar pela chave exata (produto + unidade)
+        let targetKey = key;
+        if (!stockMap.has(targetKey)) {
+          // Fallback: busca produto compatível pelo nome normalizado
+          for (const [existingKey, existingItem] of stockMap.entries()) {
+            if (normalizeProductName(existingItem.canonicalName) === normName) {
+              targetKey = existingKey;
+              break;
+            }
+          }
+        }
+
+        const soldQty = (item.actualWeightedQty !== undefined && item.actualWeightedQty !== null)
+          ? Number(item.actualWeightedQty)
+          : (Number(item.quantity) || 0);
+
+        if (soldQty <= 0) return;
+
+        if (!stockMap.has(targetKey)) {
+          // Caso tenha sido vendido sem registro prévio de compra
+          stockMap.set(key, {
+            name: canonical,
+            canonicalName: canonical,
+            unit: normUnit,
+            totalPurchased: 0,
+            totalSold: Number(soldQty.toFixed(2)),
+            currentStock: Number((-soldQty).toFixed(2)),
+            latestCost: Number(item.cost || item.estimatedCost || 0),
+            averageCost: Number(item.cost || item.estimatedCost || 0),
+            purchaseCount: 0
+          });
+        } else {
+          const current = stockMap.get(targetKey)!;
+          current.totalSold = Number((current.totalSold + soldQty).toFixed(2));
+        }
+      }
+    });
+  });
+
+  // 3. Calcular saldo atual
+  stockMap.forEach(item => {
+    item.currentStock = Number((item.totalPurchased - item.totalSold).toFixed(2));
+  });
+
+  return Array.from(stockMap.values()).sort((a, b) => a.canonicalName.localeCompare(b.canonicalName, 'pt-BR'));
+}
+
 

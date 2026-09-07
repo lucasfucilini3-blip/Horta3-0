@@ -53,7 +53,7 @@ import {
   setDoc 
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import { normalizeProductName, getCanonicalProductName } from '../productUtils';
+import { normalizeProductName, getCanonicalProductName, calculateThirdPartyStock } from '../productUtils';
 import { handleFirestoreError, OperationType, cn } from '../App';
 import { DEFAULT_POPULAR_THIRD_PARTY_ITEMS } from './KgSalesManager';
 
@@ -130,7 +130,7 @@ export default function ThirdPartyPurchases({
 
   // Carregar compras do Firestore em tempo real
   useEffect(() => {
-    const q = query(collection(db, 'third_party_purchases'), orderBy('purchaseDate', 'desc'));
+    const q = collection(db, 'third_party_purchases');
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const docs = snapshot.docs.map(doc => {
         const data = doc.data();
@@ -138,6 +138,11 @@ export default function ThirdPartyPurchases({
           id: doc.id,
           ...data
         } as ThirdPartyPurchase;
+      });
+      docs.sort((a, b) => {
+        const tA = a.purchaseDate?.toDate ? a.purchaseDate.toDate().getTime() : (a.purchaseDate ? new Date(a.purchaseDate).getTime() : 0);
+        const tB = b.purchaseDate?.toDate ? b.purchaseDate.toDate().getTime() : (b.purchaseDate ? new Date(b.purchaseDate).getTime() : 0);
+        return tB - tA;
       });
       setPurchases(docs);
       setLoading(false);
@@ -192,94 +197,7 @@ export default function ThirdPartyPurchases({
 
   // CÁLCULO DINÂMICO DO ESTOQUE DE TERCEIROS (REVENDA)
   const thirdPartyStock = useMemo(() => {
-    const stockMap = new Map<string, ThirdPartyStockItem>();
-
-    // 1. Somar todas as compras efetuadas
-    purchases.forEach(purchase => {
-      const pDate = purchase.purchaseDate?.toDate ? purchase.purchaseDate.toDate() : (purchase.purchaseDate ? new Date(purchase.purchaseDate) : null);
-      
-      (purchase.items || []).forEach(item => {
-        const canonical = getCanonicalProductName(item.name);
-        const key = `${normalizeProductName(canonical)}_${item.unit || 'kg'}`;
-
-        if (!stockMap.has(key)) {
-          stockMap.set(key, {
-            name: item.name,
-            canonicalName: canonical,
-            unit: item.unit || 'kg',
-            totalPurchased: 0,
-            totalSold: 0,
-            currentStock: 0,
-            latestCost: item.unitCost || 0,
-            averageCost: item.unitCost || 0,
-            lastSupplier: purchase.supplierName,
-            lastPurchaseDate: pDate,
-            purchaseCount: 0
-          });
-        }
-
-        const current = stockMap.get(key)!;
-        const prevTotalQty = current.totalPurchased;
-        const newTotalQty = prevTotalQty + item.quantity;
-        
-        // Custo médio ponderado
-        const prevTotalValue = prevTotalQty * current.averageCost;
-        const newTotalValue = prevTotalValue + (item.quantity * item.unitCost);
-        const newAverageCost = newTotalQty > 0 ? (newTotalValue / newTotalQty) : item.unitCost;
-
-        current.totalPurchased = newTotalQty;
-        current.averageCost = Number(newAverageCost.toFixed(2));
-        current.latestCost = item.unitCost;
-        current.purchaseCount += 1;
-        
-        if (purchase.supplierName) current.lastSupplier = purchase.supplierName;
-        if (pDate && (!current.lastPurchaseDate || pDate > current.lastPurchaseDate)) {
-          current.lastPurchaseDate = pDate;
-        }
-      });
-    });
-
-    // 2. Deduzir as vendas realizadas que consumiram itens de terceiros
-    (sales || []).forEach(sale => {
-      if (sale.status === 'cancelled') return; // Vendas canceladas não consomem estoque
-
-      (sale.items || []).forEach(item => {
-        // Verifica se é de terceiros
-        const isThirdParty = item.source === 'third_party' || 
-          (item.name && item.name.toLowerCase().includes('revenda')) || 
-          (item.name && item.name.toLowerCase().includes('(terceiro)'));
-
-        if (isThirdParty) {
-          const canonical = getCanonicalProductName(item.name);
-          const key = `${normalizeProductName(canonical)}_${item.unit || 'kg'}`;
-
-          if (!stockMap.has(key)) {
-            // Caso tenha sido vendido sem registro prévio de compra
-            stockMap.set(key, {
-              name: item.name,
-              canonicalName: canonical,
-              unit: item.unit || 'kg',
-              totalPurchased: 0,
-              totalSold: 0,
-              currentStock: 0,
-              latestCost: item.cost || item.estimatedCost || 0,
-              averageCost: item.cost || item.estimatedCost || 0,
-              purchaseCount: 0
-            });
-          }
-
-          const current = stockMap.get(key)!;
-          current.totalSold += (item.actualWeightedQty || item.quantity || 0);
-        }
-      });
-    });
-
-    // 3. Calcular saldo atual
-    stockMap.forEach(item => {
-      item.currentStock = Number((item.totalPurchased - item.totalSold).toFixed(2));
-    });
-
-    return Array.from(stockMap.values()).sort((a, b) => a.canonicalName.localeCompare(b.canonicalName, 'pt-BR'));
+    return calculateThirdPartyStock(purchases, sales);
   }, [purchases, sales]);
 
   // Indicadores de Compras e Estoque
@@ -1311,6 +1229,20 @@ export default function ThirdPartyPurchases({
 
             {/* Corpo do Formulário */}
             <form onSubmit={handleSavePurchase} className="p-5 md:p-6 overflow-y-auto flex-1 space-y-6">
+              {formError && (
+                <div className="bg-rose-50 border border-rose-200 text-rose-800 p-3.5 rounded-xl flex items-center gap-3 text-xs font-bold animate-in fade-in">
+                  <AlertCircle size={18} className="shrink-0 text-rose-600" />
+                  <span className="flex-1">{formError}</span>
+                  <button
+                    type="button"
+                    onClick={() => setFormError(null)}
+                    className="text-rose-500 hover:text-rose-700 p-1"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              )}
+
               {/* 1. Dados do Fornecedor e Datas */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="md:col-span-1 space-y-1.5">
@@ -1566,7 +1498,7 @@ export default function ThirdPartyPurchases({
                 </button>
                 <button
                   type="submit"
-                  disabled={saving || formItems.length === 0}
+                  disabled={saving || (formItems.length === 0 && !((selectedPresetId || customItemName.trim()) && (parseFloat(itemQty) || 0) > 0))}
                   className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-7 py-2.5 rounded-xl text-xs font-black flex items-center gap-2 shadow-lg shadow-emerald-200 transition-all cursor-pointer"
                 >
                   <Save size={16} />
@@ -1747,6 +1679,71 @@ export default function ThirdPartyPurchases({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* Modal de Confirmação de Exclusão de Compra */}
+      {purchaseToDelete && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-slate-100 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+                <Trash2 size={24} />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900">Excluir Pedido de Compra</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Esta ação não pode ser desfeita.</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 rounded-2xl p-4 text-xs space-y-2 border border-slate-200/70">
+              <div className="flex justify-between text-slate-600">
+                <span>Fornecedor:</span>
+                <span className="font-black text-slate-900">{purchaseToDelete.supplierName}</span>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span>Total:</span>
+                <span className="font-black text-rose-600">R$ {purchaseToDelete.totalAmount.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span>Itens:</span>
+                <span className="font-medium text-slate-700 text-right truncate max-w-[220px]">
+                  {purchaseToDelete.items.map(i => `${i.name} (${i.quantity} ${i.unit})`).join(', ')}
+                </span>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-500">
+              Ao excluir este pedido, os itens serão removidos do estoque de terceiros e a despesa associada no módulo financeiro também será removida.
+            </p>
+
+            <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setPurchaseToDelete(null)}
+                disabled={saving}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleDeletePurchaseConfirmed}
+                disabled={saving}
+                className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black shadow-lg shadow-rose-200 transition-all flex items-center gap-2 cursor-pointer"
+              >
+                {saving ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Excluindo...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 size={16} /> Confirmar Exclusão
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}
